@@ -72,6 +72,7 @@ cmake -S . -B build-verify -DCMAKE_BUILD_TYPE=Release -DSLATE_ENABLE_VERIFY=ON
 cmake --build build-verify -j 4
 python3 scripts/verify_split_switch.py --app build-verify/platform/macos/Slate.app
 python3 scripts/verify_split_switch.py --app build-verify/platform/macos/Slate.app --followup
+python3 scripts/verify_fullscreen_controls.py --app build-verify/platform/macos/Slate.app
 ```
 
 The verification command runner is disabled by default. Regression runs use fresh temporary browser data and local fixture pages. The split/PiP checks passed locally; authenticated Max playback has not been verified, and integrated stream ads may still appear.

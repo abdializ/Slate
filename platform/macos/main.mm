@@ -692,9 +692,10 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) SlateGraniteView* graniteView;
 @property(strong) SlateGraniteView* toolbarGraniteView;
 @property(strong) NSView* trafficCluster;
+@property(strong) NSArray<NSButton*>* fullScreenTrafficButtons;
 @property(strong) NSButton* spaceBadgeButton;
 @property(strong) NSLayoutConstraint* trafficLeading;
-@property(strong) NSLayoutConstraint* trafficCenterY;
+@property(strong) NSLayoutConstraint* trafficTop;
 @property NSInteger trafficMode;
 @property BOOL pinningTraffic;
 @property BOOL pages120Hz;
@@ -3141,7 +3142,10 @@ static void InstallThemeFrameSwizzle(void) {
 @implementation SlateTrafficCluster
 - (BOOL)mouseDownCanMoveWindow { return NO; }
 - (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
-- (NSView*)hitTest:(NSPoint)point { return nil; }
+- (NSView*)hitTest:(NSPoint)point {
+ NSView* hit=[super hitTest:point];
+ return hit==self ? nil : hit;
+}
 - (void)layout {
  [super layout];
 }
@@ -5868,10 +5872,32 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.trafficCluster.wantsLayer=YES;
  [root addSubview:self.trafficCluster];
  self.trafficCluster.hidden=YES;
+ // Separate AppKit-created controls stay in our full-screen chrome. Leave
+ // the window's titlebar-owned buttons in AppKit's hierarchy for transitions.
+ NSMutableArray<NSButton*>* fullScreenButtons=[NSMutableArray array];
+ NSUInteger trafficIndex=0;
+ for(NSWindowButton kind : {NSWindowCloseButton,NSWindowMiniaturizeButton,NSWindowZoomButton}) {
+  NSButton* button=[NSWindow standardWindowButton:kind forStyleMask:self.window.styleMask];
+  if(!button) continue;
+  button.frame=NSMakeRect(trafficIndex*20,2,14,14);
+  button.target=self.window;
+  button.action=kind==NSWindowCloseButton ? @selector(performClose:) :
+   kind==NSWindowMiniaturizeButton ? @selector(performMiniaturize:) : @selector(toggleFullScreen:);
+  button.refusesFirstResponder=YES;
+  button.accessibilityLabel=kind==NSWindowCloseButton ? @"Close window" :
+   kind==NSWindowMiniaturizeButton ? @"Minimize window" : @"Exit full screen";
+  button.identifier=kind==NSWindowCloseButton ? @"SlateFullscreenClose" :
+   kind==NSWindowMiniaturizeButton ? @"SlateFullscreenMinimize" : @"SlateFullscreenExit";
+  button.toolTip=button.accessibilityLabel;
+  [self.trafficCluster addSubview:button];
+  [fullScreenButtons addObject:button];
+  ++trafficIndex;
+ }
+ self.fullScreenTrafficButtons=fullScreenButtons;
  self.trafficMode=-1;
  [NSLayoutConstraint activateConstraints:@[
-  [self.trafficCluster.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
-  [self.trafficCluster.topAnchor constraintEqualToAnchor:root.topAnchor],
+  self.trafficLeading=[self.trafficCluster.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],
+  self.trafficTop=[self.trafficCluster.topAnchor constraintEqualToAnchor:root.topAnchor constant:12],
   [self.trafficCluster.widthAnchor constraintEqualToConstant:68],
   [self.trafficCluster.heightAnchor constraintEqualToConstant:18]
  ]];
@@ -6560,9 +6586,23 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)layoutTrafficLights {
  if(!self.window || self.quitting || !self.window.contentView) return;
  NSView* root=self.window.contentView;
+ const BOOL fullScreen=(self.window.styleMask & NSWindowStyleMaskFullScreen)!=0;
+ self.trafficCluster.hidden=!fullScreen;
+ if(fullScreen) {
+  const CGFloat top=[self stripRevealed] ? (kTitlebarHeight-18)/2 :
+   [self sidebarRevealed] ? 14 : 5+(kToolbarHeight-18)/2;
+  if(fabs(self.trafficTop.constant-top)>0.5) self.trafficTop.constant=top;
+  for(NSButton* button in self.fullScreenTrafficButtons)
+   button.enabled=button.action!=@selector(performMiniaturize:) && !self.window.attachedSheet;
+ }
  CGFloat rightEdge=0;
  CGFloat bottomFromTop=0;
- if(!(self.window.styleMask & NSWindowStyleMaskFullScreen)) {
+ if(fullScreen) {
+  [root layoutSubtreeIfNeeded];
+  NSRect controls=[self.trafficCluster convertRect:self.trafficCluster.bounds toView:root];
+  rightEdge=NSMaxX(controls);
+  bottomFromTop=NSMaxY(root.bounds)-NSMinY(controls);
+ } else {
   for(NSWindowButton kind : {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
    NSButton* button=[self.window standardWindowButton:kind];
    if(!button || !button.superview || button.hidden || button.hiddenOrHasHiddenAncestor || button.alphaValue<=0) continue;
@@ -6595,7 +6635,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   if(fabs(self.sidebarHeaderHeight.constant-safeHeight)>0.5) self.sidebarHeaderHeight.constant=safeHeight;
  }
  if(self.navLeadingTitle)
-  self.navLeadingTitle.constant=([self trafficLayoutMode]==3 ? 88 : 16);
+  self.navLeadingTitle.constant=(!fullScreen && [self trafficLayoutMode]==3 ? 88 : 16);
 }
 - (void)windowDidUpdate:(NSNotification*)notification {
  if(notification.object!=self.window || self.quitting) return;
@@ -12251,6 +12291,43 @@ static SlateThemePanel* s_sharedThemePanel = nil;
           cur.identifier.UTF8String, cur.name.UTF8String, cur.symbol.UTF8String,
           cur.sharesSignIns ? 1 : 0, (unsigned long)self.spacesManager.spaces.count,
           (unsigned long)self.spacesManager.parkedTabs.count);
+  return;
+ }
+ if([line hasPrefix:@"checkwindowcontrols "]) {
+  const BOOL expectedFullScreen=[line substringFromIndex:20].intValue!=0;
+  const BOOL fullScreen=(self.window.styleMask & NSWindowStyleMaskFullScreen)!=0;
+  [self layoutTrafficLights];
+  [self.window.contentView layoutSubtreeIfNeeded];
+  NSView* root=self.window.contentView;
+  int failures=fullScreen!=expectedFullScreen;
+  if(fullScreen) {
+   failures+=self.trafficCluster.hiddenOrHasHiddenAncestor || self.fullScreenTrafficButtons.count!=3;
+   NSRect controls=[self.trafficCluster convertRect:self.trafficCluster.bounds toView:root];
+   NSRect nav=[self.navCluster convertRect:self.navCluster.bounds toView:root];
+   NSRect page=[self.content convertRect:self.content.bounds toView:root];
+   failures+=!NSContainsRect(root.bounds,controls) || NSIntersectsRect(controls,nav) || NSIntersectsRect(controls,page);
+   for(NSButton* button in self.fullScreenTrafficButtons) {
+    NSPoint center=[button convertPoint:NSMakePoint(NSMidX(button.bounds),NSMidY(button.bounds)) toView:root.superview];
+    NSView* hit=[root hitTest:center];
+    failures+=button.hiddenOrHasHiddenAncestor || button.window!=self.window ||
+     !(hit==button || [hit isDescendantOf:button]);
+    if(button.action==@selector(performMiniaturize:)) failures+=button.enabled;
+    else failures+=!button.enabled || button.target!=self.window;
+   }
+  } else {
+   failures+=!self.trafficCluster.hidden;
+   for(NSWindowButton kind : {NSWindowCloseButton,NSWindowMiniaturizeButton,NSWindowZoomButton}) {
+    NSButton* button=[self.window standardWindowButton:kind];
+    failures+=!button || button.window!=self.window || button.hiddenOrHasHiddenAncestor || button.alphaValue<=0;
+   }
+  }
+  fprintf(stderr,"SLATE_WINDOW_CONTROLS fullscreen=%d vertical=%d collapsed=%d failures=%d\n",
+   (int)fullScreen,(int)self.verticalTabs,(int)self.tabsCollapsed,failures);
+  return;
+ }
+ if([line isEqual:@"exitfullscreenbutton"]) {
+  for(NSButton* button in self.fullScreenTrafficButtons)
+   if(button.action==@selector(toggleFullScreen:) && !self.trafficCluster.hidden) [button performClick:nil];
   return;
  }
  if([line isEqual:@"checktraffic"]) {
