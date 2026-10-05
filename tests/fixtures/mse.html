@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Slate MSE probe</title>
+<video id="v" controls muted playsinline></video>
+<pre id="out"></pre>
+<script>
+function line(name, value) {
+  const text = 'SLATE_MEDIA ' + name + '=' + value;
+  console.log(text);
+  document.getElementById('out').textContent += text + '\n';
+}
+const video = document.getElementById('v');
+line('mse.api', !!window.MediaSource);
+line('mse.vp9', window.MediaSource && MediaSource.isTypeSupported('video/webm; codecs="vp9"'));
+line('mse.vp8', window.MediaSource && MediaSource.isTypeSupported('video/webm; codecs="vp8"'));
+line('mse.h264', window.MediaSource && MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"'));
+if (!window.MediaSource) throw new Error('no MediaSource');
+const media = new MediaSource();
+video.src = URL.createObjectURL(media);
+media.addEventListener('sourceopen', async () => {
+  try {
+    const mime = MediaSource.isTypeSupported('video/webm; codecs="vp8, vorbis"') ? 'video/webm; codecs="vp8, vorbis"' : 'video/webm; codecs="vp9, opus"';
+    const buffer = media.addSourceBuffer(mime);
+    line('mse.add', mime);
+    const bytes = await fetch('flower.webm').then(r => r.arrayBuffer());
+    buffer.addEventListener('updateend', () => {
+      if (!buffer.updating && media.readyState === 'open') {
+        try { media.endOfStream(); } catch (e) {}
+      }
+      video.play().then(() => {
+        setTimeout(() => line('mse.time', video.currentTime.toFixed(3) + ' paused=' + video.paused), 1200);
+      }).catch(err => line('mse.play', err.name + ':' + err.message));
+    });
+    buffer.addEventListener('error', () => line('mse.buffer', 'error'));
+    buffer.appendBuffer(bytes);
+  } catch (err) {
+    line('mse.error', err.name + ':' + err.message);
+  }
+});
+video.addEventListener('playing', () => line('mse.playing', 'ok'));
+video.addEventListener('error', () => line('mse.element', video.error && (video.error.code + ':' + (video.error.message || ''))));
+</script>

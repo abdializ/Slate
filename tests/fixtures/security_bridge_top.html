@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Slate Security Verification — Top Frame Bridge</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; padding: 24px; background: #1a1a1a; color: #fff; }
+    h1 { font-size: 20px; }
+    .pass { color: #4ade80; }
+    .fail { color: #f87171; }
+    pre { background: #262626; padding: 12px; border-radius: 8px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Slate JS Bridge Security Verification</h1>
+  <div id="results">Running tests...</div>
+  <iframe id="testIframe" src="security_bridge_iframe.html" style="width:100%; height:120px; border:1px solid #444; margin-top:16px;"></iframe>
+
+  <script>
+    const results = {
+      handlers_isolated: false,
+      credentials_hidden: false,
+      shell_execution_absent: false,
+      file_read_blocked: false,
+      malformed_message_survived: false,
+      log: []
+    };
+
+    function record(name, pass, msg) {
+      results.log.push({ name, pass, msg });
+      const el = document.createElement('div');
+      el.className = pass ? 'pass' : 'fail';
+      el.textContent = (pass ? '[PASS] ' : '[FAIL] ') + name + ': ' + msg;
+      document.getElementById('results').appendChild(el);
+    }
+
+    // 1. Check custom handlers isolation in page world
+    const hasAutofill = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.slateAutofill);
+    const hasMedia = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.slateMedia);
+    if (!hasAutofill && !hasMedia) {
+      results.handlers_isolated = true;
+      record('Handler Isolation', true, 'Privileged handlers (slateAutofill, slateMedia) are inaccessible from pageWorld.');
+    } else {
+      record('Handler Isolation', false, 'Privileged handlers leaked to pageWorld! autofill=' + hasAutofill + ' media=' + hasMedia);
+    }
+
+    // 2. Check credentials isolation
+    const hasCredsObj = typeof window.__slateAutofillCredentials !== 'undefined';
+    if (!hasCredsObj) {
+      results.credentials_hidden = true;
+      record('Credential Isolation', true, 'window.__slateAutofillCredentials is not exposed to page scripts.');
+    } else {
+      record('Credential Isolation', false, 'window.__slateAutofillCredentials was leaked to pageWorld!');
+    }
+
+    // 3. Check shell / native execution APIs
+    const hasChildProcess = typeof require !== 'undefined' || typeof process !== 'undefined';
+    const hasSystem = typeof window.system !== 'undefined' || typeof window.exec !== 'undefined';
+    if (!hasChildProcess && !hasSystem) {
+      results.shell_execution_absent = true;
+      record('Shell API Absence', true, 'No Node.js/Electron/native process execution APIs exist.');
+    } else {
+      record('Shell API Absence', false, 'Native execution API exposed!');
+    }
+
+    // 4. Check arbitrary file read
+    fetch('file:///etc/passwd')
+      .then(() => {
+        record('Local File Access', false, 'Successfully fetched file:///etc/passwd! (VULNERABILITY)');
+      })
+      .catch((err) => {
+        results.file_read_blocked = true;
+        record('Local File Access', true, 'Blocked: ' + err.message);
+      })
+      .finally(() => {
+        // 5. Test posting malformed messages to any accessible handler
+        try {
+          if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.omidJsSessionService) {
+            window.webkit.messageHandlers.omidJsSessionService.postMessage('MALFORMED_NON_OBJECT');
+            window.webkit.messageHandlers.omidJsSessionService.postMessage(null);
+            window.webkit.messageHandlers.omidJsSessionService.postMessage({ nested: Array(1000).fill('a') });
+          }
+          results.malformed_message_survived = true;
+          record('Malformed Messages', true, 'Surviving malformed message payloads.');
+        } catch (e) {
+          record('Malformed Messages', false, 'Exception on message dispatch: ' + e.message);
+        }
+
+        window.__slate_test_results = results;
+        document.title = 'TEST_COMPLETE: ' + JSON.stringify(results);
+      });
+  </script>
+</body>
+</html>

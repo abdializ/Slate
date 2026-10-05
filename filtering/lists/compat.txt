@@ -1,0 +1,38 @@
+! Slate Shields compatibility exceptions. Do not block first-party media CDNs.
+@@||googlevideo.com^
+@@||gvt1.com^
+@@||ytimg.com^
+@@||ggpht.com^
+@@||youtube.com^$media
+@@||youtube.com/generate_204
+@@||youtube.com/ptracking
+! Campus portals and LMS (PV Place, eCourses / D2L, Ellucian, Microsoft login).
+@@||pvamu.edu^
+@@||d2l.com^
+@@||d2l-prod.com^
+@@||brightspace.com^
+@@||elluciancloud.com^
+@@||ellucian.com^
+@@||microsoftonline.com^
+@@||msauth.net^
+@@||msftauth.net^
+@@||office.com^
+@@||office365.com^
+@@||sharepoint.com^
+@@||azure.net^
+@@||googleapis.com^$font
+@@||gstatic.com^$font
+@@||ajax.googleapis.com^
+@@||cdnjs.cloudflare.com^
+@@||unpkg.com^
+! X / Twitter compatibility exceptions
+@@||x.com^
+@@||twitter.com^
+@@||twimg.com^
+! Google Identity & OAuth authentication exceptions
+@@||accounts.google.com^
+@@||apis.google.com^
+@@||ssl.gstatic.com^
+@@||google.com/gsi^
+@@||google.com/recaptcha^
+@@||appleid.apple.com^

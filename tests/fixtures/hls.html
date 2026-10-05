@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Slate HLS probe</title>
+<p>Chromium does not implement native HLS. This page records that fact; it does not vendor hls.js.</p>
+<pre id="out"></pre>
+<script>
+function line(name, value) {
+  const text = 'SLATE_MEDIA ' + name + '=' + value;
+  console.log(text);
+  document.getElementById('out').textContent += text + '\n';
+}
+const video = document.createElement('video');
+line('hls.canPlay', video.canPlayType('application/vnd.apple.mpegurl') || 'no');
+line('hls.canPlay.x', video.canPlayType('application/x-mpegURL') || 'no');
+line('hls.mse.h264', window.MediaSource && MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'));
+line('hls.mse.vp9', window.MediaSource && MediaSource.isTypeSupported('video/webm; codecs="vp9, opus"'));
+</script>

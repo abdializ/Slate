@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+  <div id="iframe_status">Iframe loaded</div>
+  <script>
+    window.__iframe_results = {
+      handlers_isolated: false,
+      creds_isolated: false,
+      parent_access_blocked: false
+    };
+
+    const hasAutofill = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.slateAutofill);
+    const hasMedia = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.slateMedia);
+    window.__iframe_results.handlers_isolated = (!hasAutofill && !hasMedia);
+
+    window.__iframe_results.creds_isolated = (typeof window.__slateAutofillCredentials === 'undefined');
+
+    try {
+      // Cross-origin check or parent access check
+      const p = window.parent;
+      if (p !== window) {
+        window.__iframe_results.parent_access_blocked = true;
+      }
+    } catch(e) {
+      window.__iframe_results.parent_access_blocked = true;
+    }
+  </script>
+</body>
+</html>

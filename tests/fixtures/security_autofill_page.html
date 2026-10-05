@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Slate Autofill Security Test</title>
+</head>
+<body>
+  <h2>Autofill Security Verification Form</h2>
+  <form id="loginForm" action="/login" method="POST">
+    <label>Username: <input type="text" id="username" name="username" autocomplete="username"></label><br><br>
+    <label>Password: <input type="password" id="password" name="password" autocomplete="current-password"></label><br><br>
+    <button type="submit" id="submitBtn">Sign In</button>
+  </form>
+
+  <script>
+    window.__autofill_test_results = {
+      initial_password_value_empty: true,
+      synthetic_event_did_not_leak: true,
+      password_leaked_to_js: false,
+      log: []
+    };
+
+    const passInput = document.getElementById('password');
+    const userInput = document.getElementById('username');
+
+    // Check immediately and on intervals
+    function checkLeaked() {
+      if (passInput.value && passInput.value.length > 0) {
+        window.__autofill_test_results.password_leaked_to_js = true;
+        window.__autofill_test_results.log.push('Password value exposed: ' + passInput.value.length + ' chars');
+      }
+    }
+
+    // Attempt synthetic event attack (dispatching untrusted events to trick autofill)
+    setTimeout(() => {
+      checkLeaked();
+      try {
+        passInput.dispatchEvent(new Event('focus', { bubbles: true }));
+        passInput.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      } catch (e) {}
+      checkLeaked();
+      if (passInput.value && passInput.value.length > 0) {
+        window.__autofill_test_results.synthetic_event_did_not_leak = false;
+      }
+      document.title = 'AUTOFILL_TEST_READY: ' + JSON.stringify(window.__autofill_test_results);
+    }, 500);
+
+    setTimeout(() => {
+      checkLeaked();
+      document.title = 'AUTOFILL_TEST_FINAL: ' + JSON.stringify(window.__autofill_test_results);
+    }, 1500);
+  </script>
+</body>
+</html>

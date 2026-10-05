@@ -1,0 +1,11 @@
+EasyList and EasyPrivacy network-rule extracts in this directory are derived
+from https://easylist.to and remain under the EasyList project’s GNU GPLv3
+terms for those data files. They are loaded at runtime as filter data, not
+linked as program source. Cosmetic, scriptlet, redirect, and CSP rules were
+stripped for Slate Shields V0.1.
+
+`slate-network.txt` and `compat.txt` are Slate-authored network rules.
+
+Slate’s matcher is original C++ and is not Brave’s adblock-rust engine.
+adblock-rust (MPL-2.0) remains the intended replacement once a Rust toolchain
+is part of the build. See docs/SHIELDS.md.

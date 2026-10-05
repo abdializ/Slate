@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Picture-in-Picture Verification</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 32px;
+      background: #18181b;
+      color: #fafafa;
+    }
+    .player-card {
+      max-width: 640px;
+      background: #27272a;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    video {
+      width: 100%;
+      border-radius: 8px;
+      background: #000;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #2563eb;
+    }
+    #log {
+      margin-top: 16px;
+      padding: 12px;
+      background: #111827;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="player-card">
+    <h2>Slate Native Picture-in-Picture Test</h2>
+    <video id="testVideo" controls playsinline loop muted>
+      <source src="flower.mp4" type="video/mp4">
+      <source src="flower.webm" type="video/webm">
+      Your browser does not support the video tag.
+    </video>
+    <div class="controls">
+      <button id="pipBtn">Toggle Picture-in-Picture</button>
+      <button id="playBtn">Play / Pause</button>
+    </div>
+    <div id="log">Ready.</div>
+  </div>
+
+  <script>
+    const video = document.getElementById('testVideo');
+    const pipBtn = document.getElementById('pipBtn');
+    const playBtn = document.getElementById('playBtn');
+    const logEl = document.getElementById('log');
+
+    function log(msg) {
+      logEl.innerHTML += '<div>[' + new Date().toISOString().substring(11, 19) + '] ' + msg + '</div>';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    playBtn.addEventListener('click', () => {
+      if (video.paused) {
+        video.play();
+        log('Play clicked');
+      } else {
+        video.pause();
+        log('Pause clicked');
+      }
+    });
+
+    pipBtn.addEventListener('click', async () => {
+      try {
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+          log('exitPictureInPicture() success');
+        } else if (video.webkitPresentationMode === 'picture-in-picture') {
+          video.webkitSetPresentationMode('inline');
+          log('webkitSetPresentationMode("inline") success');
+        } else if (video.requestPictureInPicture) {
+          await video.requestPictureInPicture();
+          log('requestPictureInPicture() success');
+        } else if (video.webkitSetPresentationMode) {
+          video.webkitSetPresentationMode('picture-in-picture');
+          log('webkitSetPresentationMode("picture-in-picture") success');
+        }
+      } catch (err) {
+        log('PiP Error: ' + err.message);
+      }
+    });
+
+    video.addEventListener('enterpictureinpicture', () => {
+      log('EVENT: enterpictureinpicture');
+    });
+
+    video.addEventListener('leavepictureinpicture', () => {
+      log('EVENT: leavepictureinpicture');
+    });
+
+    video.addEventListener('webkitpresentationmodechanged', () => {
+      log('EVENT: webkitpresentationmodechanged => ' + video.webkitPresentationMode);
+    });
+  </script>
+</body>
+</html>

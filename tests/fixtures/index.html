@@ -1,0 +1,1 @@
+<!doctype html><meta charset="utf-8"><title>Slate lifecycle test</title><h1>Chromium tab test</h1><p id="tab"></p><input placeholder="Type to test unsaved changes" oninput="window.onbeforeunload=()=>true"><a href="/?second=1">Second page</a><script>document.querySelector('#tab').textContent=location.search;document.title='Test '+location.search;</script>

@@ -1,0 +1,142 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Slate media probe</title>
+<style>
+ body{font:13px/1.45 -apple-system,sans-serif;margin:24px;color:#222}
+ code,pre{font:12px ui-monospace,monospace}
+ section{margin:16px 0}
+ video,audio{max-width:420px;display:block;margin:8px 0}
+</style>
+<h1>Slate media probe</h1>
+<p>Local WAV, H.264, and VP9 samples plus codec capability checks. These files are not DRM.</p>
+<section>
+ <h2>Local audio</h2>
+ <audio id="local-audio" controls src="tone.wav"></audio>
+ <button id="play-audio">Play local WAV</button>
+</section>
+<section>
+ <h2>HTML5 video element</h2>
+ <video id="remote-h264" controls muted playsinline
+  src="flower.mp4"></video>
+ <p>Local H.264/AAC sample (MDN CC0 flower). If this plays, basic video decode works without YouTube or Kick.</p>
+ <video id="remote-vp9" controls muted playsinline
+  src="flower.webm"></video>
+ <p>Local VP9/WebM sample, tested separately from MPEG-4.</p>
+</section>
+<section>
+ <h2>Capabilities</h2>
+ <pre id="out"></pre>
+</section>
+<script>
+function line(name, value) {
+  const text = 'SLATE_MEDIA ' + name + '=' + value;
+  console.log(text);
+  document.getElementById('out').textContent += text + '\n';
+}
+const video = document.createElement('video');
+const types = [
+  ['h264', 'video/mp4; codecs="avc1.42E01E"'],
+  ['aac', 'audio/mp4; codecs="mp4a.40.2"'],
+  ['vp9', 'video/webm; codecs="vp9"'],
+  ['vp9.mp4', 'video/mp4; codecs="vp09.00.10.08"'],
+  ['av1', 'video/mp4; codecs="av01.0.05M.08"'],
+  ['opus', 'audio/webm; codecs="opus"'],
+  ['hls', 'application/vnd.apple.mpegurl']
+];
+line('ua', navigator.userAgent);
+line('mse', !!window.MediaSource);
+line('eme', typeof navigator.requestMediaKeySystemAccess === 'function');
+line('webcodecs', typeof window.VideoDecoder === 'function');
+line('webrtc', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+line('pip', !!document.pictureInPictureEnabled);
+line('fullscreen-api', !!document.fullscreenEnabled);
+line('autoplay-policy', navigator.getAutoplayPolicy ? 'present' : 'absent');
+try {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+  const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
+  line('webgl', gl ? 'ok' : 'missing');
+  line('gpu.vendor', ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : 'unavailable');
+  line('gpu.renderer', ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'unavailable');
+} catch (err) {
+  line('webgl', err.name + ':' + err.message);
+}
+types.forEach(([name, type]) => {
+  line('canPlay.' + name, video.canPlayType(type) || 'no');
+  if (window.MediaSource) line('mse.' + name, MediaSource.isTypeSupported(type));
+});
+if (navigator.requestMediaKeySystemAccess) {
+  const probes = [
+    ['widevine.h264aac', 'com.widevine.alpha', [{
+      initDataTypes: ['cenc'],
+      audioCapabilities: [{contentType: 'audio/mp4; codecs="mp4a.40.2"'}],
+      videoCapabilities: [{contentType: 'video/mp4; codecs="avc1.42E01E"'}]
+    }]],
+    ['widevine.vp9', 'com.widevine.alpha', [{
+      initDataTypes: ['webm', 'cenc'],
+      videoCapabilities: [{contentType: 'video/webm; codecs="vp09.00.10.08"'}]
+    }]],
+    ['widevine.av1', 'com.widevine.alpha', [{
+      initDataTypes: ['cenc'],
+      videoCapabilities: [{contentType: 'video/mp4; codecs="av01.0.05M.08"'}]
+    }]],
+    ['clearkey.vp9', 'org.w3.clearkey', [{
+      initDataTypes: ['webm'],
+      videoCapabilities: [{contentType: 'video/webm; codecs="vp09.00.10.08"'}]
+    }]],
+    ['fairplay.fps', 'com.apple.fps', [{
+      initDataTypes: ['sinf'],
+      videoCapabilities: [{contentType: 'video/mp4; codecs="avc1.42E01E"'}]
+    }]],
+    ['fairplay.fps3', 'com.apple.fps.3_0', [{
+      initDataTypes: ['sinf'],
+      videoCapabilities: [{contentType: 'video/mp4; codecs="avc1.42E01E"'}]
+    }]]
+  ];
+  probes.forEach(([name, system, config]) => {
+    navigator.requestMediaKeySystemAccess(system, config)
+      .then(() => line(name, 'available'))
+      .catch(err => line(name, err.name + ':' + err.message));
+  });
+} else line('widevine', 'eme-missing');
+const audio = document.getElementById('local-audio');
+line('canPlay.wav', audio.canPlayType('audio/wav') || 'no');
+audio.play().then(() => line('wav.autoplay', 'ok'))
+  .catch(err => line('wav.autoplay', err.name + ':' + err.message));
+document.getElementById('play-audio').onclick = () => audio.play()
+  .then(() => line('wav.play', 'ok'))
+  .catch(err => line('wav.play', err.name + ':' + err.message));
+audio.addEventListener('error', () => line('wav.error', audio.error && audio.error.code));
+function watchVideo(id, name) {
+  const node = document.getElementById(id);
+  node.addEventListener('loadeddata', () => line(name + '.loaded', 'ok'));
+  node.addEventListener('playing', () => line(name + '.playing', 'ok'));
+  node.addEventListener('error', () => {
+    const err = node.error;
+    line(name + '.error', err ? (err.code + ':' + (err.message || '')) : 'unknown');
+  });
+  node.play().then(() => line(name + '.autoplay', 'ok'))
+    .catch(err => line(name + '.autoplay', err.name + ':' + err.message));
+}
+watchVideo('remote-h264', 'h264');
+watchVideo('remote-vp9', 'vp9');
+if (window.VideoDecoder && VideoDecoder.isConfigSupported) {
+  ['avc1.42E01E','vp09.00.10.08','av01.0.05M.08'].forEach(codec => {
+    VideoDecoder.isConfigSupported({codec}).then(info => line('webcodecs.'+codec, !!info.supported))
+      .catch(err => line('webcodecs.'+codec, err.name+':'+err.message));
+  });
+} else line('webcodecs', 'absent');
+if (navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo) {
+  const configs = [
+    ['mc.h264.hw', {type:'file', video:{contentType:'video/mp4; codecs="avc1.42E01E"', width:1280, height:720, bitrate:2000000, framerate:30}, audio:{contentType:'audio/mp4; codecs="mp4a.40.2"', channels:2, bitrate:128000, samplerate:44100}}],
+    ['mc.vp9.mse', {type:'media-source', video:{contentType:'video/webm; codecs="vp9"', width:1280, height:720, bitrate:2000000, framerate:30}}],
+    ['mc.vp9.hw', {type:'file', video:{contentType:'video/webm; codecs="vp9"', width:1280, height:720, bitrate:2000000, framerate:30}}],
+    ['mc.av1.hw', {type:'file', video:{contentType:'video/mp4; codecs="av01.0.05M.08"', width:1280, height:720, bitrate:2000000, framerate:30}}]
+  ];
+  configs.forEach(([name, config]) => {
+    navigator.mediaCapabilities.decodingInfo(config).then(info => {
+      line(name, 'supported=' + info.supported + ' smooth=' + info.smooth + ' powerEfficient=' + info.powerEfficient);
+    }).catch(err => line(name, err.name + ':' + err.message));
+  });
+} else line('mediaCapabilities', 'absent');
+</script>

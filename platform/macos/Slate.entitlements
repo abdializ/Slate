@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- macOS App Sandbox -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- Outgoing network connections for web browsing -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- User-authorized file access (uploads, downloads destination selection) -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+
+	<!-- Downloads folder access for downloaded files -->
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+
+	<!-- Media device access after explicit user authorization -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.device.microphone</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+
+	<!-- Printing pages -->
+	<key>com.apple.security.print</key>
+	<true/>
+</dict>
+</plist>
