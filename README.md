@@ -48,3 +48,7 @@ The browser stores personal browsing data locally at runtime. Keep local browser
 - `tests/`: unit tests and synthetic browser fixtures.
 - `scripts/`: build, signing, and verification helpers.
 - `docs/`: architecture and feature documentation.
+
+## License
+
+Original Slate source is available under the [MIT license](LICENSE). Bundled EasyList and EasyPrivacy filter data retain their separate terms in [filtering/lists/NOTICE.txt](filtering/lists/NOTICE.txt). The optional flower media fixtures are CC0, as noted in [tests/fixtures/README.md](tests/fixtures/README.md).
