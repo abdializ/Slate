@@ -11601,6 +11601,25 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   if(self.quitting) break;
   NSString* line=[raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
   if(!line.length || [line hasPrefix:@"#"]) continue;
+  if([line hasPrefix:@"waitsignal "]) {
+   // Verification-only barrier: measurement owns the next phase, not a timer.
+   NSString* name=[line substringFromIndex:11];
+   NSCharacterSet* allowed=[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyz0123456789-"];
+   NSString* data=NSProcessInfo.processInfo.environment[@"SLATE_DATA_DIR"];
+   if(!name.length || name.length>64 || [name rangeOfCharacterFromSet:allowed.invertedSet].location!=NSNotFound ||
+      !data.isAbsolutePath) {
+    fprintf(stderr,"SLATE_VERIFY_SIGNAL invalid\n"); break;
+   }
+   NSString* signal=[data stringByAppendingPathComponent:[@"verify-signal-" stringByAppendingString:name]];
+   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(120);
+   while(!self.quitting && ![NSFileManager.defaultManager fileExistsAtPath:signal] &&
+         std::chrono::steady_clock::now()<deadline) [NSThread sleepForTimeInterval:0.05];
+   if(self.quitting) break;
+   if(![NSFileManager.defaultManager fileExistsAtPath:signal]) {
+    fprintf(stderr,"SLATE_VERIFY_SIGNAL timeout\n"); break;
+   }
+   continue;
+  }
   if([line hasPrefix:@"sleep "]) {
    double s = MAX(0.05, [line substringFromIndex:6].doubleValue);
    [NSThread sleepForTimeInterval:s];
