@@ -116,8 +116,12 @@ def footprint(main, browser, scratch):
     data = json.loads(raw.read_text())
     raw.unlink()
     found = {item['pid'] for item in data.get('processes', [])}
-    if found != set(targets) or data.get('errors') or data.get('bytes per unit') != 1:
-        raise RuntimeError('Incomplete footprint sample; refusing partial memory data')
+    if found != set(targets):
+        raise RuntimeError('Footprint target set changed during sampling')
+    if data.get('errors'):
+        raise RuntimeError('Footprint reported inspection errors')
+    if data.get('bytes per unit') != 1:
+        raise RuntimeError('Unexpected footprint units')
     total = data['total footprint']
     if total <= 0:
         raise RuntimeError('Invalid footprint sample')
@@ -128,7 +132,17 @@ def footprint(main, browser, scratch):
 def samples(main, browser, scratch, count):
     result = []
     for _ in range(count):
-        result.append(footprint(main, browser, scratch))
+        for attempt in range(1, 4):
+            try:
+                sample = footprint(main, browser, scratch)
+                sample['sampling_attempts'] = attempt
+                result.append(sample)
+                break
+            except RuntimeError as error:
+                print(f'  Rejected sample: {error}; attempt {attempt}/3', flush=True)
+                if attempt == 3:
+                    raise
+                time.sleep(1)
         time.sleep(1)
     print(f"  {browser}: {statistics.median(s['footprint_mib'] for s in result):.1f} MiB", flush=True)
     return result
@@ -350,6 +364,7 @@ def main():
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--samples', type=int, default=3)
     parser.add_argument('--tabs', type=int, default=24)
+    parser.add_argument('--resume', action='store_true', help='Resume matching completed trials from the partial checkpoint')
     args = parser.parse_args()
     if not 3 <= args.tabs <= 30 or not 1 <= args.samples <= 3 or args.repeats < 1:
         parser.error('Use 3–30 tabs, 1–3 samples, and at least one repeat')
@@ -370,21 +385,32 @@ def main():
                            'tabs': args.tabs, 'rows_per_page': 1500, 'touched_array_bytes_per_page': 2 * MIB,
                            'repeats': args.repeats, 'samples_per_condition_per_repeat': args.samples},
               'trials': []}
+    checkpoint = args.output.with_suffix('.partial.json')
+    if args.resume:
+        saved = json.loads(checkpoint.read_text())
+        if any(saved.get(key) != result[key] for key in result if key != 'trials'):
+            raise RuntimeError('Checkpoint does not match this machine, workload, binary, or runner')
+        result['trials'] = saved['trials']
     workload = Workload()
     try:
         with tempfile.TemporaryDirectory(prefix='slate-tab-benchmark-') as scratch:
             for repeat in range(1, args.repeats + 1):
                 order = ['Slate', 'Chrome'] if repeat % 2 else ['Chrome', 'Slate']
                 for browser in order:
+                    if any(t['browser'] == browser and t['repeat'] == repeat for t in result['trials']):
+                        continue
                     print(f'Run {repeat}/{args.repeats}: {browser}', flush=True)
                     trial = (slate_trial(slate, workload, Path(scratch), repeat, args)
                              if browser == 'Slate' else chrome_trial(chrome, workload, Path(scratch), repeat, args))
                     result['trials'].append(trial)
+                    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                    checkpoint.write_text(json.dumps(result, indent=2) + '\n')
                     time.sleep(3)
     finally:
         workload.close()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + '\n')
+    checkpoint.unlink(missing_ok=True)
     print('Benchmark passed; sanitized results written.', flush=True)
 
 

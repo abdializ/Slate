@@ -30,6 +30,7 @@ CMakeUserPresets.json
 *.keychain-db
 *.log
 *.trace
+*.partial.json
 *.har
 *.app/
 *.zip
