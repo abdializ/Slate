@@ -1,8 +1,51 @@
 # Slate
 
-Slate is a native macOS browser built with AppKit and Apple WebKit. It supports horizontal and vertical tabs, persistent split groups, native picture-in-picture, spaces, bookmarks, downloads, and local content blocking.
+**A native Mac browser built around the cost of keeping tabs open.**
 
-This source snapshot includes instant switching between loaded split groups, vertical split drag targets, and PiP lifecycle handling that restores the selected workspace when a video player exits PiP. Ad iframe updates are aggregated separately from native PiP state.
+Slate is for people who keep a large browsing workspace and move between a few active pages. Its central goal is to reduce the resources that workspace needs while keeping active work responsive and under the user's control.
+
+The project centers on **tab lifecycle and resource use**: a saved tab can exist without a loaded page, a loaded page can survive workspace switches, and unloading is an explicit decision with clear consequences. The browser uses AppKit and the system WebKit engine on Apple Silicon, with browsing data stored locally.
+
+## Why Slate exists
+
+The workload that guides Slate is simple: keep 20–30 tabs available, work in a few, move between them quickly, and return to the others when needed. The questions that matter are how many pages must stay live, how much memory the whole browser uses, how quickly a page returns, and what state survives the transition.
+
+Slate approaches that workload through three design choices:
+
+- **Separate the tab list from loaded pages.** Saved tabs retain their identity, address, title, grouping, and Keep loaded preference. Restart restores the tab list and loads the selected workspace; other pages load when selected. Users can unload a page while retaining its tab.
+- **Keep active pages intact while switching.** Moving between loaded tabs and split groups reuses their existing WebKit views. The tested switching path preserves edited forms and in-page state. PiP uses the existing page's media session, and its lifecycle is coordinated with the selected workspace.
+- **Keep the browser shell small and local.** Slate uses native macOS UI and the system rendering engine, so it does not bundle a separate Chromium runtime. Browser state and content-blocking preferences are stored locally; saved passwords use macOS Keychain.
+
+Split tabs, vertical tabs, spaces, and PiP are ways to use that foundation. The project should earn its place through resource use, page continuity, and predictable behavior in a small native application.
+
+## What works today, and what still needs proof
+
+The current implementation has separate logical and loaded tab states, lazy session restoration, confirmed manual unloading, Keep loaded controls, native memory-pressure observation, and reuse of live pages during workspace switches. Its C++ resource policy models protected tabs and proposed lifecycle transitions.
+
+**Automatic tab unloading is disabled.** Visiting saved tabs increases the number of live pages; switching away does not unload them. The policy is not connected to automatic page destruction, and the WebKit adapter does not yet establish complete protection coverage for arbitrary page state. Manual unload warns that form entries, scrolling, playback, and page history may be lost; restoring an unloaded tab reloads its URL. Session persistence is not a snapshot of a running web application.
+
+The first [whole-browser benchmark](docs/BENCHMARKS.md) measures the browser and its content, network, and graphics processes across three fresh-profile runs on an M3 Pro Mac with 18 GiB RAM:
+
+| Controlled local workload | Slate footprint | Chrome footprint |
+| --- | ---: | ---: |
+| 24 pages loaded in both browsers | 1,194 MiB | 1,629 MiB |
+| Slate restores 24 saved tabs with only one page loaded | 234 MiB | Not a matched comparison |
+
+Figures are medians of run medians. Slate used about 27% less footprint in this specific loaded-page test, with substantial variation between runs. The same-origin synthetic pages and system memory pressure limit what it proves about everyday websites. The [report and raw measurements](docs/BENCHMARKS.md) include ranges, versions, workload details, exclusions, and reproduction steps. A small application bundle alone does not establish low runtime memory use.
+
+The benchmark also passed 90 loaded split/single workspace checks with edited fields and JavaScript state preserved. Median synchronous native activation plus validation was 4.24 ms; this excludes later painting and display scanout. Unloaded tabs reload their URL and have a different latency and state-loss boundary.
+
+The next milestones are:
+
+1. Extend the initial benchmark to mixed sites, longer sessions, matched restore policies, and end-to-end visual latency.
+2. Complete and test the protection contract for editing, media, capture, downloads, and uncertain page state before enabling automatic unloading.
+3. Connect eligible lifecycle transitions to cancellable engine operations, then verify both resource savings and state preservation.
+
+See [resource lifecycle and safety](docs/RESOURCE_SAFETY.md) for the current implementation boundary.
+
+## Everyday browsing
+
+Slate includes horizontal and vertical tabs, persistent split groups, spaces, native picture-in-picture, bookmarks, downloads, and local content blocking. The current source includes immediate presentation of loaded split groups, vertical split drag targets, and PiP exit handling that restores the selected pages.
 
 ## Build
 

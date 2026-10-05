@@ -1,0 +1,1180 @@
+{
+  "schema": 1,
+  "date": "2026-10-05",
+  "hardware": {
+    "cpu": "Apple M3 Pro",
+    "memory_gib": 18.0,
+    "os_version": "27.0"
+  },
+  "chrome_version": "154.0.8037.95",
+  "slate_revision": "3acf62b73bd7e890143736d7012ab123fed3455a",
+  "slate_binary_sha256": "0538be48e6ad26c302cb48ce669f50c85e7d7196939943a64dfa54d4907d9b41",
+  "fixture_sha256": "81a449ad2610c680a804d4066fe6df86dc7282c5f49c9410a9dd70da8c6e07a4",
+  "runner_sha256": "eea664f1a268c8f75dc12b8114fbf41ef0d82e59cb645f8383afd06ea3c67903",
+  "metric": "footprint group total footprint, bytes converted to MiB",
+  "workload": {
+    "origin": "one loopback HTTP origin, no external page requests",
+    "tabs": 24,
+    "rows_per_page": 1500,
+    "touched_array_bytes_per_page": 2097152,
+    "repeats": 3,
+    "samples_per_condition_per_repeat": 3
+  },
+  "trials": [
+    {
+      "browser": "Slate",
+      "repeat": 1,
+      "startup_to_fixture_ready_ms": 1376.378,
+      "lazy_restore": {
+        "logical_tabs": 24,
+        "loaded_pages": 1,
+        "samples": [
+          {
+            "footprint_mib": 243.472,
+            "process_count": 4,
+            "pressure_level": 1,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 147.863,
+            "process_count": 4,
+            "pressure_level": 1,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 241.722,
+            "process_count": 4,
+            "pressure_level": 1,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "all_loaded": {
+        "logical_tabs": 24,
+        "loaded_pages": 24,
+        "samples": [
+          {
+            "footprint_mib": 1558.635,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1555.979,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1550.885,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "fixture_loads": [
+        {
+          "tab": 1,
+          "request_to_ready_ms": 32.195,
+          "page_reported_ms": 29
+        },
+        {
+          "tab": 2,
+          "request_to_ready_ms": 18.421,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 3,
+          "request_to_ready_ms": 18.283,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 4,
+          "request_to_ready_ms": 17.607,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 5,
+          "request_to_ready_ms": 19.212,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 6,
+          "request_to_ready_ms": 17.86,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 7,
+          "request_to_ready_ms": 20.478,
+          "page_reported_ms": 20
+        },
+        {
+          "tab": 8,
+          "request_to_ready_ms": 18.899,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 9,
+          "request_to_ready_ms": 19.516,
+          "page_reported_ms": 20
+        },
+        {
+          "tab": 10,
+          "request_to_ready_ms": 19.952,
+          "page_reported_ms": 19
+        },
+        {
+          "tab": 11,
+          "request_to_ready_ms": 19.933,
+          "page_reported_ms": 20
+        },
+        {
+          "tab": 12,
+          "request_to_ready_ms": 19.624,
+          "page_reported_ms": 20
+        },
+        {
+          "tab": 13,
+          "request_to_ready_ms": 17.129,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 14,
+          "request_to_ready_ms": 19.475,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 15,
+          "request_to_ready_ms": 21.225,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 16,
+          "request_to_ready_ms": 17.804,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 17,
+          "request_to_ready_ms": 17.939,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 18,
+          "request_to_ready_ms": 18.462,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 19,
+          "request_to_ready_ms": 17.854,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 20,
+          "request_to_ready_ms": 17.64,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 21,
+          "request_to_ready_ms": 18.187,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 22,
+          "request_to_ready_ms": 18.676,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 23,
+          "request_to_ready_ms": 17.869,
+          "page_reported_ms": 24
+        },
+        {
+          "tab": 24,
+          "request_to_ready_ms": 17.367,
+          "page_reported_ms": 17
+        }
+      ],
+      "warm_switch_ms": [
+        5.32,
+        7.3,
+        5.848,
+        1.315,
+        9.407,
+        2.452,
+        1.492,
+        8.124,
+        4.262,
+        0.769,
+        6.272,
+        4.686,
+        2.065,
+        6.383,
+        5.04,
+        1.943,
+        9.5,
+        5.16,
+        1.818,
+        5.682,
+        3.837,
+        1.242,
+        4.029,
+        2.348,
+        0.875,
+        3.965,
+        2.88,
+        1.485,
+        3.197,
+        2.592
+      ],
+      "warm_switch_count": 30,
+      "page_and_form_continuity_passed": true,
+      "unexpected_navigation_count": 0
+    },
+    {
+      "browser": "Chrome",
+      "repeat": 1,
+      "startup_to_fixture_ready_ms": 1138.635,
+      "single_page": {
+        "logical_tabs": 1,
+        "loaded_pages": 1,
+        "samples": [
+          {
+            "footprint_mib": 711.078,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 675.25,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 638.016,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "all_loaded": {
+        "logical_tabs": 24,
+        "loaded_pages": 24,
+        "samples": [
+          {
+            "footprint_mib": 1680.595,
+            "process_count": 35,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1628.875,
+            "process_count": 34,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1626.953,
+            "process_count": 34,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "fixture_loads": [
+        {
+          "tab": 1,
+          "request_to_ready_ms": 66.401,
+          "page_reported_ms": 223.3
+        },
+        {
+          "tab": 2,
+          "request_to_ready_ms": 185.266,
+          "page_reported_ms": 185.8
+        },
+        {
+          "tab": 3,
+          "request_to_ready_ms": 173.548,
+          "page_reported_ms": 171.5
+        },
+        {
+          "tab": 4,
+          "request_to_ready_ms": 167.286,
+          "page_reported_ms": 164.5
+        },
+        {
+          "tab": 5,
+          "request_to_ready_ms": 163.221,
+          "page_reported_ms": 162.6
+        },
+        {
+          "tab": 6,
+          "request_to_ready_ms": 175.629,
+          "page_reported_ms": 165.7
+        },
+        {
+          "tab": 7,
+          "request_to_ready_ms": 183.266,
+          "page_reported_ms": 180.3
+        },
+        {
+          "tab": 8,
+          "request_to_ready_ms": 184.951,
+          "page_reported_ms": 185.5
+        },
+        {
+          "tab": 9,
+          "request_to_ready_ms": 175.462,
+          "page_reported_ms": 170
+        },
+        {
+          "tab": 10,
+          "request_to_ready_ms": 171.584,
+          "page_reported_ms": 167.6
+        },
+        {
+          "tab": 11,
+          "request_to_ready_ms": 235.273,
+          "page_reported_ms": 231.1
+        },
+        {
+          "tab": 12,
+          "request_to_ready_ms": 221.933,
+          "page_reported_ms": 221.9
+        },
+        {
+          "tab": 13,
+          "request_to_ready_ms": 310.819,
+          "page_reported_ms": 312.4
+        },
+        {
+          "tab": 14,
+          "request_to_ready_ms": 562.046,
+          "page_reported_ms": 556.3
+        },
+        {
+          "tab": 15,
+          "request_to_ready_ms": 384.978,
+          "page_reported_ms": 383
+        },
+        {
+          "tab": 16,
+          "request_to_ready_ms": 373.008,
+          "page_reported_ms": 372.6
+        },
+        {
+          "tab": 17,
+          "request_to_ready_ms": 372.239,
+          "page_reported_ms": 370.9
+        },
+        {
+          "tab": 18,
+          "request_to_ready_ms": 404.431,
+          "page_reported_ms": 402.3
+        },
+        {
+          "tab": 19,
+          "request_to_ready_ms": 365.205,
+          "page_reported_ms": 363.4
+        },
+        {
+          "tab": 20,
+          "request_to_ready_ms": 517.394,
+          "page_reported_ms": 519.8
+        },
+        {
+          "tab": 21,
+          "request_to_ready_ms": 338.21,
+          "page_reported_ms": 334.4
+        },
+        {
+          "tab": 22,
+          "request_to_ready_ms": 397.958,
+          "page_reported_ms": 398.2
+        },
+        {
+          "tab": 23,
+          "request_to_ready_ms": 418.876,
+          "page_reported_ms": 420.7
+        },
+        {
+          "tab": 24,
+          "request_to_ready_ms": 489.541,
+          "page_reported_ms": 489.3
+        }
+      ]
+    },
+    {
+      "browser": "Chrome",
+      "repeat": 2,
+      "startup_to_fixture_ready_ms": 602.709,
+      "single_page": {
+        "logical_tabs": 1,
+        "loaded_pages": 1,
+        "samples": [
+          {
+            "footprint_mib": 693.813,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 663.906,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 755.953,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "all_loaded": {
+        "logical_tabs": 24,
+        "loaded_pages": 24,
+        "samples": [
+          {
+            "footprint_mib": 1582.016,
+            "process_count": 34,
+            "pressure_level": 2,
+            "sampling_attempts": 2
+          },
+          {
+            "footprint_mib": 1547.828,
+            "process_count": 34,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1573.204,
+            "process_count": 36,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "fixture_loads": [
+        {
+          "tab": 1,
+          "request_to_ready_ms": 22.214,
+          "page_reported_ms": 135.5
+        },
+        {
+          "tab": 2,
+          "request_to_ready_ms": 528.022,
+          "page_reported_ms": 345.8
+        },
+        {
+          "tab": 3,
+          "request_to_ready_ms": 520.712,
+          "page_reported_ms": 341.2
+        },
+        {
+          "tab": 4,
+          "request_to_ready_ms": 518.93,
+          "page_reported_ms": 350.4
+        },
+        {
+          "tab": 5,
+          "request_to_ready_ms": 513.84,
+          "page_reported_ms": 319.9
+        },
+        {
+          "tab": 6,
+          "request_to_ready_ms": 503.342,
+          "page_reported_ms": 324.4
+        },
+        {
+          "tab": 7,
+          "request_to_ready_ms": 502.49,
+          "page_reported_ms": 345.2
+        },
+        {
+          "tab": 8,
+          "request_to_ready_ms": 498.319,
+          "page_reported_ms": 330.8
+        },
+        {
+          "tab": 9,
+          "request_to_ready_ms": 491.159,
+          "page_reported_ms": 332.8
+        },
+        {
+          "tab": 10,
+          "request_to_ready_ms": 486.144,
+          "page_reported_ms": 336.8
+        },
+        {
+          "tab": 11,
+          "request_to_ready_ms": 476.154,
+          "page_reported_ms": 334
+        },
+        {
+          "tab": 12,
+          "request_to_ready_ms": 529.749,
+          "page_reported_ms": 530.8
+        },
+        {
+          "tab": 13,
+          "request_to_ready_ms": 699.393,
+          "page_reported_ms": 698.5
+        },
+        {
+          "tab": 14,
+          "request_to_ready_ms": 547.853,
+          "page_reported_ms": 547.7
+        },
+        {
+          "tab": 15,
+          "request_to_ready_ms": 748.603,
+          "page_reported_ms": 744.6
+        },
+        {
+          "tab": 16,
+          "request_to_ready_ms": 432.944,
+          "page_reported_ms": 288.8
+        },
+        {
+          "tab": 17,
+          "request_to_ready_ms": 424.839,
+          "page_reported_ms": 266.3
+        },
+        {
+          "tab": 18,
+          "request_to_ready_ms": 557.136,
+          "page_reported_ms": 558.7
+        },
+        {
+          "tab": 19,
+          "request_to_ready_ms": 642.737,
+          "page_reported_ms": 639.3
+        },
+        {
+          "tab": 20,
+          "request_to_ready_ms": 635.722,
+          "page_reported_ms": 636.3
+        },
+        {
+          "tab": 21,
+          "request_to_ready_ms": 700.685,
+          "page_reported_ms": 698.4
+        },
+        {
+          "tab": 22,
+          "request_to_ready_ms": 693.492,
+          "page_reported_ms": 690.4
+        },
+        {
+          "tab": 23,
+          "request_to_ready_ms": 686.565,
+          "page_reported_ms": 682.1
+        },
+        {
+          "tab": 24,
+          "request_to_ready_ms": 678.582,
+          "page_reported_ms": 674.6
+        }
+      ]
+    },
+    {
+      "browser": "Slate",
+      "repeat": 2,
+      "startup_to_fixture_ready_ms": 1782.991,
+      "lazy_restore": {
+        "logical_tabs": 24,
+        "loaded_pages": 1,
+        "samples": [
+          {
+            "footprint_mib": 240.456,
+            "process_count": 4,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 141.363,
+            "process_count": 4,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 141.081,
+            "process_count": 4,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "all_loaded": {
+        "logical_tabs": 24,
+        "loaded_pages": 24,
+        "samples": [
+          {
+            "footprint_mib": 1075.79,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1074.165,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1074.055,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "fixture_loads": [
+        {
+          "tab": 1,
+          "request_to_ready_ms": 40.977,
+          "page_reported_ms": 52
+        },
+        {
+          "tab": 2,
+          "request_to_ready_ms": 22.786,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 3,
+          "request_to_ready_ms": 22.575,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 4,
+          "request_to_ready_ms": 21.616,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 5,
+          "request_to_ready_ms": 25.026,
+          "page_reported_ms": 24
+        },
+        {
+          "tab": 6,
+          "request_to_ready_ms": 22.511,
+          "page_reported_ms": 21
+        },
+        {
+          "tab": 7,
+          "request_to_ready_ms": 23.645,
+          "page_reported_ms": 25
+        },
+        {
+          "tab": 8,
+          "request_to_ready_ms": 16.346,
+          "page_reported_ms": 16
+        },
+        {
+          "tab": 9,
+          "request_to_ready_ms": 16.648,
+          "page_reported_ms": 16
+        },
+        {
+          "tab": 10,
+          "request_to_ready_ms": 16.963,
+          "page_reported_ms": 16
+        },
+        {
+          "tab": 11,
+          "request_to_ready_ms": 20.744,
+          "page_reported_ms": 20
+        },
+        {
+          "tab": 12,
+          "request_to_ready_ms": 17.159,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 13,
+          "request_to_ready_ms": 16.741,
+          "page_reported_ms": 16
+        },
+        {
+          "tab": 14,
+          "request_to_ready_ms": 19.636,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 15,
+          "request_to_ready_ms": 22.79,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 16,
+          "request_to_ready_ms": 22.18,
+          "page_reported_ms": 21
+        },
+        {
+          "tab": 17,
+          "request_to_ready_ms": 20.91,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 18,
+          "request_to_ready_ms": 22.527,
+          "page_reported_ms": 22
+        },
+        {
+          "tab": 19,
+          "request_to_ready_ms": 20.582,
+          "page_reported_ms": 20
+        },
+        {
+          "tab": 20,
+          "request_to_ready_ms": 19.751,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 21,
+          "request_to_ready_ms": 19.879,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 22,
+          "request_to_ready_ms": 17.25,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 23,
+          "request_to_ready_ms": 16.652,
+          "page_reported_ms": 16
+        },
+        {
+          "tab": 24,
+          "request_to_ready_ms": 16.784,
+          "page_reported_ms": 16
+        }
+      ],
+      "warm_switch_ms": [
+        4.196,
+        6.331,
+        3.781,
+        1.736,
+        4.791,
+        2.947,
+        1.643,
+        6.486,
+        4.423,
+        1.542,
+        6.607,
+        3.952,
+        2.078,
+        6.048,
+        4.05,
+        1.277,
+        6.476,
+        3.414,
+        2.235,
+        7.736,
+        2.597,
+        1.495,
+        6.981,
+        4.271,
+        1.379,
+        7.733,
+        1.936,
+        1.561,
+        4.209,
+        2.927
+      ],
+      "warm_switch_count": 30,
+      "page_and_form_continuity_passed": true,
+      "unexpected_navigation_count": 0
+    },
+    {
+      "browser": "Slate",
+      "repeat": 3,
+      "startup_to_fixture_ready_ms": 1038.268,
+      "lazy_restore": {
+        "logical_tabs": 24,
+        "loaded_pages": 1,
+        "samples": [
+          {
+            "footprint_mib": 238.722,
+            "process_count": 4,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 139.566,
+            "process_count": 4,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 233.847,
+            "process_count": 4,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "all_loaded": {
+        "logical_tabs": 24,
+        "loaded_pages": 24,
+        "samples": [
+          {
+            "footprint_mib": 1198.93,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1101.587,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1194.212,
+            "process_count": 27,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "fixture_loads": [
+        {
+          "tab": 1,
+          "request_to_ready_ms": 37.938,
+          "page_reported_ms": 33
+        },
+        {
+          "tab": 2,
+          "request_to_ready_ms": 17.844,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 3,
+          "request_to_ready_ms": 16.887,
+          "page_reported_ms": 16
+        },
+        {
+          "tab": 4,
+          "request_to_ready_ms": 17.488,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 5,
+          "request_to_ready_ms": 19.246,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 6,
+          "request_to_ready_ms": 19.891,
+          "page_reported_ms": 20
+        },
+        {
+          "tab": 7,
+          "request_to_ready_ms": 19.379,
+          "page_reported_ms": 19
+        },
+        {
+          "tab": 8,
+          "request_to_ready_ms": 18.264,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 9,
+          "request_to_ready_ms": 17.467,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 10,
+          "request_to_ready_ms": 16.994,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 11,
+          "request_to_ready_ms": 22.092,
+          "page_reported_ms": 21
+        },
+        {
+          "tab": 12,
+          "request_to_ready_ms": 17.712,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 13,
+          "request_to_ready_ms": 19.111,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 14,
+          "request_to_ready_ms": 18.913,
+          "page_reported_ms": 19
+        },
+        {
+          "tab": 15,
+          "request_to_ready_ms": 17.34,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 16,
+          "request_to_ready_ms": 18.059,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 17,
+          "request_to_ready_ms": 17.14,
+          "page_reported_ms": 17
+        },
+        {
+          "tab": 18,
+          "request_to_ready_ms": 19.009,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 19,
+          "request_to_ready_ms": 18.167,
+          "page_reported_ms": 19
+        },
+        {
+          "tab": 20,
+          "request_to_ready_ms": 17.711,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 21,
+          "request_to_ready_ms": 17.815,
+          "page_reported_ms": 18
+        },
+        {
+          "tab": 22,
+          "request_to_ready_ms": 19.204,
+          "page_reported_ms": 19
+        },
+        {
+          "tab": 23,
+          "request_to_ready_ms": 23.054,
+          "page_reported_ms": 23
+        },
+        {
+          "tab": 24,
+          "request_to_ready_ms": 17.99,
+          "page_reported_ms": 17
+        }
+      ],
+      "warm_switch_ms": [
+        4.898,
+        6.712,
+        4.931,
+        1.713,
+        8.257,
+        5.74,
+        3.691,
+        9.299,
+        4.499,
+        1.68,
+        8.46,
+        6.321,
+        3.191,
+        7.388,
+        4.952,
+        2.431,
+        5.948,
+        4.585,
+        2.294,
+        9.613,
+        5.021,
+        3.026,
+        9.794,
+        4.705,
+        2.571,
+        8.212,
+        4.767,
+        1.847,
+        8.09,
+        6.54
+      ],
+      "warm_switch_count": 30,
+      "page_and_form_continuity_passed": true,
+      "unexpected_navigation_count": 0
+    },
+    {
+      "browser": "Chrome",
+      "repeat": 3,
+      "startup_to_fixture_ready_ms": 1000.044,
+      "single_page": {
+        "logical_tabs": 1,
+        "loaded_pages": 1,
+        "samples": [
+          {
+            "footprint_mib": 716.172,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 692.547,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 692.532,
+            "process_count": 12,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "all_loaded": {
+        "logical_tabs": 24,
+        "loaded_pages": 24,
+        "samples": [
+          {
+            "footprint_mib": 1662.798,
+            "process_count": 34,
+            "pressure_level": 2,
+            "sampling_attempts": 2
+          },
+          {
+            "footprint_mib": 1629.548,
+            "process_count": 34,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          },
+          {
+            "footprint_mib": 1653.268,
+            "process_count": 36,
+            "pressure_level": 2,
+            "sampling_attempts": 1
+          }
+        ]
+      },
+      "fixture_loads": [
+        {
+          "tab": 1,
+          "request_to_ready_ms": 48.339,
+          "page_reported_ms": 146.4
+        },
+        {
+          "tab": 2,
+          "request_to_ready_ms": 314.109,
+          "page_reported_ms": 301.7
+        },
+        {
+          "tab": 3,
+          "request_to_ready_ms": 225.823,
+          "page_reported_ms": 196.9
+        },
+        {
+          "tab": 4,
+          "request_to_ready_ms": 222.582,
+          "page_reported_ms": 197.5
+        },
+        {
+          "tab": 5,
+          "request_to_ready_ms": 211.902,
+          "page_reported_ms": 181
+        },
+        {
+          "tab": 6,
+          "request_to_ready_ms": 204.679,
+          "page_reported_ms": 170.5
+        },
+        {
+          "tab": 7,
+          "request_to_ready_ms": 200.425,
+          "page_reported_ms": 172.3
+        },
+        {
+          "tab": 8,
+          "request_to_ready_ms": 175.422,
+          "page_reported_ms": 164.4
+        },
+        {
+          "tab": 9,
+          "request_to_ready_ms": 193.197,
+          "page_reported_ms": 159.8
+        },
+        {
+          "tab": 10,
+          "request_to_ready_ms": 162.918,
+          "page_reported_ms": 154.3
+        },
+        {
+          "tab": 11,
+          "request_to_ready_ms": 181.072,
+          "page_reported_ms": 151.3
+        },
+        {
+          "tab": 12,
+          "request_to_ready_ms": 171.895,
+          "page_reported_ms": 144.6
+        },
+        {
+          "tab": 13,
+          "request_to_ready_ms": 226.786,
+          "page_reported_ms": 227.1
+        },
+        {
+          "tab": 14,
+          "request_to_ready_ms": 283.192,
+          "page_reported_ms": 280.8
+        },
+        {
+          "tab": 15,
+          "request_to_ready_ms": 313.158,
+          "page_reported_ms": 307.9
+        },
+        {
+          "tab": 16,
+          "request_to_ready_ms": 339.092,
+          "page_reported_ms": 334.7
+        },
+        {
+          "tab": 17,
+          "request_to_ready_ms": 312.367,
+          "page_reported_ms": 310.2
+        },
+        {
+          "tab": 18,
+          "request_to_ready_ms": 329.925,
+          "page_reported_ms": 326
+        },
+        {
+          "tab": 19,
+          "request_to_ready_ms": 302.911,
+          "page_reported_ms": 299.8
+        },
+        {
+          "tab": 20,
+          "request_to_ready_ms": 314.799,
+          "page_reported_ms": 310.5
+        },
+        {
+          "tab": 21,
+          "request_to_ready_ms": 255.601,
+          "page_reported_ms": 253.6
+        },
+        {
+          "tab": 22,
+          "request_to_ready_ms": 261.215,
+          "page_reported_ms": 261.4
+        },
+        {
+          "tab": 23,
+          "request_to_ready_ms": 300.365,
+          "page_reported_ms": 297.5
+        },
+        {
+          "tab": 24,
+          "request_to_ready_ms": 292.474,
+          "page_reported_ms": 290
+        }
+      ]
+    }
+  ]
+}
