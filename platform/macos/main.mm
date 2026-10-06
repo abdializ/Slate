@@ -12832,8 +12832,7 @@ static void InstallMenus(SlateDelegate* delegate) {
  NSMenuItem* inspect = [devMenu addItemWithTitle:@"Inspect Element" action:@selector(inspectElement:) keyEquivalent:@"i"];
  inspect.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
  inspect.target = delegate;
- NSMenuItem* viewSrc = [devMenu addItemWithTitle:@"View Source" action:@selector(viewSource:) keyEquivalent:@"u"];
- viewSrc.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+ NSMenuItem* viewSrc = [devMenu addItemWithTitle:@"View Source" action:@selector(viewSource:) keyEquivalent:@""];
  viewSrc.target = delegate;
  devItem.submenu = devMenu;
  [view addItem:[NSMenuItem separatorItem]];
