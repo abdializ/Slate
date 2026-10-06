@@ -24,6 +24,10 @@ Those policy fields are not evidence that the current WebKit adapter detects eve
 
 A hidden page is still a loaded page. Cold is a policy state, not a claim that WebKit has frozen a renderer. The WebKit adapter does not currently implement the base engine's occlusion or memory-trim hooks as a browser-specific resource reclamation mechanism.
 
+## Bounded application overhead — October 6, 2026
+
+The [resource overhead improvements](DEBLOAT.md) add a bounded, cancellable favicon loader, explicit cache eviction under pressure, coalesced media checks, hidden-document theme suspension, and engine teardown cleanup. Automatic destruction is disconnected because the adapter cannot prove that a page has no unsaved application state. These changes reduce Slate-owned overhead while retaining live page continuity.
+
 ## Memory measurement
 
 The macOS memory monitor observes system pressure and the native application's physical footprint. That footprint excludes WebKit's separate content and networking processes. It must not be described as total browser memory.

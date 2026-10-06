@@ -5,6 +5,7 @@ add_executable(Slate MACOSX_BUNDLE
   main.mm
   ../../engine/webkit_engine.mm
   ../../engine/webkit_shields.mm
+  favicon_loader.mm
   memory_monitor.cc
   memory_monitor.mm
   session_store.mm
@@ -52,6 +53,7 @@ target_link_libraries(Slate PRIVATE
   "-framework UniformTypeIdentifiers"
   "-framework PDFKit"
   "-framework CoreImage"
+  "-framework ImageIO"
   "-lsqlite3"
 )
 

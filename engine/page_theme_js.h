@@ -7,6 +7,9 @@ inline constexpr char kPageThemeJs[] = R"JS((function() {
  window.__slateThemeObserver = true;
  var last = null;
  var timer = 0;
+ var fallback = 0;
+ var observing = false;
+ var paused = false;
  var canvas = document.createElement('canvas');
  canvas.width = canvas.height = 1;
  var context = canvas.getContext('2d');
@@ -57,6 +60,7 @@ inline constexpr char kPageThemeJs[] = R"JS((function() {
  }
  function report() {
   timer = 0;
+  if (paused || document.hidden) return;
   try {
    var value = current();
    if (value === last) return;
@@ -65,21 +69,39 @@ inline constexpr char kPageThemeJs[] = R"JS((function() {
   } catch (e) {}
  }
  function schedule() {
-  if (!timer) timer = setTimeout(report, 300);
+  if (!paused && !document.hidden && !timer) timer = setTimeout(report, 300);
  }
- schedule();
- setTimeout(schedule, 900);
- setTimeout(schedule, 1800);
  var observer = new MutationObserver(schedule);
- observer.observe(document.documentElement, {
-  subtree: true, childList: true, attributes: true,
-  attributeFilter: ['class', 'style', 'content', 'media']
- });
+ function resume() {
+  if (paused || document.hidden) return;
+  if (!observing) {
+   observer.observe(document.documentElement, {
+    subtree: true, childList: true, attributes: true,
+    attributeFilter: ['class', 'style', 'content', 'media']
+   });
+   observing = true;
+  }
+  schedule();
+  if (!fallback) fallback = setTimeout(function tick() {
+   fallback = 0;
+   if (paused || document.hidden) return;
+   schedule();
+   fallback = setTimeout(tick, 3000);
+  }, 3000);
+ }
+ function suspend() {
+  observer.disconnect(); observing = false;
+  if (timer) clearTimeout(timer);
+  if (fallback) clearTimeout(fallback);
+  timer = fallback = 0;
+ }
+ resume();
  window.addEventListener('resize', schedule);
  window.addEventListener('popstate', schedule);
  window.addEventListener('hashchange', schedule);
  document.addEventListener('visibilitychange', function() {
-  if (!document.hidden) schedule();
+  if (document.hidden) suspend(); else resume();
  });
- setInterval(function() { if (!document.hidden) schedule(); }, 3000);
+ window.addEventListener('pagehide', function() { paused = true; suspend(); });
+ window.addEventListener('pageshow', function() { paused = false; resume(); });
 })();)JS";

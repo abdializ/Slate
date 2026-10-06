@@ -59,3 +59,7 @@ Incomplete samples are rejected and retried up to three times against a newly id
 This same-origin synthetic workload favors renderer sharing where an engine supports it. It does not represent a mixed set of independent sites or streaming services. The engines also differ: Slate uses the system WebKit with its own instrumentation and bundled local filters; Chrome uses Chromium with fresh-profile defaults. No protections or security features are disabled to equalize them.
 
 These results cannot establish an advantage across all browsers, websites, Macs, or memory-pressure conditions. Safari is not included: an existing personal session was running, and the runner does not alter it. Battery life, CPU use, sustained idle behavior, memory under induced pressure, automatic unloading, real streaming ads, and end-to-end visual latency remain unmeasured. Manual unload reloads the URL on restoration and can lose page state. Automatic unloading remains disabled.
+
+## October 6, 2026 resource-overhead validation
+
+The [resource-overhead report](DEBLOAT.md) records three new Slate-only trials, exact budgets, component before/after fixtures and final native continuity checks. No new comparative ranking is claimed; the comparison attempts did not meet the phase/loading validity checks.

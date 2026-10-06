@@ -6,6 +6,7 @@
 #import "platform/macos/download_manager.h"
 #import "platform/macos/form_relay.h"
 #import "platform/macos/pdf_overlay.h"
+#import "platform/macos/favicon_loader.h"
 #import <WebKit/WebKit.h>
 #import <PDFKit/PDFKit.h>
 #import <objc/runtime.h>
@@ -84,6 +85,8 @@ static BOOL IsStreamingOrDrmHost(NSString* host) {
 @property (nonatomic, assign) BOOL incognito;
 @property (nonatomic, assign) BOOL pageThemeReported;
 @property (nonatomic, strong) NSURL* imageMenuURL;
+@property (nonatomic, strong) SlateFaviconRequest* faviconRequest;
+@property (nonatomic) NSUInteger navigationGeneration;
 @end
 
 @implementation SlateWebNavigationDelegate
@@ -154,6 +157,9 @@ static BOOL IsStreamingOrDrmHost(NSString* host) {
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+  [self.faviconRequest cancel];
+  self.faviconRequest = nil;
+  ++self.navigationGeneration;
   [self.mediaFrames removeAllObjects];
   pipState_.clear_frames();
   self.pageThemeReported = NO;
@@ -230,28 +236,19 @@ static BOOL IsStreamingOrDrmHost(NSString* host) {
         "return window.location.origin + '/favicon.ico';"
       "})()";
       __weak SlateWebNavigationDelegate* weakNav = self;
+      const NSUInteger generation = self.navigationGeneration;
       [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
-        if (!weakNav || !weakNav.events || !weakNav.events->favicon_changed) return;
-        if ([result isKindOfClass:[NSString class]] && [(NSString*)result length] > 0) {
-          NSURL* iconUrl = [NSURL URLWithString:(NSString*)result];
-          if (iconUrl && iconUrl.scheme.length > 0) {
-            NSURLSessionConfiguration* cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-            cfg.timeoutIntervalForRequest = 4.0;
-            NSURLSession* session = [NSURLSession sessionWithConfiguration:cfg];
-            [[session dataTaskWithURL:iconUrl completionHandler:^(NSData *data, NSURLResponse *res, NSError *err) {
-              if (data.length > 0 && !err) {
-                NSImage* img = [[NSImage alloc] initWithData:data];
-                if (img) {
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                    if (weakNav && weakNav.events && weakNav.events->favicon_changed) {
-                      weakNav.events->favicon_changed(std::string((const char*)data.bytes, data.length));
-                    }
-                  });
-                }
-              }
-            }] resume];
-          }
-        }
+        SlateWebNavigationDelegate* nav = weakNav;
+        if (!nav || !nav.events || nav.navigationGeneration != generation || error) return;
+        if (![result isKindOfClass:NSString.class] || ![(NSString*)result length]) return;
+        [nav.faviconRequest cancel];
+        nav.faviconRequest = [[SlateFaviconLoader sharedLoader] loadURL:[NSURL URLWithString:result]
+          private:nav.incognito completion:^(NSData* png) {
+            SlateWebNavigationDelegate* current = weakNav;
+            if (!current || !current.events || current.navigationGeneration != generation) return;
+            if (current.events->favicon_changed)
+              current.events->favicon_changed(std::string((const char*)png.bytes, png.length));
+          }];
       }];
     }
   }
@@ -1410,6 +1407,11 @@ class WebKitEngine final : public BrowserEngine {
   void close() override {
     if (!closed_) {
       closed_ = true;
+      [delegate_.faviconRequest cancel];
+      delegate_.faviconRequest = nil;
+      delegate_.events = nullptr;
+      delegate_.webView = nil;
+      [delegate_.mediaFrames removeAllObjects];
       if (web_view_) {
         @try {
           [web_view_ removeObserver:delegate_ forKeyPath:@"estimatedProgress"];
@@ -1445,13 +1447,14 @@ class WebKitEngine final : public BrowserEngine {
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateConsole"];
         }
         [web_view_ stopLoading];
-        [web_view_ loadHTMLString:@"" baseURL:nil];
+        [web_view_.configuration.userContentController removeAllUserScripts];
         [web_view_ removeFromSuperview];
         web_view_.navigationDelegate = nil;
         web_view_.UIDelegate = nil;
         web_view_ = nil;
       }
 
+      delegate_ = nil;
       if (events_.close_ready) events_.close_ready();
       if (events_.closed) events_.closed();
     }

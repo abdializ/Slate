@@ -13,6 +13,12 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
   let primary = null;
   let last = '';
   let lastPip = false;
+  let pendingReport = 0;
+  let hadMedia = false;
+  // Live collections update as players are replaced; no NodeList allocation for
+  // each mutation, media event, or iframe report.
+  const videos = document.getElementsByTagName('video');
+  const audios = document.getElementsByTagName('audio');
   const frameId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
   function adCandidate(video) {
@@ -32,7 +38,7 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
     return true;
   }
   function eligible(video) {
-    return !!video && !video.paused && !video.ended && trusted.has(video) &&
+    return !!video && video.isConnected !== false && !video.paused && !video.ended && trusted.has(video) &&
       visible(video) && !adCandidate(video);
   }
   function candidateScore(video) {
@@ -47,18 +53,20 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
   }
   function choose() {
     let best = null, score = -1;
-    for (const video of document.querySelectorAll('video')) {
+    for (const video of videos) {
       const next = candidateScore(video);
       if (next > score) { best = video; score = next; }
     }
     return best;
   }
   function report() {
+    if (pendingReport) { clearTimeout(pendingReport); pendingReport = 0; }
+    hadMedia = videos.length > 0 || audios.length > 0;
     const best = choose();
-    if (best) primary = best;
+    primary = best || (eligible(primary) ? primary : null);
     const video = best || (eligible(primary) ? primary : null);
     let audioPlaying = false;
-    for (const audio of document.querySelectorAll('audio')) {
+    for (const audio of audios) {
       if (!audio.paused && !audio.ended && !audio.muted && audio.volume > 0 && trusted.has(audio)) {
         audioPlaying = true;
         break;
@@ -66,7 +74,7 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
     }
     let anyPip = !!document.pictureInPictureElement;
     if (!anyPip) {
-      for (const v of document.querySelectorAll('video')) {
+      for (const v of videos) {
         if (v.webkitPresentationMode === 'picture-in-picture') {
           anyPip = true;
           break;
@@ -77,7 +85,7 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
       frame_id: frameId,
       audible: audioPlaying || (!!video && !video.muted && video.volume > 0),
       video: !!video,
-      has_video: !!document.querySelector('video'),
+      has_video: videos.length > 0,
       user_started: !!video,
       candidate_score: video ? candidateScore(video) : -1,
       width: video ? video.videoWidth : 0,
@@ -120,6 +128,9 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
                       'enterpictureinpicture', 'leavepictureinpicture', 'webkitpresentationmodechanged'])
     document.addEventListener(name, report, true);
   window.addEventListener('pagehide', function () {
+    if (pendingReport) { clearTimeout(pendingReport); pendingReport = 0; }
+    primary = null;
+    last = ""; // pagehide removed the native frame; pageshow must republish it.
     try { window.webkit.messageHandlers.slateMedia.postMessage({frame_id:frameId, removed:true}); } catch (_) {}
   });
   window.addEventListener('message', function (event) {
@@ -131,7 +142,7 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
       try {
         if (document.pictureInPictureElement && document.exitPictureInPicture)
           document.exitPictureInPicture().catch(function () {});
-        for (const video of document.querySelectorAll('video'))
+        for (const video of videos)
           if (video.webkitPresentationMode === 'picture-in-picture')
             video.webkitSetPresentationMode('inline');
       } catch (_) {}
@@ -145,7 +156,7 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
     let video = choose();
     if (!video && event.data.manual) {
       let best = null, most = -1;
-      for (const v of document.querySelectorAll('video')) {
+      for (const v of videos) {
         if (adCandidate(v)) continue;
         const box = v.getBoundingClientRect();
         if (box.width < 160 || box.height < 90) continue;
@@ -168,11 +179,18 @@ inline constexpr char kMediaMonitorJs[] = R"JS(
   // Player replacements and in-stream ad markers need not emit a play/pause
   // event. Refresh frame state without letting another iframe close native PiP.
   if (typeof MutationObserver === 'function') {
-    const observer = new MutationObserver(report);
+    const observer = new MutationObserver(function () {
+      // Ordinary DOM changes on a media-free document require no scan. Do not
+      // delay playback/PiP events; only coalesce mutation bursts.
+      if ((!videos.length && !audios.length && !primary && !lastPip &&
+           !hadMedia) || pendingReport) return;
+      pendingReport = setTimeout(function () { pendingReport = 0; report(); }, 100);
+    });
     const root = document.documentElement || document.body;
     if (root) observer.observe(root, {childList:true, subtree:true, attributes:true,
       attributeFilter:['data-slate-ad-break']});
   }
+  window.addEventListener('pageshow', report);
   report();
 })();
 )JS";

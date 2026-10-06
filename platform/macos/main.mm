@@ -1,3 +1,4 @@
+#import "platform/macos/favicon_loader.h"
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
@@ -9494,20 +9495,16 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  memorySample=sample;
  if(self.quitting) return;
 
- slate::ResourceController controller;
- auto transitions = controller.evaluate(model.tabs(), sample, std::chrono::steady_clock::now());
- for(const auto& t : transitions) {
-  if(t.target == slate::Lifecycle::Discarded && model.live(t.id) && !model.closing(t.id)) {
-   [self beginClose:t.id reason:slate::CloseReason::Discard];
-  }
- }
+ // WebKit cannot prove a document has no unsaved application state. Keep
+ // automatic destruction disconnected; pressure may evict only bounded caches.
 
  if(sample.pressure==slate::Pressure::Warning || sample.pressure==slate::Pressure::Critical) {
+  [[SlateFaviconLoader sharedLoader] trimCache];
   [self syncBrowserOcclusion];
   for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->trim_memory();
  }
  if(pressureChanged)
-  fprintf(stderr,"SLATE_MEMORY pressure=%s main_process_bytes=%llu automatic=on\n",
+  fprintf(stderr,"SLATE_MEMORY pressure=%s main_process_bytes=%llu automatic=off\n",
    !sample.pressure_known ? "unknown" : sample.pressure==slate::Pressure::Critical ? "critical" : sample.pressure==slate::Pressure::Warning ? "warning" : "normal",
    static_cast<unsigned long long>(sample.browser_footprint_bytes));
 }
@@ -11721,7 +11718,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
     fprintf(stderr,"SLATE_VERIFY_SIGNAL invalid\n"); break;
    }
    NSString* signal=[data stringByAppendingPathComponent:[@"verify-signal-" stringByAppendingString:name]];
-   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(120);
+   // Whole-process footprint inspection can take several minutes under load.
+   const auto deadline=std::chrono::steady_clock::now()+std::chrono::minutes(10);
    while(!self.quitting && ![NSFileManager.defaultManager fileExistsAtPath:signal] &&
          std::chrono::steady_clock::now()<deadline) [NSThread sleepForTimeInterval:0.05];
    if(self.quitting) break;
