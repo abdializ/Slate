@@ -10287,11 +10287,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    if(!self.recentlyClosedTabs) self.recentlyClosedTabs = [NSMutableArray array];
    NSString* u = (!tab->url.empty() && tab->url != "about:blank") ? Text(tab->url) : @"about:blank";
    NSUInteger idx = 0;
+   NSString* groupId = @"";
+   BOOL pinned = NO;
    const auto& all_tabs = model.tabs();
    for(size_t i = 0; i < all_tabs.size(); ++i) {
-     if(all_tabs[i].id == identifier) { idx = i; break; }
+     if(all_tabs[i].id == identifier) { 
+       idx = i; 
+       groupId = all_tabs[i].group_id.empty() ? @"" : Text(all_tabs[i].group_id);
+       pinned = all_tabs[i].pinned;
+       break; 
+     }
    }
-   [self.recentlyClosedTabs addObject:@{@"url": u, @"index": @(idx)}];
+   [self.recentlyClosedTabs addObject:@{@"url": u, @"index": @(idx), @"group": groupId, @"pinned": @(pinned)}];
    if(self.recentlyClosedTabs.count > 30) [self.recentlyClosedTabs removeObjectAtIndex:0];
   }
  }
@@ -10955,6 +10962,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.recentlyClosedTabs removeLastObject];
  NSString* lastUrl = lastTab[@"url"];
  NSUInteger targetIndex = [lastTab[@"index"] unsignedIntegerValue];
+ NSString* groupId = lastTab[@"group"];
+ BOOL pinned = [lastTab[@"pinned"] boolValue];
 
  if([lastUrl isEqualToString:@"about:blank"] || lastUrl.length == 0) {
   [self newTab:sender];
@@ -10963,12 +10972,19 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  
  slate::TabId newId = model.selected();
+ if (groupId.length > 0) {
+  model.set_tab_group(newId, groupId.UTF8String);
+ }
+ if (pinned) {
+  model.pin(newId, true);
+ }
  std::vector<slate::TabId> ordered;
  for(const auto& t : model.tabs()) {
   if(t.id != newId) ordered.push_back(t.id);
  }
  if(targetIndex > ordered.size()) targetIndex = ordered.size();
  ordered.insert(ordered.begin() + targetIndex, newId);
+ 
  model.reorder_tabs(ordered);
  [self refresh]; [self scheduleSave];
 }
