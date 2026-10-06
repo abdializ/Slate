@@ -17,6 +17,21 @@
 static NSString* const kSlateSafariUserAgent = @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
 static NSString* const kSlateChromeUserAgent = @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
+// Docs chooses its canvas renderer from the advertised Safari version. Keep
+// that version aligned with the system WebKit rather than claiming Safari 18.
+static NSString* SafariUserAgentForHost(NSString* host) {
+  if (![host.lowercaseString isEqualToString:@"docs.google.com"]) return kSlateSafariUserAgent;
+  static NSString* docsUserAgent;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    NSURL* safariURL = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
+    NSString* version = safariURL ? [[NSBundle bundleWithURL:safariURL] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] : nil;
+    docsUserAgent = version.length ? [kSlateSafariUserAgent stringByReplacingOccurrencesOfString:@"Version/18.0"
+      withString:[@"Version/" stringByAppendingString:version]] : kSlateSafariUserAgent;
+  });
+  return docsUserAgent;
+}
+
 static BOOL IsStreamingOrDrmHost(NSString* host) {
   if (!host.length) return NO;
   NSString* h = host.lowercaseString;
@@ -335,10 +350,10 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
   if (navigationAction.targetFrame != nil && navigationAction.targetFrame.isMainFrame) {
     slate::WebKitShields::Shared().UpdateControllerForURL(webView.configuration.userContentController, targetUrl);
     if (targetUrl && targetUrl.host.length) {
-      NSString* desiredUa = IsStreamingOrDrmHost(targetUrl.host) ? kSlateSafariUserAgent : kSlateChromeUserAgent;
+      NSString* desiredUa = IsStreamingOrDrmHost(targetUrl.host) ? SafariUserAgentForHost(targetUrl.host) : kSlateChromeUserAgent;
       if (![webView.customUserAgent isEqualToString:desiredUa]) {
         webView.customUserAgent = desiredUa;
-        fprintf(stderr, "SLATE_UA_SWITCH host=%s ua=%s\n", targetUrl.host.UTF8String, desiredUa == kSlateSafariUserAgent ? "Safari (FairPlay DRM)" : "Chrome");
+        fprintf(stderr, "SLATE_UA_SWITCH host=%s ua=%s\n", targetUrl.host.UTF8String, IsStreamingOrDrmHost(targetUrl.host) ? "Safari" : "Chrome");
       }
     }
   }
@@ -771,7 +786,21 @@ static dispatch_once_t sFeatureToken;
 
 namespace slate {
 
+
+static WKProcessPool* GetSharedProcessPool(bool incognito) {
+  static WKProcessPool* sharedPool = nil;
+  static WKProcessPool* incognitoPool = nil;
+  if (incognito) {
+    if (!incognitoPool) incognitoPool = [[WKProcessPool alloc] init];
+    return incognitoPool;
+  } else {
+    if (!sharedPool) sharedPool = [[WKProcessPool alloc] init];
+    return sharedPool;
+  }
+}
+
 class WebKitEngine final : public BrowserEngine {
+
  public:
   WebKitEngine(void* native_view, EngineEvents events, const std::string& url, ShieldController* shields, bool incognito, void* website_data_store = nullptr, void* popup_configuration = nullptr)
       : events_(std::move(events)), incognito_(incognito) {
@@ -781,7 +810,11 @@ class WebKitEngine final : public BrowserEngine {
         ? (__bridge WKWebViewConfiguration*)popup_configuration
         : [[WKWebViewConfiguration alloc] init];
     // Each tab owns its message handlers; retain WebKit's related-page configuration.
-    if (popup_configuration) config.userContentController = [[WKUserContentController alloc] init];
+    if (popup_configuration) {
+      config.userContentController = [[WKUserContentController alloc] init];
+    } else {
+      config.processPool = GetSharedProcessPool(incognito_);
+    }
     config.allowsAirPlayForMediaPlayback = YES;
     config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeAudio;
 
@@ -1189,7 +1222,7 @@ class WebKitEngine final : public BrowserEngine {
       NSURL* initialUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
       initHost = initialUrl.host;
     }
-    web_view_.customUserAgent = (initHost && IsStreamingOrDrmHost(initHost)) ? kSlateSafariUserAgent : kSlateChromeUserAgent;
+    web_view_.customUserAgent = (initHost && IsStreamingOrDrmHost(initHost)) ? SafariUserAgentForHost(initHost) : kSlateChromeUserAgent;
 
     // Observe KVO properties
     [web_view_ addObserver:delegate_ forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:nil];
@@ -1240,7 +1273,7 @@ class WebKitEngine final : public BrowserEngine {
     }
     if (nsUrl) {
       if (nsUrl.host.length) {
-        NSString* desiredUa = IsStreamingOrDrmHost(nsUrl.host) ? kSlateSafariUserAgent : kSlateChromeUserAgent;
+        NSString* desiredUa = IsStreamingOrDrmHost(nsUrl.host) ? SafariUserAgentForHost(nsUrl.host) : kSlateChromeUserAgent;
         if (![web_view_.customUserAgent isEqualToString:desiredUa]) {
           web_view_.customUserAgent = desiredUa;
         }
@@ -1412,6 +1445,7 @@ class WebKitEngine final : public BrowserEngine {
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateConsole"];
         }
         [web_view_ stopLoading];
+        [web_view_ loadHTMLString:@"" baseURL:nil];
         [web_view_ removeFromSuperview];
         web_view_.navigationDelegate = nil;
         web_view_.UIDelegate = nil;

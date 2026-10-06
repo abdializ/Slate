@@ -843,6 +843,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)selectLastTab:(id)sender;
 - (void)closeAllTabs:(id)sender;
 - (void)closeTabWithId:(TabId)identifier;
+- (void)unloadTabWithId:(TabId)identifier;
 - (void)toggleTabMute:(TabId)identifier;
 - (BOOL)tabIsMuted:(TabId)identifier;
 - (BOOL)tabHasAudioState:(TabId)identifier;
@@ -1114,7 +1115,11 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
 - (void)mouseDown:(NSEvent*)event {
  SlateDelegate* delegate=[self.pill.target isKindOfClass:SlateDelegate.class] ? (SlateDelegate*)self.pill.target : nil;
  if(delegate && self.pill.tabId) {
-  [delegate beginClose:self.pill.tabId reason:slate::CloseReason::Remove];
+  if (([NSApp currentEvent].modifierFlags & NSEventModifierFlagOption) != 0) {
+   [delegate unloadTabWithId:self.pill.tabId];
+  } else {
+   [delegate closeTabWithId:self.pill.tabId];
+  }
  }
 }
 @end
@@ -2154,7 +2159,11 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (void)closeClicked:(id)sender {
  if(self.owner && self.tabId) {
-  [self.owner closeTabWithId:self.tabId];
+  if (([NSApp currentEvent].modifierFlags & NSEventModifierFlagOption) != 0) {
+   [self.owner unloadTabWithId:self.tabId];
+  } else {
+   [self.owner closeTabWithId:self.tabId];
+  }
  }
 }
 - (void)speakerClicked:(id)sender {
@@ -6746,6 +6755,23 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)closeTabWithId:(TabId)identifier {
  if(!self.quitting && identifier) [self beginClose:identifier reason:slate::CloseReason::Remove];
 }
+
+- (void)unloadTabWithId:(TabId)identifier {
+ if(self.quitting || !identifier || !model.live(identifier) || model.closing(identifier) || model.find(identifier)->protected_content) return;
+ NSAlert* alert=[[NSAlert alloc] init]; alert.messageText=@"Unload this tab?";
+ alert.informativeText=@"The address and title stay in your tab list. Form entries, scrolling, playback and page history may be lost. Restoring reloads the page.";
+ [alert addButtonWithTitle:@"Cancel"]; [alert addButtonWithTitle:@"Unload"];
+ [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+  if(response==NSAlertSecondButtonReturn && !self.quitting) [self beginClose:identifier reason:slate::CloseReason::Discard];
+ }];
+}
+
+- (void)unloadTabMenuItem:(id)sender {
+ if([sender isKindOfClass:NSMenuItem.class]) {
+  TabId tid = (TabId)[((NSMenuItem*)sender).representedObject unsignedLongLongValue];
+  if(tid) [self unloadTabWithId:tid];
+ }
+}
 - (void)togglePinTabItem:(id)sender {
  if([sender isKindOfClass:NSMenuItem.class]) {
   TabId tid = (TabId)[((NSMenuItem*)sender).representedObject unsignedLongLongValue];
@@ -6821,6 +6847,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  reopen.target = self;
  reopen.enabled = (self.recentlyClosedUrls.count > 0);
  [menu addItem:[NSMenuItem separatorItem]];
+ NSMenuItem* unload = [menu addItemWithTitle:@"Unload Tab…" action:@selector(unloadTabMenuItem:) keyEquivalent:@""];
+ unload.target = self; unload.representedObject = @(identifier);
  NSMenuItem* close = [menu addItemWithTitle:@"Close Tab" action:@selector(closeTabMenuItem:) keyEquivalent:@"w"];
  close.target = self; close.representedObject = @(identifier);
  return menu;
@@ -10281,14 +10309,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self performClose:identifier reason:reason];
 }
 - (void)unloadTab:(id)sender {
- const auto identifier=model.selected();
- if(self.quitting || !model.live(identifier) || model.closing(identifier) || model.find(identifier)->protected_content) return;
- NSAlert* alert=[[NSAlert alloc] init]; alert.messageText=@"Unload this tab?";
- alert.informativeText=@"The address and title stay in your tab list. Form entries, scrolling, playback and page history may be lost. Restoring reloads the page.";
- [alert addButtonWithTitle:@"Cancel"]; [alert addButtonWithTitle:@"Unload"];
- [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
-  if(response==NSAlertSecondButtonReturn && !self.quitting) [self beginClose:identifier reason:slate::CloseReason::Discard];
- }];
+ [self unloadTabWithId:model.selected()];
 }
 - (void)closeTab:(id)sender {
  if(!self.quitting) [self beginClose:model.selected() reason:slate::CloseReason::Remove];
