@@ -2,15 +2,16 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <algorithm>
 
-// The selected tab owns its shoulders; they extend beyond the tab's layout
-// width and finish inside the toolbar to avoid a hairline at the join.
-static inline CGPathRef CreateActiveBrowserTabPath(CGRect bounds, bool flipped) {
+// Normal pages join the solid toolbar with a small bleed. The New Tab
+// gradient needs a flush lower edge so the tab does not paint over the plate.
+static inline CGPathRef CreateActiveBrowserTabPath(CGRect bounds, bool flipped,
+                                                 bool joinsToolbar = true) {
  const CGFloat w=CGRectGetWidth(bounds);
  const CGFloat h=CGRectGetHeight(bounds);
  const CGFloat radius=std::min(14.0, std::min(w/4.0, h/2.0));
  const CGFloat shoulder=std::min(18.0, w/4.0);
  const CGFloat depth=std::min(10.0, h/3.0);
- const CGFloat base=-2.0;
+ const CGFloat base=joinsToolbar ? -2.0 : 0.0;
  const CGFloat k=0.5522847498;
  CGMutablePathRef path=CGPathCreateMutable();
  CGPathMoveToPoint(path, nullptr, -shoulder, base);

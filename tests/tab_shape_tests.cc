@@ -4,7 +4,7 @@
 #include <cstdio>
 
 int main() {
- for(CGFloat width : {30.0, 48.0, 110.0, 154.0, 180.0}) {
+ for(CGFloat width : {30.0, 48.0, 110.0, 154.0, 180.0, 360.0}) {
   const CGFloat height=38.0;
   const CGFloat shoulder=std::min(18.0, width/4.0);
   CGPathRef path=CreateActiveBrowserTabPath(CGRectMake(0, 0, width, height), false);
@@ -24,8 +24,21 @@ int main() {
   assert(CGPathContainsPoint(path, nullptr, CGPointMake(width/2, -1), false));
   assert(CGPathContainsPoint(path, nullptr, CGPointMake(9, height/2), false));
   assert(CGPathContainsPoint(path, nullptr, CGPointMake(width-9, height/2), false));
+  // New Tab must never paint into the toolbar in either coordinate system.
+  for(bool isFlipped : {false, true}) {
+   CGPathRef home=CreateActiveBrowserTabPath(CGRectMake(0,0,width,height),isFlipped,false);
+   CGRect homeBounds=CGPathGetPathBoundingBox(home);
+   assert(std::abs(CGRectGetMinY(homeBounds))<0.01);
+   assert(std::abs(CGRectGetMaxY(homeBounds)-height)<0.01);
+   assert(CGPathContainsPoint(home,nullptr,CGPointMake(width/2,height/2),false));
+   for(CGFloat x=-shoulder; x<=width+shoulder; x+=0.5) {
+    assert(!CGPathContainsPoint(home,nullptr,CGPointMake(x,-1),false));
+    assert(!CGPathContainsPoint(home,nullptr,CGPointMake(x,height+1),false));
+   }
+   CGPathRelease(home);
+  }
   CGPathRelease(flipped);
   CGPathRelease(path);
  }
- puts("active browser tab shoulders are symmetric at narrow and wide widths");
+ puts("normal tab shoulders are symmetric; New Tab never paints outside the tab row");
 }

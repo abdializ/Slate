@@ -1,4 +1,23 @@
-# UI repair notes — September 22, 2026
+# UI repair notes
+
+## October 6, 2026 — Active New Tab toolbar overlap
+
+An active New Tab (`about:blank`) painted two points below the horizontal tab
+row. Its solid tab fill visibly overlapped the New Tab page's gradient toolbar.
+The tab path now ends at the row boundary on New Tab pages. Normal webpages
+retain their existing seamless toolbar join. Active split-group shapes use the
+same rule when the selected page is a New Tab.
+
+Validation:
+
+- Release application build and strict code-signature verification passed.
+- `active_tab_geometry` passed. Regression checks cover both drawing
+  orientations and narrow, wide, and split-group widths, and verify that New Tab
+  paths cannot paint above or below the tab row.
+- Native UI checks confirmed a flush active New Tab edge and the existing
+  toolbar join on a normal webpage. The tested build was installed locally.
+
+## September 22, 2026
 
 Changes applied on top of the existing uncommitted browser work:
 

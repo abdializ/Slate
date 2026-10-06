@@ -1501,7 +1501,9 @@ static NSColor* TabGroupColorForId(const std::string& groupId, const std::string
   [CATransaction setDisableActions:YES];
   self.tabShapeLayer.hidden=NO;
   self.tabShapeLayer.frame=self.bounds;
-  CGPathRef path=CreateActiveBrowserTabPath(self.bounds, self.isFlipped);
+  const auto* activeTab=model.find(self.tabId);
+  const bool joinsToolbar=!activeTab || activeTab->url!="about:blank";
+  CGPathRef path=CreateActiveBrowserTabPath(self.bounds, self.isFlipped, joinsToolbar);
   self.tabShapeLayer.path=path;
   CGPathRelease(path);
   self.tabShapeLayer.fillColor=selectedColor.CGColor;
@@ -8984,6 +8986,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)updateSplitTabShape {
  if(!self.tabPills) return;
+ const auto* activeTab=model.find(model.selected());
+ const bool joinsToolbar=!activeTab || activeTab->url!="about:blank";
  NSArray<NSView*>* views=self.tabPills.arrangedSubviews;
  NSMutableArray<NSArray<SlateTabPill*>*>* pairs=[NSMutableArray array];
  NSMutableSet<NSNumber*>* connectedIds=[NSMutableSet set];
@@ -9027,7 +9031,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   shape.frame=pairFrame;
   const CGRect bounds=CGRectMake(0,0,NSWidth(pairFrame),NSHeight(pairFrame));
   CGPathRef path=foreground
-   ? CreateActiveBrowserTabPath(bounds,self.tabPills.isFlipped)
+   ? CreateActiveBrowserTabPath(bounds,self.tabPills.isFlipped,joinsToolbar)
    : CGPathCreateWithRoundedRect(CGRectInset(bounds,0,2),9,9,nullptr);
   shape.path=path;
   CGPathRelease(path);
