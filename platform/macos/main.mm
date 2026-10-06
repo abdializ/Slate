@@ -661,7 +661,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (IBAction)showSiteCard:(id)sender;
 - (void)updateSecurityChrome;
 - (WKWebView*)currentWebView;
-@property(strong) NSMutableArray<NSString*>* recentlyClosedUrls;
+@property(strong) NSMutableArray<NSDictionary*>* recentlyClosedTabs;
 @property(strong) NSColor* barColor;
 @property(strong) NSColor* barInk;
 @property(strong) NSColor* barMuted;
@@ -5252,7 +5252,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.accentId=prefs.accent.length ? prefs.accent : @"rose";
  self.accentHex=prefs.accentHex ?: @"";
  self.accentHex2=prefs.accentHex2 ?: @"";
- self.recentlyClosedUrls=[NSMutableArray array];
+ self.recentlyClosedTabs=[NSMutableArray array];
  self.graniteIntensity=prefs.graniteIntensity;
  self.themeMode=prefs.themeMode;
  self.pages120Hz=prefs.pages120Hz;
@@ -6845,7 +6845,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  NSMenuItem* reopen = [menu addItemWithTitle:@"Reopen Closed Tab" action:@selector(reopenClosedTab:) keyEquivalent:@"T"];
  reopen.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
  reopen.target = self;
- reopen.enabled = (self.recentlyClosedUrls.count > 0);
+ reopen.enabled = (self.recentlyClosedTabs.count > 0);
  [menu addItem:[NSMenuItem separatorItem]];
  NSMenuItem* unload = [menu addItemWithTitle:@"Unload Tab…" action:@selector(unloadTabMenuItem:) keyEquivalent:@""];
  unload.target = self; unload.representedObject = @(identifier);
@@ -8431,7 +8431,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  NSMenuItem* reopenTab=[menu addItemWithTitle:@"Reopen Closed Tab" action:@selector(reopenClosedTab:) keyEquivalent:@"T"];
  reopenTab.keyEquivalentModifierMask=NSEventModifierFlagCommand | NSEventModifierFlagShift;
  reopenTab.target=self;
- reopenTab.enabled=(self.recentlyClosedUrls.count > 0);
+ reopenTab.enabled=(self.recentlyClosedTabs.count > 0);
  [menu addItem:[NSMenuItem separatorItem]];
  NSMenuItem* unload=[menu addItemWithTitle:@"Unload Tab…" action:@selector(unloadTab:) keyEquivalent:@""];
  unload.target=self;
@@ -8449,7 +8449,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  NSMenuItem* reopenTab=[menu addItemWithTitle:@"Reopen Closed Tab" action:@selector(reopenClosedTab:) keyEquivalent:@"T"];
  reopenTab.keyEquivalentModifierMask=NSEventModifierFlagCommand | NSEventModifierFlagShift;
  reopenTab.target=self;
- reopenTab.enabled=(self.recentlyClosedUrls.count > 0);
+ reopenTab.enabled=(self.recentlyClosedTabs.count > 0);
 
  [menu addItem:[NSMenuItem separatorItem]];
  NSMenuItem* bookmarkAll=[menu addItemWithTitle:@"Bookmark All Tabs…" action:@selector(bookmarkAllTabs:) keyEquivalent:@""];
@@ -9487,12 +9487,21 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const BOOL pressureChanged=sample.pressure!=memorySample.pressure || sample.pressure_known!=memorySample.pressure_known;
  memorySample=sample;
  if(self.quitting) return;
+
+ slate::ResourceController controller;
+ auto transitions = controller.evaluate(model.tabs(), sample, std::chrono::steady_clock::now());
+ for(const auto& t : transitions) {
+  if(t.target == slate::Lifecycle::Discarded && model.live(t.id) && !model.closing(t.id)) {
+   [self beginClose:t.id reason:slate::CloseReason::Discard];
+  }
+ }
+
  if(sample.pressure==slate::Pressure::Warning || sample.pressure==slate::Pressure::Critical) {
   [self syncBrowserOcclusion];
   for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->trim_memory();
  }
  if(pressureChanged)
-  fprintf(stderr,"SLATE_MEMORY pressure=%s main_process_bytes=%llu automatic=off\n",
+  fprintf(stderr,"SLATE_MEMORY pressure=%s main_process_bytes=%llu automatic=on\n",
    !sample.pressure_known ? "unknown" : sample.pressure==slate::Pressure::Critical ? "critical" : sample.pressure==slate::Pressure::Warning ? "warning" : "normal",
    static_cast<unsigned long long>(sample.browser_footprint_bytes));
 }
@@ -10273,10 +10282,15 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(reason == slate::CloseReason::Remove) {
   const auto* tab = model.find(identifier);
   if(tab && !tab->incognito) {
-   if(!self.recentlyClosedUrls) self.recentlyClosedUrls = [NSMutableArray array];
+   if(!self.recentlyClosedTabs) self.recentlyClosedTabs = [NSMutableArray array];
    NSString* u = (!tab->url.empty() && tab->url != "about:blank") ? Text(tab->url) : @"about:blank";
-   [self.recentlyClosedUrls addObject:u];
-   if(self.recentlyClosedUrls.count > 30) [self.recentlyClosedUrls removeObjectAtIndex:0];
+   NSUInteger idx = 0;
+   const auto& all_tabs = model.tabs();
+   for(size_t i = 0; i < all_tabs.size(); ++i) {
+     if(all_tabs[i].id == identifier) { idx = i; break; }
+   }
+   [self.recentlyClosedTabs addObject:@{@"url": u, @"index": @(idx)}];
+   if(self.recentlyClosedTabs.count > 30) [self.recentlyClosedTabs removeObjectAtIndex:0];
   }
  }
  if(!model.begin_close(identifier,reason)) return;
@@ -10934,14 +10948,27 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self moveSuggestion:delta];
 }
 - (void)reopenClosedTab:(id)sender {
- if(self.quitting || !self.recentlyClosedUrls.count) return;
- NSString* lastUrl = [self.recentlyClosedUrls lastObject];
- [self.recentlyClosedUrls removeLastObject];
+ if(self.quitting || !self.recentlyClosedTabs.count) return;
+ NSDictionary* lastTab = [self.recentlyClosedTabs lastObject];
+ [self.recentlyClosedTabs removeLastObject];
+ NSString* lastUrl = lastTab[@"url"];
+ NSUInteger targetIndex = [lastTab[@"index"] unsignedIntegerValue];
+
  if([lastUrl isEqualToString:@"about:blank"] || lastUrl.length == 0) {
   [self newTab:sender];
  } else {
   [self openUrl:lastUrl];
  }
+ 
+ slate::TabId newId = model.selected();
+ std::vector<slate::TabId> ordered;
+ for(const auto& t : model.tabs()) {
+  if(t.id != newId) ordered.push_back(t.id);
+ }
+ if(targetIndex > ordered.size()) targetIndex = ordered.size();
+ ordered.insert(ordered.begin() + targetIndex, newId);
+ model.reorder_tabs(ordered);
+ [self refresh]; [self scheduleSave];
 }
 - (void)selectNextTab:(id)sender {
  const auto tabs = [self orderedIds];
@@ -11367,7 +11394,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(item.action==@selector(goForward:)) return live && it->second.forward;
  if(item.action==@selector(reload:)) return live;
  if(item.action==@selector(hardReload:)) return live;
- if(item.action==@selector(reopenClosedTab:)) return self.recentlyClosedUrls.count > 0;
+ if(item.action==@selector(reopenClosedTab:)) return self.recentlyClosedTabs.count > 0;
  if(item.action==@selector(selectNextTab:) || item.action==@selector(selectPreviousTab:)) return model.tabs().size() > 1;
  if(item.action==@selector(copyCurrentUrl:) || item.action==@selector(copyCurrentUrlAsMarkdown:)) {
   const auto* tab=model.find(model.selected());
