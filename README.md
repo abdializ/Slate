@@ -65,7 +65,7 @@ No Chromium SDK is required. The signing script uses a local Apple Development i
 ctest --test-dir build --output-on-failure
 ```
 
-The current macOS build has 21 tests when Node.js is installed. Native workspace regressions use a separate verification build:
+The current macOS build registers 19 native tests in CMake, plus 4 JavaScript fixture tests when Node.js is installed (23 total). Native workspace regressions use a separate verification build:
 
 ```sh
 cmake -S . -B build-verify -DCMAKE_BUILD_TYPE=Release -DSLATE_ENABLE_VERIFY=ON
