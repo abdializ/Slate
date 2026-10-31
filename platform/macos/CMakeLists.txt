@@ -49,6 +49,10 @@ if(SLATE_ENABLE_VERIFY)
   set(SLATE_VERIFY_PLIST_FLAG true)
   target_compile_definitions(Slate PRIVATE SLATE_ENABLE_VERIFY=1)
 endif()
+include("${PROJECT_SOURCE_DIR}/cmake/Passwords.cmake")
+add_dependencies(Slate SlatePasswordsBuild)
+target_include_directories(Slate PRIVATE "${SLATE_PASSWORDS_BUILD}")
+target_link_libraries(Slate PRIVATE SlatePasswordServicesLib)
 target_link_options(Slate PRIVATE -Wl,-dead_strip)
 target_include_directories(Slate PRIVATE "${PROJECT_SOURCE_DIR}")
 # Slate note: Link system WebKit/AppKit and related native services alongside slate_core.
@@ -93,6 +97,8 @@ set_property(TARGET Slate APPEND PROPERTY LINK_DEPENDS
 
 add_custom_command(TARGET Slate POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:Slate>/Contents/Frameworks"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SLATE_PASSWORDS_LIBRARY}"
+    "$<TARGET_BUNDLE_DIR:Slate>/Contents/Frameworks/libSlatePasswords.dylib"
   COMMAND /usr/bin/ditto --norsrc --noextattr
     "${SLATE_SPARKLE_ROOT}/Sparkle.framework"
     "$<TARGET_BUNDLE_DIR:Slate>/Contents/Frameworks/Sparkle.framework"

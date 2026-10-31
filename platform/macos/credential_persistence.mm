@@ -131,6 +131,20 @@ std::unique_ptr<CredentialStore> load_credentials(const std::string& path) {
   }
 }
 
+bool credentials_may_exist(const std::string& path) {
+ @autoreleasepool {
+  if([[NSFileManager defaultManager] fileExistsAtPath:[NSString stringWithUTF8String:path.c_str()]]) return true;
+  NSMutableDictionary* query=[VaultIdentity(path) mutableCopy];
+  query[(__bridge id)kSecMatchLimit]=(__bridge id)kSecMatchLimitOne;
+  query[(__bridge id)kSecReturnAttributes]=@YES;
+  query[(__bridge id)kSecUseAuthenticationUI]=(__bridge id)kSecUseAuthenticationUIFail;
+  CFTypeRef attributes=nullptr;
+  OSStatus status=SecItemCopyMatching((__bridge CFDictionaryRef)query,&attributes);
+  if(attributes)CFRelease(attributes);
+  return status!=errSecItemNotFound;
+ }
+}
+
 void save_credentials(const std::string& path, const CredentialStore& store) {
   @autoreleasepool {
     NSMutableArray* credArray = [NSMutableArray array];

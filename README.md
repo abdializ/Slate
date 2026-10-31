@@ -91,7 +91,7 @@ The verification command runner is disabled by default. Regression runs use fres
 
 This repository contains application source, public filter lists, and synthetic test fixtures. It excludes personal browser data, cookies, saved passwords, API keys, signing certificates, local build artifacts, and historical development logs. Security features and their tests remain part of the application.
 
-The browser stores personal browsing data locally at runtime. Keep local browser profiles and signing material outside Git. See [security architecture](docs/SECURITY.md), [password storage](docs/PASSWORDS.md), and [ad-block architecture](docs/ADBLOCK_MEDIA_ARCHITECTURE.md) for implementation details.
+The browser stores personal browsing data locally at runtime. Keep local browser profiles and signing material outside Git. See [security architecture](docs/SECURITY.md), [password storage](docs/PASSWORDS.md), [Apple Passwords and passkeys](docs/APPLE_PASSWORDS.md), and [ad-block architecture](docs/ADBLOCK_MEDIA_ARCHITECTURE.md) for implementation details.
 
 ## Source layout
 

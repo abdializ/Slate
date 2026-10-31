@@ -8,6 +8,13 @@
 #include <memory>
 
 
+@interface SlatePasswordGroundView : NSView
+@end
+@implementation SlatePasswordGroundView
+- (void)drawRect:(NSRect)rect { [[SlatePalette ground] setFill]; NSRectFill(rect); }
+- (void)viewDidChangeEffectiveAppearance { [super viewDidChangeEffectiveAppearance]; [self setNeedsDisplay:YES]; }
+@end
+
 @interface SlatePasswordsPanel ()
 @property(nonatomic, assign) slate::CredentialStore* store;
 @property(nonatomic, copy) dispatch_block_t onSaveBlock;
@@ -20,6 +27,13 @@
 @property(nonatomic, strong) NSTimer* concealTimer;
 @property(nonatomic, strong) LAContext* authentication;
 @property(nonatomic) NSUInteger requestGeneration;
+@property(nonatomic,strong) NSScrollView* scroll;
+@property(nonatomic,strong) NSView* addForm;
+@property(nonatomic,strong) NSButton* addButton;
+@property(nonatomic,strong) NSButton* removeShown;
+@property(nonatomic,strong) NSTextField* addSite;
+@property(nonatomic,strong) NSTextField* addUser;
+@property(nonatomic,strong) NSSecureTextField* addSecret;
 @end
 
 @implementation SlatePasswordsPanel
@@ -44,7 +58,7 @@
   panel=[[self alloc] initWithContentRect:NSMakeRect(0,0,680,470)
    styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable
    backing:NSBackingStoreBuffered defer:NO];
-  panel.title=@"Saved in Slate";
+  panel.title=@"Passwords";
   panel.releasedWhenClosed=NO;
   [panel setupUI];
  });
@@ -53,6 +67,8 @@
 - (void)setupUI {
  self.minSize=NSMakeSize(640,350);
  self.rows=[NSMutableArray array];
+ self.backgroundColor=[SlatePalette ground];
+ self.contentView=[[SlatePasswordGroundView alloc] initWithFrame:self.contentView.bounds];
  NSView* content=self.contentView;
  self.searchField=[[NSSearchField alloc] initWithFrame:NSMakeRect(20,420,540,30)];
  self.searchField.placeholderString=@"Search sites and accounts";
@@ -60,27 +76,36 @@
  self.searchField.sendsSearchStringImmediately=YES;
  self.searchField.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
  [content addSubview:self.searchField];
- NSButton* add=[NSButton buttonWithTitle:@"Add" target:self action:@selector(addPassword:)];
+ NSButton* add=[SlateQuickButton quickWithTitle:@"Add" action:nil];add.target=self;add.action=@selector(addPassword:);
+ self.addButton=add;
  add.frame=NSMakeRect(580,420,80,30); add.autoresizingMask=NSViewMinXMargin|NSViewMinYMargin;
  [content addSubview:add];
- NSScrollView* scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(20,80,640,325)];
- scroll.hasVerticalScroller=YES; scroll.borderType=NSBezelBorder;
+ NSScrollView* scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(20,90,640,315)];
+ self.scroll=scroll;
+ scroll.hasVerticalScroller=YES; scroll.borderType=NSNoBorder;
+ scroll.wantsLayer=YES;scroll.layer.cornerRadius=12;scroll.layer.borderWidth=1;
+ scroll.layer.borderColor=[SlatePalette hairline].CGColor;
  scroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
  self.tableView=[[NSTableView alloc] initWithFrame:scroll.bounds];
  self.tableView.delegate=self; self.tableView.dataSource=self;
  self.tableView.headerView=nil; self.tableView.rowHeight=40;
+ self.tableView.backgroundColor=[SlatePalette ground];
  self.tableView.selectionHighlightStyle=NSTableViewSelectionHighlightStyleNone;
  NSTableColumn* column=[[NSTableColumn alloc] initWithIdentifier:@"account"];
  column.width=620; column.resizingMask=NSTableColumnAutoresizingMask;
  [self.tableView addTableColumn:column];
  self.tableView.columnAutoresizingStyle=NSTableViewUniformColumnAutoresizingStyle;
  scroll.documentView=self.tableView; [content addSubview:scroll];
- NSButton* import=[NSButton buttonWithTitle:@"Import CSV…" target:self action:@selector(importCSV:)];
- import.frame=NSMakeRect(20,40,120,28); [content addSubview:import];
- NSButton* apple=[NSButton buttonWithTitle:@"Open Apple Passwords" target:self action:@selector(openApplePasswords:)];
- apple.frame=NSMakeRect(145,40,170,28); [content addSubview:apple];
+ NSButton* bring=[SlateQuickButton quickWithTitle:@"Bring in…" action:nil];bring.target=self;bring.action=@selector(bringIn:);
+ bring.frame=NSMakeRect(20,40,85,28); [content addSubview:bring];
+ NSButton* import=[SlateQuickButton quickWithTitle:@"File…" action:nil];import.target=self;import.action=@selector(importCSV:);
+ import.frame=NSMakeRect(110,40,70,28); [content addSubview:import];
+ NSButton* apple=[SlateQuickButton quickWithTitle:@"Open Apple Passwords" action:nil];apple.target=self;apple.action=@selector(openApplePasswords:);
+ apple.frame=NSMakeRect(185,40,170,28); [content addSubview:apple];
  self.statusLabel=[NSTextField labelWithString:@""];
- self.statusLabel.frame=NSMakeRect(325,44,335,20);
+ self.removeShown=[SlateQuickButton quickWithTitle:@"Remove All…" action:nil];self.removeShown.target=self;self.removeShown.action=@selector(removeShownPasswords:);
+ self.removeShown.frame=NSMakeRect(535,40,125,28);self.removeShown.autoresizingMask=NSViewMinXMargin;[content addSubview:self.removeShown];
+ self.statusLabel.frame=NSMakeRect(325,66,335,20);
  self.statusLabel.alignment=NSTextAlignmentRight;
  self.statusLabel.textColor=NSColor.secondaryLabelColor;
  self.statusLabel.autoresizingMask=NSViewWidthSizable;
@@ -100,12 +125,17 @@
  ++self.requestGeneration; [self.authentication invalidate]; self.authentication=nil;
  [self conceal:nil];
 }
-- (void)close { [self cancelAuthentication]; [super close]; }
-- (void)orderOut:(id)sender { [self cancelAuthentication]; [super orderOut:sender]; }
+- (void)close { if(self.addForm)[self addPassword:nil]; [self cancelAuthentication]; [super close]; }
+- (void)orderOut:(id)sender { if(self.addForm)[self addPassword:nil]; [self cancelAuthentication]; [super orderOut:sender]; }
 - (void)showForCredentialStore:(slate::CredentialStore*)store onSave:(dispatch_block_t)onSave {
- [self cancelAuthentication]; self.store=store; self.onSaveBlock=onSave;
- [self reloadItems]; [self center]; [self makeKeyAndOrderFront:nil];
+ [self prepareForCredentialStore:store onSave:onSave];
+ [self center]; [self makeKeyAndOrderFront:nil];
  [self makeFirstResponder:self.searchField];
+}
+- (void)prepareForCredentialStore:(slate::CredentialStore*)store onSave:(dispatch_block_t)onSave {
+ [self cancelAuthentication]; self.store=store; self.onSaveBlock=onSave;
+ [self.contentView setNeedsDisplay:YES];
+ [self reloadItems];
 }
 - (void)reloadItems {
  [self.rows removeAllObjects];
@@ -124,6 +154,9 @@
   if([host isEqualToString:self.expandedSite]) [self.rows addObjectsFromArray:accounts];
  }
  const size_t count=self.store->items().size();
+ const auto shown=self.store->search(self.searchField.stringValue.UTF8String ?: "");
+ self.removeShown.hidden=shown.empty();
+ self.removeShown.title=self.searchField.stringValue.length ? [NSString stringWithFormat:@"Remove %zu…",shown.size()] : @"Remove All…";
  self.statusLabel.stringValue=count ? [NSString stringWithFormat:@"%zu saved password%@",count,count==1?@"":@"s"] : @"Nothing saved yet. Add a password or import a CSV file.";
  if(count && !self.rows.count) self.statusLabel.stringValue=@"No matching sites or accounts.";
  [self.tableView reloadData];
@@ -143,14 +176,14 @@
  }
  NSTextField* user=[NSTextField labelWithString:[item[@"user"] length]?item[@"user"]:@"No username"];
  user.frame=NSMakeRect(30,12,180,18); user.lineBreakMode=NSLineBreakByTruncatingMiddle;
- user.font=[NSFont systemFontOfSize:12]; [cell addSubview:user];
- NSString* value=@"••••••••";
+ user.selectable=YES;user.font=[NSFont systemFontOfSize:12]; [cell addSubview:user];
+ NSString* value=@"••••••••••";
  if([self.revealedId isEqualToString:identifier] && self.store) {
   auto credential=self.store->find_by_id(identifier.UTF8String);
   if(credential) value=@(credential->password.c_str());
  }
  NSTextField* secret=[NSTextField labelWithString:value];
- secret.font=[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+ secret.selectable=YES;secret.font=[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
  secret.frame=NSMakeRect(218,12,MAX(60,column.width-418),18);
  secret.autoresizingMask=NSViewWidthSizable; secret.lineBreakMode=NSLineBreakByTruncatingTail;
  [cell addSubview:secret];
@@ -226,26 +259,54 @@
  }];
 }
 - (void)addPassword:(id)sender {
- NSAlert* alert=[NSAlert new]; alert.messageText=@"Add password";
- [alert addButtonWithTitle:@"Save"]; [alert addButtonWithTitle:@"Cancel"];
- NSView* form=[[NSView alloc] initWithFrame:NSMakeRect(0,0,360,116)];
- NSTextField* site=[[NSTextField alloc] initWithFrame:NSMakeRect(0,82,360,26)]; site.placeholderString=@"Site (example.com)";
- NSTextField* user=[[NSTextField alloc] initWithFrame:NSMakeRect(0,44,360,26)]; user.placeholderString=@"Username";
- NSSecureTextField* password=[[NSSecureTextField alloc] initWithFrame:NSMakeRect(0,6,360,26)]; password.placeholderString=@"Password";
- [form addSubview:site]; [form addSubview:user]; [form addSubview:password]; alert.accessoryView=form;
+ [self cancelAuthentication];
+ if(self.addForm) {
+  self.addSecret.stringValue=@"";[self.addForm removeFromSuperview];self.addForm=nil;
+  self.addSite=nil;self.addUser=nil;self.addSecret=nil;
+  self.addButton.title=@"Add";self.scroll.frame=NSMakeRect(20,90,self.contentView.bounds.size.width-40,self.contentView.bounds.size.height-155);return;
+ }
+ self.addButton.title=@"Cancel";
+ CGFloat width=self.contentView.bounds.size.width-40;
+ NSView* form=[[NSView alloc] initWithFrame:NSMakeRect(20,self.contentView.bounds.size.height-154,width,94)];
+ form.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
+ form.wantsLayer=YES;form.layer.cornerRadius=12;form.layer.borderWidth=1;form.layer.borderColor=[SlatePalette hairline].CGColor;
+ self.addForm=form;[self.contentView addSubview:form];
+ self.addSite=[[NSTextField alloc] initWithFrame:NSMakeRect(12,55,(width-36)/2,26)];self.addSite.placeholderString=@"Site";
+ self.addUser=[[NSTextField alloc] initWithFrame:NSMakeRect((width+12)/2,55,(width-36)/2,26)];self.addUser.placeholderString=@"Username";
+ self.addSecret=[[NSSecureTextField alloc] initWithFrame:NSMakeRect(12,14,width-106,26)];self.addSecret.placeholderString=@"Password";
+ self.addSecret.target=self;self.addSecret.action=@selector(saveAddedPassword:);
+ NSButton* save=[SlateQuickButton quickWithTitle:@"Save" action:nil];save.target=self;save.action=@selector(saveAddedPassword:);save.frame=NSMakeRect(width-82,12,70,30);
+ for(NSView* field in @[self.addSite,self.addUser,self.addSecret,save]) [form addSubview:field];
+ self.scroll.frame=NSMakeRect(20,90,width,self.contentView.bounds.size.height-255);
+ [self makeFirstResponder:self.addSite];
+}
+- (void)saveAddedPassword:(id)sender {
+ if(!self.store || !self.addForm) return;
+ NSString* input=[self.addSite.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+ NSURLComponents* url=[NSURLComponents componentsWithString:[input containsString:@"://"]?input:[@"https://" stringByAppendingString:input]];
+ if(!url.host.length || ![@[@"https",@"http"] containsObject:url.scheme.lowercaseString] || url.user || url.password || !self.addSecret.stringValue.length) {
+  self.statusLabel.stringValue=@"Enter a valid website and a password.";return;
+ }
+ url.path=@"";url.query=nil;url.fragment=nil;
+ slate::Credential credential;credential.origin=url.string.UTF8String;
+ credential.username=[self.addUser.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].UTF8String;
+ credential.password=self.addSecret.stringValue.UTF8String;
+ self.store->save(std::move(credential));self.addSecret.stringValue=@"";
+ if(self.onSaveBlock)self.onSaveBlock();[self addPassword:nil];[self reloadItems];
+}
+- (void)removeShownPasswords:(id)sender {
+ if(!self.store) return;
+ NSMutableArray<NSString*>* identifiers=[NSMutableArray array];
+ for(const auto& item:self.store->search(self.searchField.stringValue.UTF8String ?: "")) [identifiers addObject:@(item.id.c_str())];
+ if(!identifiers.count)return;
+ NSAlert* alert=[NSAlert new];alert.messageText=[NSString stringWithFormat:@"Remove %lu saved password%@?",(unsigned long)identifiers.count,identifiers.count==1?@"":@"s"];
+ alert.informativeText=@"Only the accounts in the current search will be removed from Slate.";
+ [alert addButtonWithTitle:@"Cancel"];[alert addButtonWithTitle:@"Remove"];
  [alert beginSheetModalForWindow:self completionHandler:^(NSModalResponse response){
-  if(response!=NSAlertFirstButtonReturn || !self.store) return;
-  NSString* input=[site.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-  NSURLComponents* url=[NSURLComponents componentsWithString:[input containsString:@"://"]?input:[@"https://" stringByAppendingString:input]];
-  if(!url.host.length || ![@[@"https",@"http"] containsObject:url.scheme.lowercaseString] || url.user || url.password || !password.stringValue.length) {
-   self.statusLabel.stringValue=@"Not saved: enter a valid website and a password."; password.stringValue=@""; return;
-  }
-  url.path=@""; url.query=nil; url.fragment=nil;
-  slate::Credential credential; credential.origin=url.string.UTF8String;
-  credential.username=[user.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].UTF8String;
-  credential.password=password.stringValue.UTF8String;
-  self.store->save(std::move(credential)); password.stringValue=@"";
-  if(self.onSaveBlock) self.onSaveBlock(); [self reloadItems];
+  if(response!=NSAlertSecondButtonReturn || !self.store)return;
+  [self cancelAuthentication];
+  for(NSString* identifier in identifiers) self.store->remove(identifier.UTF8String);
+  if(self.onSaveBlock)self.onSaveBlock();[self reloadItems];
  }];
 }
 - (void)importCSV:(id)sender {
@@ -267,4 +328,5 @@
   });
  }];
 }
+- (void)bringIn:(id)sender { if(self.onImportBlock) self.onImportBlock(); }
 @end

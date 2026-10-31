@@ -12,6 +12,11 @@
 static NSMutableDictionary* vault;
 static OSStatus failure=errSecSuccess;
 extern "C" OSStatus SecItemCopyMatching(CFDictionaryRef query, CFTypeRef* result) {
+ NSDictionary* attributes=(__bridge NSDictionary*)query;
+ if([attributes[(__bridge id)kSecReturnAttributes] boolValue]) {
+  assert(!attributes[(__bridge id)kSecReturnData]);
+  assert([attributes[(__bridge id)kSecUseAuthenticationUI] isEqual:(__bridge id)kSecUseAuthenticationUIFail]);
+ }
  if(failure) return failure;
  NSString* key=((__bridge NSDictionary*)query)[(__bridge id)kSecAttrAccount];
  NSData* data=vault[key]; if(!data) return errSecItemNotFound;
@@ -36,14 +41,17 @@ int main() { @autoreleasepool {
  NSString* path=[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
  const std::string filename=path.UTF8String;
  assert(slate::load_credentials(filename)->items().empty());
+ assert(!slate::credentials_may_exist(filename));
  slate::CredentialStore store; store.save({.origin="https://example.test",.username="test",.password="synthetic-test-value"});
  slate::save_credentials(filename,store);
+ assert(slate::credentials_may_exist(filename));
  auto loaded=slate::load_credentials(filename);
  assert(loaded->items().size()==1 && loaded->items()[0].password=="synthetic-test-value");
  // Slate note: Saving to the mock Keychain must not also create a password file on disk.
  assert(![[NSFileManager defaultManager] fileExistsAtPath:path]);
  assert(slate::load_credentials(filename+"-other-profile")->items().empty());
  NSData* previous=[vault[path] copy]; failure=errSecAuthFailed;
+ assert(slate::credentials_may_exist(filename)); // Locked is unknown, never empty.
  bool rejected=false; try { slate::load_credentials(filename); } catch(const std::exception&) { rejected=true; } assert(rejected);
  rejected=false; try { slate::save_credentials(filename,slate::CredentialStore{}); } catch(const std::exception&) { rejected=true; } assert(rejected);
  assert([previous isEqual:vault[path]]); failure=errSecSuccess;

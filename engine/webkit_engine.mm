@@ -10,6 +10,7 @@
 #import "platform/macos/form_relay.h"
 #import "platform/macos/pdf_overlay.h"
 #import "platform/macos/favicon_loader.h"
+#import "SlatePasswords-Swift.h"
 #import <WebKit/WebKit.h>
 #import <PDFKit/PDFKit.h>
 #import <objc/runtime.h>
@@ -160,6 +161,7 @@ static BOOL IsStreamingOrDrmHost(NSString* host) {
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+  [SlatePasswordServices.shared navigating:webView];
   [self.faviconRequest cancel];
   self.faviconRequest = nil;
   ++self.navigationGeneration;
@@ -182,6 +184,7 @@ static BOOL IsStreamingOrDrmHost(NSString* host) {
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
+  [SlatePasswordServices.shared navigated:webView];
   fprintf(stderr, "SLATE_NAV_COMMIT url=%s\n", webView.URL.absoluteString.UTF8String ?: "nil");
   slate::WebKitShields::Shared().InjectStreamingProtection(webView);
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -632,6 +635,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
       NSString* username = [dict[@"username"] isKindOfClass:NSString.class] ? dict[@"username"] : @"";
       NSString* password = [dict[@"password"] isKindOfClass:NSString.class] ? dict[@"password"] : @"";
       if (origin.length && password.length) {
+        if ([SlatePasswordServices.shared consumedAppleFill:self.webView host:caller.host user:username password:password]) return;
         self.events->credential_save_requested(origin.UTF8String, username.UTF8String, password.UTF8String);
       }
     }
@@ -654,6 +658,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
       NSString* user = [body[@"user"] isKindOfClass:[NSString class]] ? body[@"user"] : @"";
       NSString* pass = [body[@"password"] isKindOfClass:[NSString class]] ? body[@"password"] : @"";
       if (origin.length && pass.length) {
+        if ([SlatePasswordServices.shared consumedAppleFill:self.webView host:host user:user password:pass]) return;
         if (self.events && self.events->sign_in_submitted) {
           self.events->sign_in_submitted(origin.UTF8String, user.UTF8String, pass.UTF8String);
         }
@@ -1093,7 +1098,7 @@ class WebKitEngine final : public BrowserEngine {
 
     // Passkey suppression: when passkeys are not offered/entitled, hide PublicKeyCredential
     // so sites smoothly fall back to standard username/password forms.
-    if (!SlateFormRelay.passkeysOffered) {
+    if (!SlatePasswordServices.passkeysAvailable) {
       NSString* passkeysJs = [SlateFormRelay withoutPasskeysScript];
       if (@available(macOS 11.0, *)) {
         WKUserScript* passkeyScript = [[WKUserScript alloc] initWithSource:passkeysJs
@@ -1199,6 +1204,30 @@ class WebKitEngine final : public BrowserEngine {
     web_view_.navigationDelegate = delegate_;
     web_view_.UIDelegate = delegate_;
     delegate_.webView = web_view_;
+    __weak SlateWebNavigationDelegate* passwordDelegate=delegate_;
+    [SlatePasswordServices.shared configure:web_view_ privateTab:incognito_
+      accounts:^NSArray<NSDictionary<NSString*,NSString*>*>*(NSURL* origin) {
+        SlateWebNavigationDelegate* delegate=passwordDelegate;
+        NSMutableArray* rows=[NSMutableArray array];
+        if(delegate && !delegate.incognito && delegate.events && delegate.events->credential_accounts_query) {
+          auto accounts=delegate.events->credential_accounts_query();
+          if(!accounts) return nil;
+          for(const auto& account:*accounts) {
+            NSString* site=@(account.origin.c_str());
+            if(![site containsString:@"://"])site=[@"https://" stringByAppendingString:site];
+            [rows addObject:@{@"id":@(account.id.c_str()),@"user":@(account.username.c_str()),@"origin":site}];
+          }
+        }
+        return rows;
+      } unlock:^BOOL {
+        SlateWebNavigationDelegate* delegate=passwordDelegate;
+        return delegate && !delegate.incognito && delegate.events && delegate.events->credential_unlock_requested && delegate.events->credential_unlock_requested();
+      } select:^NSDictionary<NSString*,NSString*>*(NSString* identifier,NSURL* origin) {
+        SlateWebNavigationDelegate* delegate=passwordDelegate;
+        if(!delegate || delegate.incognito || !delegate.events || !delegate.events->credential_selected_query) return nil;
+        auto selected=delegate.events->credential_selected_query(identifier.UTF8String,origin.absoluteString.UTF8String);
+        return selected ? @{@"user":@(selected->first.c_str()),@"password":@(selected->second.c_str())} : nil;
+      }];
 
     // Anti-Flashbang: Configure WebKit backing canvas to prevent white flashes
     @try {
@@ -1345,7 +1374,7 @@ class WebKitEngine final : public BrowserEngine {
   }
 
   void fill_credentials(const std::string& username, const std::string& password) override {
-    if (!web_view_ || incognito_) return;
+    if (!web_view_ || incognito_ || !SlatePasswordServices.autofillEnabled) return;
     NSURL* url = web_view_.URL;
     if (!url) return;
     NSString* scheme = url.scheme.lowercaseString;
@@ -1356,14 +1385,20 @@ class WebKitEngine final : public BrowserEngine {
     }
     NSString* uStr = [NSString stringWithUTF8String:username.c_str()];
     NSString* pStr = [NSString stringWithUTF8String:password.c_str()];
-    NSString* js = [SlateFormRelay fillScriptWithUser:uStr password:pStr];
+    NSURLComponents* trusted=[NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    trusted.path=@"";trusted.query=nil;trusted.fragment=nil;
+    if(trusted.port.integerValue==443) trusted.port=nil;
+    NSData* data=[NSJSONSerialization dataWithJSONObject:@[trusted.string ?: @""] options:0 error:nil];
+    NSString* encoded=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString* js=[NSString stringWithFormat:@"(()=>{if(location.origin!==%@ [0])return;%@})();",encoded,
+      [SlateFormRelay fillScriptWithUser:uStr password:pStr]];
 
     if (@available(macOS 11.0, *)) {
       [web_view_ evaluateJavaScript:js inFrame:nil inContentWorld:[WKContentWorld defaultClientWorld] completionHandler:nil];
     } else {
       [web_view_ evaluateJavaScript:js completionHandler:nil];
     }
-    fprintf(stderr, "SLATE_AUTOFILL_FILLED origin=%s user=%s\n", url.absoluteString.UTF8String ?: "", username.c_str());
+    fprintf(stderr, "SLATE_AUTOFILL_FILLED\n");
   }
 
   // Slate note: This adapter currently reports only a limited observation; it does not inspect all
@@ -1394,6 +1429,7 @@ class WebKitEngine final : public BrowserEngine {
   void set_zoom(double level) override {
     if (@available(macOS 11.0, *)) {
       if (web_view_) {
+        [SlatePasswordServices.shared close:web_view_];
         // Chromium zoom level: level = log(scale) / log(1.2).
         // For WebKit pageZoom, scale is linear (1.0 = 100%).
         double scale = std::pow(1.2, level);

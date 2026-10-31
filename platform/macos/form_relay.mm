@@ -2,6 +2,7 @@
 // signals, and optional passkey suppression.
 
 #import "form_relay.h"
+#import "SlatePasswords-Swift.h"
 
 @implementation SlateFormRelay
 
@@ -10,7 +11,7 @@
 }
 
 + (BOOL)passkeysOffered {
-  return [NSUserDefaults.standardUserDefaults boolForKey:@"passkeys"];
+  return SlatePasswordServices.passkeysEnabled;
 }
 
 + (void)setPasskeysOffered:(BOOL)offered {

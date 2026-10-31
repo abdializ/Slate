@@ -2,8 +2,8 @@
 # macOS target.
 
 cmake_minimum_required(VERSION 3.21)
-project(Slate VERSION 0.2.0 LANGUAGES CXX)
-set(SLATE_BUILD_VERSION "20261031.2" CACHE STRING "Monotonically increasing Slate build version")
+project(Slate VERSION 0.2.1 LANGUAGES CXX)
+set(SLATE_BUILD_VERSION "20261031.3" CACHE STRING "Monotonically increasing Slate build version")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Slate note: Build reusable browser logic separately from the native shell.
@@ -81,6 +81,12 @@ if(APPLE)
  target_include_directories(browser_importer_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
  target_link_libraries(browser_importer_tests PRIVATE slate_core "-framework Foundation" "-lsqlite3")
  add_test(NAME browser_importer COMMAND browser_importer_tests)
+ add_executable(password_panel_tests tests/password_panel_tests.mm platform/macos/passwords_panel.mm
+   platform/macos/plate_components.mm platform/macos/browser_importer.mm)
+ target_compile_options(password_panel_tests PRIVATE -fobjc-arc -UNDEBUG)
+ target_include_directories(password_panel_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+ target_link_libraries(password_panel_tests PRIVATE slate_core "-framework AppKit" "-framework QuartzCore" "-framework LocalAuthentication" "-lsqlite3")
+ add_test(NAME native_password_panel COMMAND password_panel_tests "${CMAKE_BINARY_DIR}/passwords-preview.png")
  enable_language(OBJCXX)
  add_executable(favicon_loader_tests tests/favicon_loader_tests.mm platform/macos/favicon_loader.mm)
  target_compile_options(favicon_loader_tests PRIVATE -fobjc-arc -UNDEBUG)

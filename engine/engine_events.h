@@ -9,8 +9,11 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <optional>
 
 namespace slate {
+
+struct CredentialAccount { std::string id, username, origin; };
 
 // Slate note: Navigation, media, credential, and close events flow back through this callback bundle.
 struct EngineEvents {
@@ -35,6 +38,9 @@ struct EngineEvents {
   std::function<void(std::function<void(bool)>)> confirm_leave;
   std::function<void()> closed;
   std::function<std::vector<std::pair<std::string, std::string>>(std::string)> credential_autofill_query;
+  std::function<std::optional<std::vector<CredentialAccount>>()> credential_accounts_query;
+  std::function<bool()> credential_unlock_requested;
+  std::function<std::optional<std::pair<std::string,std::string>>(std::string,std::string)> credential_selected_query;
   std::function<void(std::string, std::string, std::string)> credential_save_requested;
   std::function<void()> sign_in_found;
   std::function<void(std::string origin, std::string user, std::string pass)> sign_in_submitted;

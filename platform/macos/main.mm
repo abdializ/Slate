@@ -28,6 +28,7 @@
 #include "platform/macos/credential_persistence.h"
 #include "platform/macos/browser_importer.h"
 #import "platform/macos/passwords_panel.h"
+#import "SlatePasswords-Swift.h"
 #import "platform/macos/import_dialog.h"
 #import "platform/macos/specs_panel.h"
 #import "platform/macos/downloads_panel.h"
@@ -7710,7 +7711,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)updateAutofillButtonState {
  if(!self.autofillButton) return;
- if(!credentials) {
+ if(!credentials || !SlatePasswordServices.autofillEnabled) {
   self.autofillButton.hidden = YES;
   self.autofillButtonWidth.constant = 0;
   return;
@@ -8005,7 +8006,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (IBAction)triggerAutofillAction:(id)sender {
  auto it = runtimes.find(model.selected());
- if(it == runtimes.end() || !it->second.engine || !credentials) return;
+ if(it == runtimes.end() || !it->second.engine || !credentials || !SlatePasswordServices.autofillEnabled) return;
  const auto* tab = model.find(model.selected());
  if(!tab || tab->incognito) return;
  NSURL* url = [NSURL URLWithString:Text(tab->url)];
@@ -8022,7 +8023,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   for(const auto& c : matches) {
    NSString* title = [NSString stringWithFormat:@"%s (%@)", c.username.c_str(), origin];
    NSMenuItem* item = [menu addItemWithTitle:title action:@selector(selectAutofillCredential:) keyEquivalent:@""];
-   item.representedObject = @{@"user": @(c.username.c_str()), @"pass": @(c.password.c_str())};
+   item.representedObject = @{@"id": @(c.id.c_str()), @"origin":origin, @"tab":@(model.selected())};
    item.target = self;
   }
   NSRect frame = self.autofillButton.bounds;
@@ -8031,12 +8032,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)selectAutofillCredential:(NSMenuItem*)sender {
  NSDictionary* dict = (NSDictionary*)sender.representedObject;
- if(!dict) return;
- auto it = runtimes.find(model.selected());
- if(it != runtimes.end() && it->second.engine) {
-  NSString* u = dict[@"user"] ?: @"";
-  NSString* p = dict[@"pass"] ?: @"";
-  it->second.engine->fill_credentials(u.UTF8String, p.UTF8String);
+ if(!dict || !credentials || !SlatePasswordServices.autofillEnabled || [dict[@"tab"] unsignedLongLongValue]!=model.selected()) return;
+ const auto* tab=model.find(model.selected());
+ if(!tab || tab->incognito)return;
+ NSURLComponents* current=[NSURLComponents componentsWithString:Text(tab->url)];
+ NSURLComponents* expected=[NSURLComponents componentsWithString:dict[@"origin"]];
+ if(![current.scheme.lowercaseString isEqualToString:expected.scheme.lowercaseString] ||
+    ![current.host.lowercaseString isEqualToString:expected.host.lowercaseString] ||
+    (current.port ? current.port.integerValue : 443)!=(expected.port ? expected.port.integerValue : 443))return;
+ auto it=runtimes.find(model.selected());
+ if(it==runtimes.end() || !it->second.engine)return;
+ for(const auto& c:credentials->find_for_origin([dict[@"origin"] UTF8String])) {
+  if(c.id==[dict[@"id"] UTF8String]) { it->second.engine->fill_credentials(c.username,c.password);break; }
  }
 }
 - (IBAction)showSiteCard:(id)sender {
@@ -10361,6 +10368,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    }
    return out;
   };
+  events.credential_accounts_query=[]() -> std::optional<std::vector<slate::CredentialAccount>> {
+   if(!credentials && slate::credentials_may_exist(PasswordsPath().UTF8String)) return std::nullopt;
+   std::vector<slate::CredentialAccount> accounts;
+   if(credentials) for(const auto& c:credentials->items()) accounts.push_back({c.id,c.username,c.origin});
+   return accounts;
+  };
+  events.credential_unlock_requested=[weakSelf]() -> bool { return [weakSelf loadCredentialsWhenRequested]; };
+  events.credential_selected_query=[](std::string id,std::string origin) -> std::optional<std::pair<std::string,std::string>> {
+   if(!credentials || !SlatePasswordServices.autofillEnabled) return std::nullopt;
+   for(const auto& c:credentials->find_for_origin(origin)) if(c.id==id) return std::make_pair(c.username,c.password);
+   return std::nullopt;
+  };
   events.credential_save_requested=[weakSelf](std::string origin, std::string username, std::string password) {
    dispatch_async(dispatch_get_main_queue(), ^{
     [weakSelf promptSaveCredentialOrigin:[NSString stringWithUTF8String:origin.c_str()]
@@ -10529,6 +10548,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (IBAction)showPasswordsPanel:(id)sender {
  if(![self loadCredentialsWhenRequested]) return;
  __weak SlateDelegate* weakSelf=self;
+ [SlatePasswordsPanel sharedPanel].onImportBlock=^{
+  [[SlatePasswordsPanel sharedPanel] orderOut:nil];[weakSelf showImportBrowserData:nil];
+ };
  [[SlatePasswordsPanel sharedPanel] showForCredentialStore:credentials.get() onSave:^{
   [weakSelf saveCredentials];
  }];

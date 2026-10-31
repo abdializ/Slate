@@ -4,6 +4,7 @@
 
 #import "platform/macos/settings_panel.h"
 #import "platform/macos/passwords_panel.h"
+#import "SlatePasswords-Swift.h"
 #import "platform/macos/import_dialog.h"
 #import "platform/macos/download_manager.h"
 #import "platform/macos/specs_panel.h"
@@ -733,6 +734,10 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   impBtn.frame = NSMakeRect(350, top - 12, 125, 28);
   impBtn.autoresizingMask = NSViewMinYMargin;
   [_containerView addSubview:impBtn];
+  NSView* services=[SlatePasswordServices.shared settingsView];
+  services.frame=NSMakeRect(20,48,450,218);
+  services.autoresizingMask=NSViewMinYMargin;
+  [_containerView addSubview:services];
 }
 
 - (void)openPasswordsClicked:(id)sender {
