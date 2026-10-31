@@ -50,6 +50,10 @@ if(SLATE_ENABLE_VERIFY)
   target_compile_definitions(Slate PRIVATE SLATE_ENABLE_VERIFY=1)
 endif()
 include("${PROJECT_SOURCE_DIR}/cmake/Passwords.cmake")
+include("${PROJECT_SOURCE_DIR}/cmake/Search.cmake")
+add_dependencies(Slate SlateSearchBuild)
+target_include_directories(Slate PRIVATE "${SLATE_SEARCH_BUILD}")
+target_link_libraries(Slate PRIVATE SlateSearchServicesLib)
 add_dependencies(Slate SlatePasswordsBuild)
 target_include_directories(Slate PRIVATE "${SLATE_PASSWORDS_BUILD}")
 target_link_libraries(Slate PRIVATE SlatePasswordServicesLib)
@@ -99,6 +103,8 @@ add_custom_command(TARGET Slate POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:Slate>/Contents/Frameworks"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SLATE_PASSWORDS_LIBRARY}"
     "$<TARGET_BUNDLE_DIR:Slate>/Contents/Frameworks/libSlatePasswords.dylib"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SLATE_SEARCH_LIBRARY}"
+    "$<TARGET_BUNDLE_DIR:Slate>/Contents/Frameworks/libSlateSearch.dylib"
   COMMAND /usr/bin/ditto --norsrc --noextattr
     "${SLATE_SPARKLE_ROOT}/Sparkle.framework"
     "$<TARGET_BUNDLE_DIR:Slate>/Contents/Frameworks/Sparkle.framework"

@@ -59,6 +59,9 @@ fi
 if [[ -f "$STAGE/Slate.app/Contents/Frameworks/libSlatePasswords.dylib" ]]; then
   sign dev.slate.passwords "$STAGE/Slate.app/Contents/Frameworks/libSlatePasswords.dylib"
 fi
+if [[ -f "$STAGE/Slate.app/Contents/Frameworks/libSlateSearch.dylib" ]]; then
+  sign dev.slate.search "$STAGE/Slate.app/Contents/Frameworks/libSlateSearch.dylib"
+fi
 for helper in "$STAGE/Slate.app/Contents/Frameworks"/Slate\ Helper*.app; do
   if [[ -d "$helper" ]]; then
     name="$(basename "$helper" .app)"

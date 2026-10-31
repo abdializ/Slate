@@ -91,6 +91,7 @@ static BOOL IsStreamingOrDrmHost(NSString* host) {
 @property (nonatomic, strong) NSURL* imageMenuURL;
 @property (nonatomic, strong) SlateFaviconRequest* faviconRequest;
 @property (nonatomic) NSUInteger navigationGeneration;
+@property (nonatomic, copy) NSURL* typedFileURL;
 @end
 
 @implementation SlateWebNavigationDelegate
@@ -296,12 +297,14 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
   // Security: Disallow remote web content from navigating to local file:// resources
   if (targetUrl.isFileURL) {
-    if (!webView.URL.isFileURL) {
+    if (!webView.URL.isFileURL && !(navigationAction.targetFrame.isMainFrame && [targetUrl isEqual:self.typedFileURL])) {
       fprintf(stderr, "SLATE_BLOCKED_LOCAL_FILE_NAV url=%s\n", urlStr.UTF8String ?: "nil");
       decisionHandler(WKNavigationActionPolicyCancel);
       return;
     }
   }
+
+  if(navigationAction.targetFrame.isMainFrame) self.typedFileURL=nil;
 
   // Security: Disallow dangerous / malicious schemes
   if ([scheme isEqualToString:@"javascript"] ||
@@ -1312,7 +1315,8 @@ class WebKitEngine final : public BrowserEngine {
         }
       }
       if (nsUrl.isFileURL) {
-        NSURL* readAccess = [nsUrl URLByDeletingLastPathComponent];
+        delegate_.typedFileURL=nsUrl;
+        NSURL* readAccess = nsUrl;
         [web_view_ loadFileURL:nsUrl allowingReadAccessToURL:readAccess];
       } else {
         [web_view_ loadRequest:[NSURLRequest requestWithURL:nsUrl]];

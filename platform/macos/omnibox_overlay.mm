@@ -4,29 +4,12 @@
 #import "omnibox_overlay.h"
 #import <QuartzCore/QuartzCore.h>
 
-// Common high-frequency domains for instant prefix completion
-static NSArray<NSString*>* KnownDomains() {
-  static NSArray<NSString*>* domains = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    domains = @[
-      @"google.com", @"youtube.com", @"github.com", @"twitter.com",
-      @"x.com", @"reddit.com", @"wikipedia.org", @"amazon.com",
-      @"netflix.com", @"twitch.tv", @"kick.com", @"apple.com",
-      @"instagram.com", @"linkedin.com", @"news.ycombinator.com",
-      @"stackoverflow.com", @"nytimes.com", @"sublimehq.com"
-    ];
-  });
-  return domains;
-}
-
 // MARK: - SlateOmniboxCard
 
 @interface SlateOmniboxCard () {
-  BOOL _deleting;
-  NSString* _synced;
   BOOL _refused;
   NSVisualEffectView* _materialView;
+  NSButton* _siteChip;
 }
 @end
 
@@ -37,9 +20,7 @@ static NSArray<NSString*>* KnownDomains() {
   if (!self) return nil;
 
   _delegate = delegate;
-  _deleting = NO;
   _refused = NO;
-  _synced = @"";
   _customDarkSet = NO;
   _isDarkTheme = NO;
 
@@ -71,10 +52,35 @@ static NSArray<NSString*>* KnownDomains() {
   _field.cell.wraps = NO;
   [self addSubview:_field];
 
+  _siteChip = [NSButton buttonWithTitle:@"" target:self action:@selector(removeSite:)];
+  _siteChip.bordered = NO;
+  _siteChip.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+  _siteChip.hidden = YES;
+  _siteChip.toolTip = @"Remove site search";
+  [self addSubview:_siteChip];
   [self applyTheme];
   return self;
 }
 
+- (void)setSearchSite:(NSDictionary<NSString*,NSString*>*)site {
+  _searchSite = [site copy];
+  _siteChip.title = site ? [NSString stringWithFormat:@"%@ ×", site[@"name"]] : @"";
+  _siteChip.hidden = site == nil;
+  _field.placeholderString = site ? [@"Search " stringByAppendingString:site[@"host"]] : @"Search or enter address";
+  self.needsLayout = YES;
+}
+- (void)activateSite:(NSDictionary<NSString*,NSString*>*)site {
+  self.searchSite = site;
+  self.suggestedSite = nil;
+  self.field.stringValue = @"";
+  [self.delegate hideSuggestions];
+  [self.window makeFirstResponder:self.field];
+}
+- (void)removeSite:(id)sender {
+  self.searchSite = nil;
+  [self.delegate hideSuggestions];
+  [self.window makeFirstResponder:self.field];
+}
 - (void)setIsDarkTheme:(BOOL)isDarkTheme {
   _isDarkTheme = isDarkTheme;
   _customDarkSet = YES;
@@ -113,7 +119,7 @@ static NSArray<NSString*>* KnownDomains() {
   self.layer.shadowOpacity = 0.06;
 
   _field.textColor = ink;
-  NSString* p = _placeholder.length ? _placeholder : @"Search or enter address";
+  NSString* p = self.searchSite ? [@"Search " stringByAppendingString:self.searchSite[@"host"]] : (_placeholder.length ? _placeholder : @"Search or enter address");
   NSColor* placeholderColor = isDark ? [NSColor colorWithWhite:0.75 alpha:0.55] : [NSColor colorWithWhite:0.38 alpha:0.65];
   _field.placeholderAttributedString = [[NSAttributedString alloc] initWithString:p
     attributes:@{
@@ -134,7 +140,9 @@ static NSArray<NSString*>* KnownDomains() {
     _materialView.layer.cornerCurve = kCACornerCurveContinuous;
   }
   _materialView.layer.cornerRadius = radius;
-  _field.frame = NSMakeRect(24, round((h - 24.0) / 2.0), MAX(40, w - 48), 24);
+  CGFloat chipWidth = _searchSite ? MIN(160, [_siteChip.title sizeWithAttributes:@{NSFontAttributeName:_siteChip.font}].width + 18) : 0;
+  _siteChip.frame = NSMakeRect(20, round((h-26)/2), chipWidth, 26);
+  _field.frame = NSMakeRect(24 + chipWidth, round((h - 24.0) / 2.0), MAX(40, w - 48 - chipWidth), 24);
 
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
@@ -147,6 +155,7 @@ static NSArray<NSString*>* KnownDomains() {
 - (NSView*)hitTest:(NSPoint)point {
   NSPoint local = [self convertPoint:point fromView:self.superview];
   if (!NSPointInRect(local, self.bounds) || self.hidden) return nil;
+  if (!_siteChip.hidden && NSPointInRect(local, _siteChip.frame)) return _siteChip;
   return self.field;
 }
 
@@ -169,44 +178,6 @@ static NSArray<NSString*>* KnownDomains() {
   [self.layer addAnimation:anim forKey:@"shake"];
 }
 
-// MARK: - Autocompletion
-
-// Slate note: Offer a suffix for a known domain matching the typed prefix; this is completion, not a
-// network lookup.
-- (NSString*)findEndingFor:(NSString*)typed {
-  if (typed.length < 2) return nil;
-  NSString* lower = typed.lowercaseString;
-
-  for (NSString* domain in KnownDomains()) {
-    if ([domain hasPrefix:lower] && domain.length > lower.length) {
-      return [domain substringFromIndex:lower.length];
-    }
-    if ([domain hasPrefix:@"www."] && [domain substringFromIndex:4].length > lower.length) {
-      NSString* stripped = [domain substringFromIndex:4];
-      if ([stripped hasPrefix:lower]) {
-        return [stripped substringFromIndex:lower.length];
-      }
-    }
-  }
-  return nil;
-}
-
-- (void)selectFrom:(NSInteger)start inField:(NSTextField*)field {
-  NSTextView* editor = (NSTextView*)[field.window fieldEditor:NO forObject:field];
-  if (!editor || ![editor isKindOfClass:[NSTextView class]]) return;
-
-  NSColor* ink = NSColor.labelColor;
-  editor.selectedTextAttributes = @{
-    NSBackgroundColorAttributeName: [ink colorWithAlphaComponent:0.12],
-    NSForegroundColorAttributeName: ink
-  };
-
-  NSInteger length = field.stringValue.length;
-  if (start <= length) {
-    editor.selectedRange = NSMakeRange(start, length - start);
-  }
-}
-
 // MARK: - NSTextFieldDelegate
 
 - (void)controlTextDidChange:(NSNotification*)note {
@@ -217,16 +188,6 @@ static NSArray<NSString*>* KnownDomains() {
   }
 
   NSString* text = _field.stringValue;
-  NSString* ending = [self findEndingFor:text];
-
-  if (!_deleting && ending.length > 0) {
-    _field.stringValue = [text stringByAppendingString:ending];
-    _synced = _field.stringValue;
-    [self selectFrom:text.length inField:_field];
-  } else {
-    _deleting = NO;
-    _synced = text;
-  }
 
   if (self.delegate) {
     if ([self.delegate respondsToSelector:@selector(showSuggestionsForCard:query:)]) {
@@ -238,6 +199,12 @@ static NSArray<NSString*>* KnownDomains() {
 }
 
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
+  if (commandSelector == @selector(insertTab:) && self.suggestedSite && !self.searchSite) {
+    [self activateSite:self.suggestedSite]; return YES;
+  }
+  if (commandSelector == @selector(deleteBackward:) && self.searchSite && self.field.stringValue.length == 0) {
+    [self removeSite:nil]; return YES;
+  }
   if (commandSelector == @selector(insertNewline:)) {
     if (self.delegate) {
       if ([self.delegate respondsToSelector:@selector(submitOmniboxCard:)]) {
@@ -259,10 +226,10 @@ static NSArray<NSString*>* KnownDomains() {
     return YES;
   }
   if (commandSelector == @selector(deleteBackward:) || commandSelector == @selector(deleteForward:)) {
-    _deleting = YES;
     return NO;
   }
   if (commandSelector == @selector(cancelOperation:)) {
+    if (self.searchSite) { [self removeSite:nil]; return YES; }
     if (self.delegate) {
       [self.delegate hideSuggestions];
     }
@@ -339,6 +306,7 @@ static NSArray<NSString*>* KnownDomains() {
 }
 
 - (void)showOver:(NSView*)container initialText:(NSString*)text {
+  self.card.searchSite = nil; self.card.suggestedSite = nil;
   if (self.superview != container) {
     self.frame = container.bounds;
     [container addSubview:self positioned:NSWindowAbove relativeTo:nil];

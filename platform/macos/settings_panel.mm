@@ -5,6 +5,8 @@
 #import "platform/macos/settings_panel.h"
 #import "platform/macos/passwords_panel.h"
 #import "SlatePasswords-Swift.h"
+#import "SlateSearch-Swift.h"
+#import "spaces_manager.h"
 #import "platform/macos/import_dialog.h"
 #import "platform/macos/download_manager.h"
 #import "platform/macos/specs_panel.h"
@@ -13,6 +15,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 @interface SlateDelegate : NSObject
+@property(strong) SlateSpacesManager* spacesManager;
 @property BOOL verticalTabs;
 @property BOOL tabsCollapsed;
 @property BOOL showBookmarksBar;
@@ -185,6 +188,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   NSArray<NSDictionary*>* items = @[
     @{@"id":@"appearance", @"title":@"Appearance", @"icon":@"paintbrush"},
+    @{@"id":@"search", @"title":@"Search", @"icon":@"magnifyingglass"},
     @{@"id":@"general",    @"title":@"General",    @"icon":@"macwindow"},
     @{@"id":@"tabs",       @"title":@"Tabs",       @"icon":@"rectangle.split.3x1"},
     @{@"id":@"downloads",  @"title":@"Downloads",  @"icon":@"arrow.down.circle"},
@@ -307,6 +311,11 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   if ([_currentPage isEqualToString:@"appearance"]) {
     [self renderAppearancePage];
+  } else if ([_currentPage isEqualToString:@"search"]) {
+    NSView* search=[SlateSearchServices settingsViewWithProfile:self.slateDelegate.spacesManager.currentSpaceId ?: @"default"];
+    search.frame=_containerView.bounds;
+    search.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+    [_containerView addSubview:search];
   } else if ([_currentPage isEqualToString:@"general"]) {
     [self renderGeneralPage];
   } else if ([_currentPage isEqualToString:@"tabs"]) {

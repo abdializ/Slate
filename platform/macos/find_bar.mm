@@ -1,575 +1,197 @@
-// File purpose: Implements find-in-page UI with HTML and PDF search, highlights, and match
-// navigation.
-
+// Find controls use the supplied PageFind engine in a separate WebKit content
+// world. HTML ranges are highlighted without inserting or replacing page nodes.
 #import "find_bar.h"
 #import "pdf_overlay.h"
+#import "SlateSearch-Swift.h"
 #import <PDFKit/PDFKit.h>
 #import <QuartzCore/QuartzCore.h>
 
-@interface SlateFindSearchField : NSTextField
-@property (nonatomic, weak) SlateFindBar* findBar;
-@end
-
-@implementation SlateFindSearchField
-
-- (BOOL)performKeyEquivalent:(NSEvent*)event {
-  if (event.keyCode == 53) { // Escape
-    [self.findBar hideAnimated];
-    return YES;
-  }
-  if (event.keyCode == 36 || event.keyCode == 76) { // Return / Enter
-    if (event.modifierFlags & NSEventModifierFlagShift) {
-      [self.findBar findPrevious];
-    } else {
-      [self.findBar findNext];
-    }
-    return YES;
-  }
-  return [super performKeyEquivalent:event];
-}
-
-- (BOOL)textView:(NSTextView*)textView doCommandBySelector:(SEL)commandSelector {
-  if (commandSelector == @selector(cancelOperation:)) {
-    [self.findBar hideAnimated];
-    return YES;
-  }
-  if (commandSelector == @selector(insertNewline:)) {
-    [self.findBar findNext];
-    return YES;
-  }
-  if (commandSelector == @selector(insertBacktab:) || commandSelector == @selector(insertNewlineIgnoringFieldEditor:)) {
-    [self.findBar findPrevious];
-    return YES;
-  }
-  return NO;
-}
-
-@end
-
 @interface SlateFindBar ()
-@property (nonatomic, strong) NSLayoutConstraint* trailingConstraint;
-@property (nonatomic, strong) NSLayoutConstraint* topConstraint;
-@property (nonatomic, strong) NSArray<PDFSelection*>* pdfSelections;
+@property(strong) SlatePageFinder* finder;
+@property(strong) NSArray<PDFSelection*>* pdfSelections;
+@property(strong) NSPopUpButton* options;
+@property BOOL matchCase;
+@property BOOL wholeWords;
+@property BOOL wholeWordsAvailable;
+@property NSUInteger request;
 @end
 
 @implementation SlateFindBar
-
 - (instancetype)initWithOwner:(SlateDelegate*)owner {
-  self = [super initWithFrame:NSMakeRect(0, 0, 350, 38)];
-  if (self) {
-    _owner = owner;
-    _currentMatchIndex = 0;
-    _totalMatches = 0;
-    _lastQuery = @"";
-    _isVisible = NO;
-
-    self.material = NSVisualEffectMaterialPopover;
-    self.blendingMode = NSVisualEffectBlendingModeWithinWindow;
-    self.state = NSVisualEffectStateActive;
-    self.wantsLayer = YES;
-    self.layer.cornerCurve = kCACornerCurveContinuous;
-    self.layer.cornerRadius = 10.0;
-    self.layer.masksToBounds = NO;
-    self.layer.borderWidth = 0.5;
-    self.layer.borderColor = [NSColor.separatorColor colorWithAlphaComponent:0.4].CGColor;
-    
-    // Shadow
-    self.shadow = [[NSShadow alloc] init];
-    self.layer.shadowColor = [NSColor.blackColor colorWithAlphaComponent:0.22].CGColor;
-    self.layer.shadowOffset = CGSizeMake(0, -3);
-    self.layer.shadowRadius = 8.0;
-    self.layer.shadowOpacity = 1.0;
-
-    self.translatesAutoresizingMaskIntoConstraints = NO;
-
-    [self setupSubviews];
-  }
-  return self;
+ self=[super initWithFrame:NSMakeRect(0,0,360,38)];
+ if(!self) return nil;
+ _owner=owner; _lastQuery=@""; _finder=[SlatePageFinder new]; _wholeWordsAvailable=YES;
+ self.material=NSVisualEffectMaterialPopover;
+ self.blendingMode=NSVisualEffectBlendingModeWithinWindow;
+ self.state=NSVisualEffectStateFollowsWindowActiveState;
+ self.wantsLayer=YES; self.layer.cornerRadius=19;
+ self.layer.cornerCurve=kCACornerCurveContinuous;
+ self.layer.borderWidth=0.5; self.layer.borderColor=NSColor.separatorColor.CGColor;
+ self.translatesAutoresizingMaskIntoConstraints=NO;
+ _searchField=[[NSTextField alloc] initWithFrame:NSZeroRect];
+ _searchField.bordered=NO; _searchField.drawsBackground=NO;
+ _searchField.focusRingType=NSFocusRingTypeNone;
+ _searchField.font=[NSFont systemFontOfSize:13];
+ _searchField.placeholderString=@"Find on page";
+ _searchField.delegate=self;
+ _searchField.cell.usesSingleLineMode=YES;
+ [_searchField setAccessibilityLabel:@"Find on page"];
+ [self addSubview:_searchField];
+ _countLabel=[NSTextField labelWithString:@""];
+ _countLabel.font=[NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium];
+ _countLabel.alignment=NSTextAlignmentRight;
+ [_countLabel setAccessibilityLabel:@"Match count"];
+ [self addSubview:_countLabel];
+ _options=[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:YES];
+ _options.bordered=NO;
+ [_options addItemWithTitle:@""];
+ _options.itemArray.firstObject.image=[NSImage imageWithSystemSymbolName:@"slider.horizontal.3" accessibilityDescription:@"Find options"];
+ _options.imagePosition=NSImageOnly;
+ for(NSString* title in @[@"Match case",@"Whole words"]) {
+  NSMenuItem* item=[[NSMenuItem alloc] initWithTitle:title action:@selector(toggleOption:) keyEquivalent:@""];
+  item.target=self; [_options.menu addItem:item];
+ }
+ _options.toolTip=@"Find options";
+ [self addSubview:_options];
+ _prevButton=[self button:@"chevron.up" label:@"Previous match (Shift-Return)" action:@selector(previous:)];
+ _nextButton=[self button:@"chevron.down" label:@"Next match (Return)" action:@selector(next:)];
+ _closeButton=[self button:@"xmark" label:@"Close Find (Escape)" action:@selector(close:)];
+ [self updateCount:0 total:0 more:NO];
+ return self;
 }
-
-- (void)setupSubviews {
-  // 1. Search Icon
-  NSImageView* searchIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
-  searchIcon.translatesAutoresizingMaskIntoConstraints = NO;
-  searchIcon.imageScaling = NSImageScaleProportionallyDown;
-  if (@available(macOS 11.0, *)) {
-    NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightMedium];
-    searchIcon.image = [[NSImage imageWithSystemSymbolName:@"magnifyingglass" accessibilityDescription:@"Find"] imageWithSymbolConfiguration:cfg];
-  }
-  searchIcon.contentTintColor = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.75];
-  [self addSubview:searchIcon];
-
-  // 2. Search Text Field
-  SlateFindSearchField* field = [[SlateFindSearchField alloc] initWithFrame:NSZeroRect];
-  field.findBar = self;
-  field.translatesAutoresizingMaskIntoConstraints = NO;
-  field.bordered = NO;
-  field.drawsBackground = NO;
-  field.focusRingType = NSFocusRingTypeNone;
-  field.font = [NSFont systemFontOfSize:13 weight:NSFontWeightRegular];
-  field.placeholderString = @"Find on Page";
-  field.delegate = self;
-  _searchField = field;
-  [self addSubview:_searchField];
-
-  // 3. Match Count Label
-  _countLabel = [NSTextField labelWithString:@""];
-  _countLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  _countLabel.font = [NSFont monospacedDigitSystemFontOfSize:11.5 weight:NSFontWeightMedium];
-  _countLabel.textColor = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.85];
-  _countLabel.alignment = NSTextAlignmentRight;
-  _countLabel.maximumNumberOfLines = 1;
-  [self addSubview:_countLabel];
-
-  // 4. Separator
-  NSBox* sep = [[NSBox alloc] initWithFrame:NSZeroRect];
-  sep.boxType = NSBoxSeparator;
-  sep.translatesAutoresizingMaskIntoConstraints = NO;
-  [self addSubview:sep];
-
-  // 5. Previous Button (Up chevron)
-  _prevButton = [NSButton buttonWithTitle:@"" target:self action:@selector(prevButtonClicked:)];
-  _prevButton.translatesAutoresizingMaskIntoConstraints = NO;
-  _prevButton.bordered = NO;
-  _prevButton.bezelStyle = NSBezelStyleInline;
-  _prevButton.imagePosition = NSImageOnly;
-  _prevButton.toolTip = @"Previous Match (⇧Enter or ⇧⌘G)";
-  if (@available(macOS 11.0, *)) {
-    NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:10.5 weight:NSFontWeightSemibold];
-    _prevButton.image = [[NSImage imageWithSystemSymbolName:@"chevron.up" accessibilityDescription:@"Previous Match"] imageWithSymbolConfiguration:cfg];
-  }
-  _prevButton.contentTintColor = NSColor.secondaryLabelColor;
-  [self addSubview:_prevButton];
-
-  // 6. Next Button (Down chevron)
-  _nextButton = [NSButton buttonWithTitle:@"" target:self action:@selector(nextButtonClicked:)];
-  _nextButton.translatesAutoresizingMaskIntoConstraints = NO;
-  _nextButton.bordered = NO;
-  _nextButton.bezelStyle = NSBezelStyleInline;
-  _nextButton.imagePosition = NSImageOnly;
-  _nextButton.toolTip = @"Next Match (Enter or ⌘G)";
-  if (@available(macOS 11.0, *)) {
-    NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:10.5 weight:NSFontWeightSemibold];
-    _nextButton.image = [[NSImage imageWithSystemSymbolName:@"chevron.down" accessibilityDescription:@"Next Match"] imageWithSymbolConfiguration:cfg];
-  }
-  _nextButton.contentTintColor = NSColor.secondaryLabelColor;
-  [self addSubview:_nextButton];
-
-  // 7. Close Button
-  _closeButton = [NSButton buttonWithTitle:@"" target:self action:@selector(closeButtonClicked:)];
-  _closeButton.translatesAutoresizingMaskIntoConstraints = NO;
-  _closeButton.bordered = NO;
-  _closeButton.bezelStyle = NSBezelStyleInline;
-  _closeButton.imagePosition = NSImageOnly;
-  _closeButton.toolTip = @"Done (Esc)";
-  if (@available(macOS 11.0, *)) {
-    NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:9.5 weight:NSFontWeightBold];
-    _closeButton.image = [[NSImage imageWithSystemSymbolName:@"xmark" accessibilityDescription:@"Done"] imageWithSymbolConfiguration:cfg];
-  }
-  _closeButton.contentTintColor = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.8];
-  [self addSubview:_closeButton];
-
-  // Auto Layout Constraints
+- (NSButton*)button:(NSString*)symbol label:(NSString*)label action:(SEL)action {
+ NSButton* button=[NSButton buttonWithTitle:@"" target:self action:action];
+ button.bordered=NO;
+ button.image=[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:label];
+ button.toolTip=label;
+ [button setAccessibilityLabel:label];
+ [self addSubview:button]; return button;
+}
+- (void)layout {
+ [super layout];
+ CGFloat w=NSWidth(self.bounds), right=w-10;
+ _closeButton.frame=NSMakeRect(right-20,9,20,20); right-=26;
+ BOOL narrow=w<290;
+ _prevButton.hidden=narrow; _nextButton.hidden=narrow;
+ if(!narrow) {
+  _nextButton.frame=NSMakeRect(right-20,9,20,20); right-=22;
+  _prevButton.frame=NSMakeRect(right-20,9,20,20); right-=24;
+ }
+ _options.frame=NSMakeRect(right-24,7,24,24); right-=30;
+ _countLabel.frame=NSMakeRect(right-82,11,82,17); right-=90;
+ _searchField.frame=NSMakeRect(14,10,MAX(40,right-14),20);
+}
+- (BOOL)validateMenuItem:(NSMenuItem*)item {
+ if(item.action==@selector(toggleOption:)) {
+  BOOL whole=[item.title isEqual:@"Whole words"];
+  item.state=(whole ? _wholeWords : _matchCase) ? NSControlStateValueOn : NSControlStateValueOff;
+  return !whole || _wholeWordsAvailable;
+ }
+ return YES;
+}
+- (void)toggleOption:(NSMenuItem*)item {
+ if([item.title isEqual:@"Match case"]) _matchCase=!_matchCase;
+ else if(_wholeWordsAvailable) _wholeWords=!_wholeWords;
+ [self performSearchWithQuery:_searchField.stringValue];
+}
+- (void)previous:(id)sender { [self findPrevious]; }
+- (void)next:(id)sender { [self findNext]; }
+- (void)close:(id)sender { [self hideAnimated]; }
+- (void)controlTextDidChange:(NSNotification*)notification { [self performSearchWithQuery:_searchField.stringValue]; }
+- (BOOL)control:(NSControl*)control textView:(NSTextView*)textView doCommandBySelector:(SEL)selector {
+ if(selector==@selector(cancelOperation:)) { [self hideAnimated]; return YES; }
+ if(selector==@selector(insertNewline:)) {
+  if(NSApp.currentEvent.modifierFlags & NSEventModifierFlagShift) [self findPrevious];
+  else [self findNext];
+  return YES;
+ }
+ if(selector==@selector(insertNewlineIgnoringFieldEditor:)) { [self findPrevious]; return YES; }
+ return NO;
+}
+- (void)syncWithWebView:(WKWebView*)web {
+ if(web==_targetWebView) return;
+ [self clearHighlights];
+ _targetWebView=web;
+ if(_isVisible) [self performSearchWithQuery:_searchField.stringValue];
+}
+- (void)showInView:(NSView*)container initialQuery:(NSString*)query {
+ if(self.superview!=container) {
+  [self removeFromSuperview]; [container addSubview:self];
+  NSLayoutConstraint* preferred=[self.widthAnchor constraintEqualToConstant:360]; preferred.priority=750;
   [NSLayoutConstraint activateConstraints:@[
-    [self.widthAnchor constraintEqualToConstant:350],
-    [self.heightAnchor constraintEqualToConstant:38],
-
-    [searchIcon.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:11],
-    [searchIcon.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [searchIcon.widthAnchor constraintEqualToConstant:14],
-    [searchIcon.heightAnchor constraintEqualToConstant:14],
-
-    [_searchField.leadingAnchor constraintEqualToAnchor:searchIcon.trailingAnchor constant:7],
-    [_searchField.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [_searchField.trailingAnchor constraintEqualToAnchor:_countLabel.leadingAnchor constant:-6],
-
-    [_countLabel.trailingAnchor constraintEqualToAnchor:sep.leadingAnchor constant:-8],
-    [_countLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [_countLabel.widthAnchor constraintGreaterThanOrEqualToConstant:20],
-
-    [sep.trailingAnchor constraintEqualToAnchor:_prevButton.leadingAnchor constant:-5],
-    [sep.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [sep.heightAnchor constraintEqualToConstant:18],
-    [sep.widthAnchor constraintEqualToConstant:1],
-
-    [_prevButton.trailingAnchor constraintEqualToAnchor:_nextButton.leadingAnchor constant:-2],
-    [_prevButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [_prevButton.widthAnchor constraintEqualToConstant:20],
-    [_prevButton.heightAnchor constraintEqualToConstant:20],
-
-    [_nextButton.trailingAnchor constraintEqualToAnchor:_closeButton.leadingAnchor constant:-6],
-    [_nextButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [_nextButton.widthAnchor constraintEqualToConstant:20],
-    [_nextButton.heightAnchor constraintEqualToConstant:20],
-
-    [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-10],
-    [_closeButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    [_closeButton.widthAnchor constraintEqualToConstant:18],
-    [_closeButton.heightAnchor constraintEqualToConstant:18]
-  ]];
+   preferred,[self.widthAnchor constraintLessThanOrEqualToAnchor:container.widthAnchor constant:-24],
+   [self.heightAnchor constraintEqualToConstant:38],
+   [self.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-12],
+   [self.topAnchor constraintEqualToAnchor:container.topAnchor constant:12]]];
+ }
+ _isVisible=YES; self.hidden=NO;
+ if(query.length) _searchField.stringValue=query;
+ [self.window makeFirstResponder:_searchField]; [_searchField selectText:nil];
+ [self performSearchWithQuery:_searchField.stringValue];
 }
-
-- (void)prevButtonClicked:(id)sender {
-  [self findPrevious];
-}
-
-- (void)nextButtonClicked:(id)sender {
-  [self findNext];
-}
-
-- (void)closeButtonClicked:(id)sender {
-  [self hideAnimated];
-}
-
-- (void)controlTextDidChange:(NSNotification*)note {
-  [self performSearchWithQuery:_searchField.stringValue];
-}
-
-- (void)showInView:(NSView*)containerView initialQuery:(NSString*)query {
-  if (!containerView) return;
-
-  if (self.superview != containerView) {
-    [self removeFromSuperview];
-    [containerView addSubview:self positioned:NSWindowAbove relativeTo:nil];
-
-    [NSLayoutConstraint activateConstraints:@[
-      [self.trailingAnchor constraintEqualToAnchor:containerView.trailingAnchor constant:-18],
-      [self.topAnchor constraintEqualToAnchor:containerView.topAnchor constant:12]
-    ]];
-  }
-
-  self.alphaValue = 0.0;
-  self.hidden = NO;
-  _isVisible = YES;
-
-  [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
-    ctx.duration = 0.16;
-    ctx.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
-    self.animator.alphaValue = 1.0;
-  }];
-
-  if (query.length > 0) {
-    _searchField.stringValue = query;
-  } else if (_lastQuery.length > 0 && _searchField.stringValue.length == 0) {
-    _searchField.stringValue = _lastQuery;
-  }
-
-  [self.window makeFirstResponder:_searchField];
-  if (_searchField.stringValue.length > 0) {
-    [_searchField selectText:nil];
-    [self performSearchWithQuery:_searchField.stringValue];
-  } else {
-    [self updateCountLabelWithCurrent:0 total:0];
-  }
-}
-
 - (void)hideAnimated {
-  if (!_isVisible) return;
-  _isVisible = NO;
-
-  [self clearHighlights];
-
-  [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
-    ctx.duration = 0.14;
-    ctx.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
-    self.animator.alphaValue = 0.0;
-  } completionHandler:^{
-    if (!self->_isVisible) {
-      self.hidden = YES;
-    }
-  }];
-
-  // Restore focus to active web view
-  if (self.targetWebView) {
-    [self.window makeFirstResponder:self.targetWebView];
-  }
+ _isVisible=NO; self.hidden=YES;
+ [self clearHighlights];
+ if(_targetWebView.window) [_targetWebView.window makeFirstResponder:_targetWebView];
 }
-
-- (void)syncWithWebView:(WKWebView*)webView {
-  _targetWebView = webView;
-  if (_isVisible && _searchField.stringValue.length > 0) {
-    [self performSearchWithQuery:_searchField.stringValue];
-  }
+- (void)updateCount:(NSInteger)current total:(NSInteger)total more:(BOOL)more {
+ _currentMatchIndex=current; _totalMatches=total;
+ _countLabel.stringValue=!_searchField.stringValue.length ? @"" : [NSString stringWithFormat:@"%ld of %ld%@",(long)current,(long)total,more ? @"+" : @""];
+ _countLabel.textColor=total==0 && _searchField.stringValue.length ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
+ _prevButton.enabled=total>0; _nextButton.enabled=total>0;
 }
-
-- (void)updateCountLabelWithCurrent:(NSInteger)current total:(NSInteger)total {
-  _currentMatchIndex = current;
-  _totalMatches = total;
-
-  if (_searchField.stringValue.length == 0) {
-    _countLabel.stringValue = @"";
-    _countLabel.textColor = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.85];
-    _prevButton.enabled = NO;
-    _nextButton.enabled = NO;
-    return;
-  }
-
-  if (total == 0) {
-    _countLabel.stringValue = @"0 of 0";
-    _countLabel.textColor = [NSColor colorWithCalibratedRed:0.95 green:0.35 blue:0.35 alpha:1.0]; // Soft red
-    _prevButton.enabled = NO;
-    _nextButton.enabled = NO;
-  } else {
-    _countLabel.stringValue = [NSString stringWithFormat:@"%ld of %ld", (long)current, (long)total];
-    _countLabel.textColor = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.85];
-    _prevButton.enabled = YES;
-    _nextButton.enabled = YES;
-  }
-}
-
-#pragma mark - Search Execution
-
-// Slate note: Route PDF documents through PDFKit search before using the HTML-page search path.
 - (void)performSearchWithQuery:(NSString*)query {
-  _lastQuery = query ?: @"";
-  WKWebView* webView = _targetWebView;
-  if (!webView) return;
-
-  // 1. PDFKit Search
-  PDFView* pdfView = [SlatePDFOverlay findPDFViewInView:webView];
-  if (pdfView && pdfView.document) {
-    if (query.length == 0) {
-      pdfView.highlightedSelections = @[];
-      _pdfSelections = @[];
-      [self updateCountLabelWithCurrent:0 total:0];
-      return;
-    }
-
-    NSArray<PDFSelection*>* matches = [pdfView.document findString:query withOptions:NSCaseInsensitiveSearch];
-    _pdfSelections = matches;
-    pdfView.highlightedSelections = matches;
-
-    if (matches.count > 0) {
-      pdfView.currentSelection = matches.firstObject;
-      [pdfView scrollSelectionToVisible:nil];
-      [self updateCountLabelWithCurrent:1 total:matches.count];
-    } else {
-      [self updateCountLabelWithCurrent:0 total:0];
-    }
-    return;
-  }
-
-  // 2. Web DOM Search
-  if (query.length == 0) {
-    [self clearHighlights];
-    [self updateCountLabelWithCurrent:0 total:0];
-    return;
-  }
-
-  // Escape query for JS string
-  NSData* jsonData = [NSJSONSerialization dataWithJSONObject:@[query] options:0 error:nil];
-  NSString* jsonStr = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-  NSString* queryArg = [jsonStr substringWithRange:NSMakeRange(1, jsonStr.length - 2)];
-
-  NSString* js = [NSString stringWithFormat:
-    @"(function() {"
-    @"  window.__slateFind = window.__slateFind || {"
-    @"    matches: [],"
-    @"    currentIndex: -1,"
-    @"    currentQuery: '',"
-    @"    clear: function() {"
-    @"      var marks = document.querySelectorAll('mark.__slate_find_mark');"
-    @"      for (var i = 0; i < marks.length; i++) {"
-    @"        var m = marks[i];"
-    @"        var parent = m.parentNode;"
-    @"        if (parent) {"
-    @"          parent.replaceChild(document.createTextNode(m.textContent), m);"
-    @"          parent.normalize();"
-    @"        }"
-    @"      }"
-    @"      var style = document.getElementById('__slate_find_style');"
-    @"      if (style) style.remove();"
-    @"      this.matches = [];"
-    @"      this.currentIndex = -1;"
-    @"      this.currentQuery = '';"
-    @"    },"
-    @"    ensureStyle: function() {"
-    @"      if (!document.getElementById('__slate_find_style')) {"
-    @"        var s = document.createElement('style');"
-    @"        s.id = '__slate_find_style';"
-    @"        s.textContent = '"
-    @"          mark.__slate_find_mark {"
-    @"            background-color: rgba(255, 224, 102, 0.65) !important;"
-    @"            color: inherit !important;"
-    @"            border-radius: 2px !important;"
-    @"            padding: 0 1px !important;"
-    @"            box-shadow: 0 0 0 1px rgba(220, 180, 0, 0.4) !important;"
-    @"            transition: background-color 0.1s ease !important;"
-    @"          }"
-    @"          mark.__slate_find_mark.__slate_find_active {"
-    @"            background-color: #ff9500 !important;"
-    @"            color: #000000 !important;"
-    @"            box-shadow: 0 0 0 2px rgba(255, 149, 0, 0.7), 0 0 8px rgba(255, 149, 0, 0.5) !important;"
-    @"            outline: 1.5px solid #cc6600 !important;"
-    @"            font-weight: 500 !important;"
-    @"          }';"
-    @"        document.head.appendChild(s);"
-    @"      }"
-    @"    },"
-    @"    search: function(query) {"
-    @"      this.clear();"
-    @"      if (!query || query.trim() === '') return { total: 0, current: 0 };"
-    @"      this.currentQuery = query;"
-    @"      this.ensureStyle();"
-    @"      var walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, {"
-    @"        acceptNode: function(node) {"
-    @"          if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;"
-    @"          var tag = node.parentNode ? node.parentNode.tagName : '';"
-    @"          if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT', 'SELECT'].indexOf(tag) !== -1) return NodeFilter.FILTER_REJECT;"
-    @"          return NodeFilter.FILTER_ACCEPT;"
-    @"        }"
-    @"      });"
-    @"      var textNodes = [];"
-    @"      var n;"
-    @"      while ((n = walker.nextNode())) textNodes.push(n);"
-    @"      var regex = new RegExp(query.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'gi');"
-    @"      var allMarks = [];"
-    @"      for (var j = 0; j < textNodes.length; j++) {"
-    @"        var node = textNodes[j];"
-    @"        var text = node.nodeValue;"
-    @"        var match;"
-    @"        var matchIndices = [];"
-    @"        while ((match = regex.exec(text)) !== null) {"
-    @"          matchIndices.push({ index: match.index, length: match[0].length, text: match[0] });"
-    @"          if (matchIndices.length > 500) break;"
-    @"        }"
-    @"        if (matchIndices.length > 0) {"
-    @"          var frag = document.createDocumentFragment();"
-    @"          var lastIdx = 0;"
-    @"          for (var k = 0; k < matchIndices.length; k++) {"
-    @"            var m = matchIndices[k];"
-    @"            if (m.index > lastIdx) {"
-    @"              frag.appendChild(document.createTextNode(text.substring(lastIdx, m.index)));"
-    @"            }"
-    @"            var mark = document.createElement('mark');"
-    @"            mark.className = '__slate_find_mark';"
-    @"            mark.textContent = text.substring(m.index, m.index + m.length);"
-    @"            frag.appendChild(mark);"
-    @"            allMarks.push(mark);"
-    @"            lastIdx = m.index + m.length;"
-    @"          }"
-    @"          if (lastIdx < text.length) {"
-    @"            frag.appendChild(document.createTextNode(text.substring(lastIdx)));"
-    @"          }"
-    @"          if (node.parentNode) {"
-    @"            node.parentNode.replaceChild(frag, node);"
-    @"          }"
-    @"        }"
-    @"        if (allMarks.length >= 2000) break;"
-    @"      }"
-    @"      this.matches = allMarks;"
-    @"      if (this.matches.length > 0) {"
-    @"        this.currentIndex = 0;"
-    @"        this.updateActive();"
-    @"      }"
-    @"      return { total: this.matches.length, current: this.matches.length > 0 ? this.currentIndex + 1 : 0 };"
-    @"    },"
-    @"    updateActive: function() {"
-    @"      for (var i = 0; i < this.matches.length; i++) {"
-    @"        if (i === this.currentIndex) {"
-    @"          this.matches[i].classList.add('__slate_find_active');"
-    @"          this.matches[i].scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });"
-    @"        } else {"
-    @"          this.matches[i].classList.remove('__slate_find_active');"
-    @"        }"
-    @"      }"
-    @"    },"
-    @"    next: function() {"
-    @"      if (this.matches.length === 0) return { total: 0, current: 0 };"
-    @"      this.currentIndex = (this.currentIndex + 1) %% this.matches.length;"
-    @"      this.updateActive();"
-    @"      return { total: this.matches.length, current: this.currentIndex + 1 };"
-    @"    },"
-    @"    prev: function() {"
-    @"      if (this.matches.length === 0) return { total: 0, current: 0 };"
-    @"      this.currentIndex = (this.currentIndex - 1 + this.matches.length) %% this.matches.length;"
-    @"      this.updateActive();"
-    @"      return { total: this.matches.length, current: this.currentIndex + 1 };"
-    @"    }"
-    @"  };"
-    @"  return window.__slateFind.search(%@);"
-    @"})();", queryArg];
-
-  __weak typeof(self) weakSelf = self;
-  [webView evaluateJavaScript:js completionHandler:^(id result, NSError* error) {
-    if (!error && [result isKindOfClass:[NSDictionary class]]) {
-      NSDictionary* dict = (NSDictionary*)result;
-      NSInteger total = [dict[@"total"] integerValue];
-      NSInteger current = [dict[@"current"] integerValue];
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [weakSelf updateCountLabelWithCurrent:current total:total];
-      });
-    }
-  }];
+ _lastQuery=query ?: @"";
+ [self updateWithSteps:0];
 }
-
-- (void)findNext {
-  WKWebView* webView = _targetWebView;
-  if (!webView) return;
-
-  PDFView* pdfView = [SlatePDFOverlay findPDFViewInView:webView];
-  if (pdfView && _pdfSelections.count > 0) {
-    _currentMatchIndex = (_currentMatchIndex % _pdfSelections.count) + 1;
-    pdfView.currentSelection = _pdfSelections[_currentMatchIndex - 1];
-    [pdfView scrollSelectionToVisible:nil];
-    [self updateCountLabelWithCurrent:_currentMatchIndex total:_pdfSelections.count];
-    return;
+- (void)updateWithSteps:(NSInteger)steps {
+ WKWebView* web=_targetWebView;
+ if(!web) return;
+ NSUInteger mine=++_request;
+ NSString* query=_lastQuery ?: @"";
+ PDFView* pdf=[SlatePDFOverlay findPDFViewInView:web];
+ if(pdf && pdf.document) {
+  _wholeWordsAvailable=NO; _wholeWords=NO;
+  if(!steps || !_pdfSelections) {
+   _pdfSelections=query.length ? [pdf.document findString:query withOptions:_matchCase ? 0 : NSCaseInsensitiveSearch] : @[];
+   pdf.highlightedSelections=_pdfSelections;
+   _currentMatchIndex=_pdfSelections.count ? 1 : 0;
+  } else if(_pdfSelections.count) {
+   NSInteger total=_pdfSelections.count;
+   _currentMatchIndex=((_currentMatchIndex-1+steps)%total+total)%total+1;
   }
-
-  NSString* js = @"window.__slateFind ? window.__slateFind.next() : { total: 0, current: 0 };";
-  __weak typeof(self) weakSelf = self;
-  [webView evaluateJavaScript:js completionHandler:^(id result, NSError* error) {
-    if (!error && [result isKindOfClass:[NSDictionary class]]) {
-      NSDictionary* dict = (NSDictionary*)result;
-      NSInteger total = [dict[@"total"] integerValue];
-      NSInteger current = [dict[@"current"] integerValue];
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [weakSelf updateCountLabelWithCurrent:current total:total];
-      });
-    }
-  }];
-}
-
-- (void)findPrevious {
-  WKWebView* webView = _targetWebView;
-  if (!webView) return;
-
-  PDFView* pdfView = [SlatePDFOverlay findPDFViewInView:webView];
-  if (pdfView && _pdfSelections.count > 0) {
-    _currentMatchIndex = (_currentMatchIndex - 2 + _pdfSelections.count) % _pdfSelections.count + 1;
-    pdfView.currentSelection = _pdfSelections[_currentMatchIndex - 1];
-    [pdfView scrollSelectionToVisible:nil];
-    [self updateCountLabelWithCurrent:_currentMatchIndex total:_pdfSelections.count];
-    return;
+  if(_pdfSelections.count) {
+   pdf.currentSelection=_pdfSelections[_currentMatchIndex-1]; [pdf scrollSelectionToVisible:nil];
   }
-
-  NSString* js = @"window.__slateFind ? window.__slateFind.prev() : { total: 0, current: 0 };";
-  __weak typeof(self) weakSelf = self;
-  [webView evaluateJavaScript:js completionHandler:^(id result, NSError* error) {
-    if (!error && [result isKindOfClass:[NSDictionary class]]) {
-      NSDictionary* dict = (NSDictionary*)result;
-      NSInteger total = [dict[@"total"] integerValue];
-      NSInteger current = [dict[@"current"] integerValue];
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [weakSelf updateCountLabelWithCurrent:current total:total];
-      });
-    }
-  }];
+  [self updateCount:_currentMatchIndex total:_pdfSelections.count more:NO];
+  return;
+ }
+ __weak SlateFindBar* weakSelf=self;
+ [_finder update:web query:query matchCase:_matchCase wholeWords:_wholeWords steps:steps completion:^(NSDictionary<NSString*,id>* result) {
+  SlateFindBar* bar=weakSelf;
+  if(!bar || mine!=bar.request || bar.targetWebView!=web || !bar.isVisible) return;
+  bar.wholeWordsAvailable=[result[@"wholeWordsAvailable"] boolValue];
+  if(!bar.wholeWordsAvailable && bar.wholeWords) { bar.wholeWords=NO; [bar updateWithSteps:0]; return; }
+  if(![result[@"available"] boolValue]) {
+   [bar updateCount:0 total:0 more:NO]; bar.countLabel.stringValue=@"Unavailable"; return;
+  }
+  NSInteger count=[result[@"count"] integerValue];
+  if(count<0) {
+   BOOL found=[result[@"found"] boolValue];
+   bar.countLabel.stringValue=found ? @"Found" : @"No match";
+   bar.nextButton.enabled=found; bar.prevButton.enabled=found; return;
+  }
+  [bar updateCount:[result[@"index"] integerValue] total:count more:[result[@"more"] boolValue]];
+ }];
 }
-
+- (void)findNext { [self updateWithSteps:1]; }
+- (void)findPrevious { [self updateWithSteps:-1]; }
 - (void)clearHighlights {
-  WKWebView* webView = _targetWebView;
-  if (!webView) return;
-
-  PDFView* pdfView = [SlatePDFOverlay findPDFViewInView:webView];
-  if (pdfView) {
-    pdfView.highlightedSelections = @[];
-    _pdfSelections = @[];
-    return;
-  }
-
-  NSString* js = @"if (window.__slateFind) { window.__slateFind.clear(); }";
-  [webView evaluateJavaScript:js completionHandler:nil];
+ ++_request;
+ if(!_targetWebView) return;
+ [_finder clear:_targetWebView];
+ PDFView* pdf=[SlatePDFOverlay findPDFViewInView:_targetWebView];
+ pdf.highlightedSelections=@[];
+ _pdfSelections=nil;
 }
-
 @end

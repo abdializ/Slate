@@ -30,6 +30,9 @@ static const CGFloat kCornerRadius = 26.0;
 
 @property (nonatomic, weak, nullable) id<SlateOmniboxDelegate> delegate;
 @property (nonatomic, strong, nonnull) NSTextField* field;
+@property (nonatomic, copy, nullable) NSDictionary<NSString*,NSString*>* searchSite;
+@property (nonatomic, copy, nullable) NSDictionary<NSString*,NSString*>* suggestedSite;
+- (void)activateSite:(nonnull NSDictionary<NSString*,NSString*>*)site;
 @property (nonatomic, copy, nullable) NSString* placeholder;
 @property (nonatomic, strong, nullable) NSColor* accentColor;
 @property (nonatomic, strong, nullable) NSColor* inkColor;
