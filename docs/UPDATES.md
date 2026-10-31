@@ -63,8 +63,11 @@ and its `manifest.json`, `Slate-VERSION.zip`, `appcast.xml`, and `notes.md`.
 The manifest records `version`, `build`, `source_sha` (the parent commit), and the
 archive's `sha256`. The job validates the archive identity, feed, key, versions,
 and checksum, uploads assets to a draft release, then publishes it as Latest.
-The release tag targets the clean source commit. Binary staging files stay on
-the release branch, and no private signing key is sent to GitHub. Validate a
+The release tag targets the clean source commit. After publication, the job
+verifies that the public archive and signed feed match the prepared files, then
+deletes its temporary release branch. It preserves a branch that moved or has an
+open pull request. Source remains on main and release tags; downloads remain on
+the published release. No private signing key is sent to GitHub. Validate a
 prepared payload locally with `scripts/publish-prepared-release.py --root PATH
 --validate-only`. Existing releases and tags for other source are not replaced.
 

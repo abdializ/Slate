@@ -12,6 +12,7 @@ from pathlib import Path
 import plistlib
 import re
 import subprocess
+import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -59,6 +60,39 @@ def validate(root):
         raise ValueError('Release notes are required')
     return manifest, archive, feed, notes
 
+def remove_published_branch(manifest, feed):
+    """Remove only this job's unchanged staging branch, after verifying assets."""
+    version = manifest['version']
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('Invalid cleanup version')
+    branch = f'release/v{version}'
+    expected = os.environ.get('GITHUB_SHA', '')
+    if (os.environ.get('GITHUB_REPOSITORY') != REPOSITORY
+            or os.environ.get('GITHUB_REF') != f'refs/heads/{branch}'
+            or not re.fullmatch(r'[a-f0-9]{40}', expected)):
+        raise ValueError('Cleanup is restricted to the current release job')
+
+    def api(path):
+        return json.loads(subprocess.check_output(['gh', 'api', f'repos/{REPOSITORY}/{path}'], text=True))
+
+    release = api(f'releases/tags/v{version}')
+    assets = {item['name']: item.get('digest') for item in release.get('assets', [])}
+    if (release.get('draft', True) or release.get('prerelease', True)
+            or release.get('target_commitish') != manifest['source_sha']
+            or assets.get(f'Slate-{version}.zip') != 'sha256:' + manifest['sha256']
+            or assets.get('appcast.xml') != 'sha256:' + hashlib.sha256(feed.read_bytes()).hexdigest()):
+        raise ValueError('Published release must match the verified archive and signed feed before cleanup')
+    head = urllib.parse.quote(REPOSITORY.split('/')[0] + ':' + branch, safe='')
+    if api(f'pulls?state=open&head={head}'):
+        raise ValueError('Release branch has an open pull request; preserving it')
+    ref = api(f'git/ref/heads/{branch}')
+    if ref.get('object', {}).get('sha') != expected:
+        raise ValueError('Release branch moved after publication; preserving it')
+    # Log the name and SHA before deletion for recovery. Never delete tags,
+    # main, or a branch other than the exact staging branch for this job.
+    print(f'Removing published staging branch {branch} at {expected}', flush=True)
+    subprocess.run(['gh', 'api', '--method', 'DELETE', f'repos/{REPOSITORY}/git/refs/heads/{branch}'], check=True)
+
 def publish(root, validate_only=False):
     manifest, archive, feed, notes = validate(root)
     version = manifest['version']
@@ -88,6 +122,7 @@ def publish(root, validate_only=False):
     subprocess.run(['gh', 'release', 'edit', tag, '--repo', REPOSITORY,
                     '--draft=false', '--latest'], check=True)
     print(f'Published Slate {version}, build {manifest["build"]}.')
+    remove_published_branch(manifest, feed)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
