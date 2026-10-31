@@ -101,3 +101,14 @@ Loopback feed overrides and the quiet driver are absent from production builds.
 
 References: https://sparkle-project.org/documentation/ and
 https://sparkle-project.org/documentation/programmatic-setup/
+
+## Signed sandboxed builds
+
+As of 0.4.1, signing enables Sparkle's Installer XPC service exactly when the
+host's signed entitlements enable App Sandbox. The host grants lookup only for
+`com.apple.PIPAgent`, `dev.slate.browser-spki`, and `dev.slate.browser-spks`.
+The PiP route is required for WebKit's native PiP window; the latter two are
+Sparkle's installer/status channels. Preparation inspects the effective signed
+entitlements and rejects a release missing these routes or an inconsistent
+installer-service setting. `macos_media_service_permissions` checks the real
+macOS permission boundary in isolated signed probe apps.

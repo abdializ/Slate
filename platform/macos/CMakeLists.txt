@@ -97,6 +97,7 @@ set_property(TARGET Slate APPEND PROPERTY LINK_DEPENDS
   "${PROJECT_SOURCE_DIR}/filtering/lists/slate-network.txt"
   "${PROJECT_SOURCE_DIR}/filtering/lists/compat.txt"
   "${PROJECT_SOURCE_DIR}/scripts/codesign.sh"
+  "${CMAKE_CURRENT_SOURCE_DIR}/Slate.entitlements"
 )
 
 add_custom_command(TARGET Slate POST_BUILD

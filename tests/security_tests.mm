@@ -184,6 +184,13 @@ static void TestSandboxEntitlements() {
     assert([plist[@"com.apple.security.device.camera"] boolValue] == YES);
     assert([plist[@"com.apple.security.device.microphone"] boolValue] == YES);
 
+    NSArray* services=plist[@"com.apple.security.temporary-exception.mach-lookup.global-name"];
+    assert([services isKindOfClass:NSArray.class]);
+    assert(services.count==3);
+    assert([services containsObject:@"com.apple.PIPAgent"]);
+    assert([services containsObject:@"dev.slate.browser-spki"]);
+    assert([services containsObject:@"dev.slate.browser-spks"]);
+
     // Insecure debug entitlements MUST NOT be present
     assert(plist[@"com.apple.security.cs.allow-jit"] == nil);
     assert(plist[@"com.apple.security.cs.allow-unsigned-executable-memory"] == nil);

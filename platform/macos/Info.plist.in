@@ -26,6 +26,9 @@
 	<string>${PROJECT_VERSION}</string>
 	<key>SlateVerificationEnabled</key>
 	<${SLATE_VERIFY_PLIST_FLAG}/>
+	<!-- Signing sets this from the effective App Sandbox entitlements. -->
+	<key>SUEnableInstallerLauncherService</key>
+	<false/>
 	<key>SUFeedURL</key>
 	<string>${SLATE_UPDATE_FEED_URL}</string>
 	<key>SUPublicEDKey</key>

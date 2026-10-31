@@ -2,8 +2,8 @@
 # macOS target.
 
 cmake_minimum_required(VERSION 3.21)
-project(Slate VERSION 0.4.0 LANGUAGES CXX)
-set(SLATE_BUILD_VERSION "20261031.6" CACHE STRING "Monotonically increasing Slate build version")
+project(Slate VERSION 0.4.1 LANGUAGES CXX)
+set(SLATE_BUILD_VERSION "20261031.7" CACHE STRING "Monotonically increasing Slate build version")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Slate note: Build reusable browser logic separately from the native shell.
@@ -106,6 +106,12 @@ if(APPLE)
  target_include_directories(platform_audio_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
  target_link_libraries(platform_audio_tests PRIVATE "-framework Foundation" "-framework AudioToolbox")
  add_test(NAME platform_audio_decode COMMAND platform_audio_tests)
+ add_executable(macos_media_service_probe tests/macos_media_service_probe.cc)
+ add_test(NAME macos_media_service_permissions COMMAND /usr/bin/python3
+   "${PROJECT_SOURCE_DIR}/tests/macos_media_service_permissions.py"
+   "$<TARGET_FILE:macos_media_service_probe>" "${PROJECT_SOURCE_DIR}"
+   "${CMAKE_BINARY_DIR}/media-service-test-artifacts")
+ set_tests_properties(macos_media_service_permissions PROPERTIES TIMEOUT 40)
 add_executable(security_tests tests/security_tests.mm platform/macos/download_manager.mm engine/webkit_shields.mm)
 target_compile_options(security_tests PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>" -UNDEBUG)
  target_include_directories(security_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

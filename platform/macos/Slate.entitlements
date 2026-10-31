@@ -29,6 +29,17 @@
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
 
+	<!-- WebKit's native PiP window and Sparkle's own installer/status channels.
+	     Keep the list specific; never grant a global Mach-service wildcard.
+	     References: WebKit Tools/MiniBrowser/MiniBrowser.entitlements and
+	     https://sparkle-project.org/documentation/sandboxing/ -->
+	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+	<array>
+		<string>com.apple.PIPAgent</string>
+		<string>dev.slate.browser-spki</string>
+		<string>dev.slate.browser-spks</string>
+	</array>
+
 	<!-- Printing pages -->
 	<key>com.apple.security.print</key>
 	<true/>

@@ -26,6 +26,25 @@ def prepare(app, output, sparkle, notes):
     public=(Path(__file__).resolve().parents[1]/'updates/public-key.txt').read_text().strip()
     if info.get('SUPublicEDKey')!=public:
         raise ValueError('The app and release public keys do not match')
+    # Check the effective signature, not just a source entitlement file. 0.4
+    # first attached App Sandbox but omitted the system PiP and installer routes.
+    with tempfile.TemporaryDirectory(prefix='slate-signed-entitlements-',dir='/private/tmp') as temporary:
+        signed_path=Path(temporary)/'entitlements.plist'
+        command=['/usr/bin/codesign','--display','--entitlements',str(signed_path)]
+        signed=subprocess.run(command+['--xml',str(app)],capture_output=True)
+        if signed.returncode:
+            # Older codesign versions already emit XML and lack --xml.
+            subprocess.run(command+[str(app)],check=True,capture_output=True)
+        raw=signed_path.read_bytes() if signed_path.exists() else b''
+        entitlements=plistlib.loads(raw) if raw.strip() else {}
+    sandboxed=bool(entitlements.get('com.apple.security.app-sandbox'))
+    if bool(info.get('SUEnableInstallerLauncherService')) != sandboxed:
+        raise ValueError('Sparkle installer service must match the effective App Sandbox signing mode')
+    if sandboxed:
+        required={'com.apple.PIPAgent','dev.slate.browser-spki','dev.slate.browser-spks'}
+        allowed=set(entitlements.get('com.apple.security.temporary-exception.mach-lookup.global-name',[]))
+        if not required.issubset(allowed):
+            raise ValueError('Sandboxed releases require the PiP and signed updater service permissions')
     version=info['CFBundleShortVersionString']; build=info['CFBundleVersion']
     if not all(piece.isdecimal() for piece in version.split('.')) or not all(piece.isdecimal() for piece in build.split('.')):
         raise ValueError('Release and build versions must contain increasing numeric components')

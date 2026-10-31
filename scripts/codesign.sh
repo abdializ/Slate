@@ -1,14 +1,9 @@
 #!/bin/bash
 # File purpose: Stages and signs an app bundle with a development identity or an ad-hoc fallback.
 
-# Sign Slate with a stable Apple Development identity so Chromium Keychain
-# items survive relaunches. Does not disable the Chromium sandbox or use a
-# mock keychain.
-#
-# Hardened-runtime entitlements are not attached here. This workspace lives
-# under iCloud/File Provider Documents, which rewrites FinderInfo; launchd then
-# refuses a hardened bundle (POSIX 163). The development identity still gives
-# Keychain a stable designated requirement (identifier + team).
+# A configured Apple identity enables hardened runtime and attaches the declared
+# app entitlements. Ad-hoc builds do not enable App Sandbox. Stage outside File
+# Provider before signing so FinderInfo cannot invalidate the seal mid-sign.
 set -euo pipefail
 export COPYFILE_DISABLE=1
 APP="${1:?usage: codesign.sh Slate.app}"
@@ -82,6 +77,16 @@ if [[ -d "$SPARKLE_FRAMEWORK" && "$IDENTITY" != "-" ]]; then
 fi
 
 ENTITLEMENTS="${SLATE_ENTITLEMENTS:-$(cd "$(dirname "$0")/.." && pwd)/platform/macos/Slate.entitlements}"
+# Sparkle requires its Installer XPC service only when the host is sandboxed.
+# Decide from the entitlements actually being attached, not from build location
+# or whether a development certificate happens to be visible to this process.
+SANDBOXED=false
+if [[ "$IDENTITY" != "-" && -f "$ENTITLEMENTS" ]] && \
+   [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$ENTITLEMENTS" 2>/dev/null || true)" == "true" ]]; then
+  SANDBOXED=true
+fi
+/usr/libexec/PlistBuddy -c "Set :SUEnableInstallerLauncherService $SANDBOXED" "$STAGE/Slate.app/Contents/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :SUEnableInstallerLauncherService bool $SANDBOXED" "$STAGE/Slate.app/Contents/Info.plist"
 if [[ -f "$ENTITLEMENTS" && "$IDENTITY" != "-" ]]; then
   codesign --force --sign "$IDENTITY" --identifier "dev.slate.browser" \
    --options runtime --entitlements "$ENTITLEMENTS" --timestamp=none "$STAGE/Slate.app"

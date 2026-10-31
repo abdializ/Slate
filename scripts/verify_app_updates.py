@@ -35,6 +35,8 @@ def verify(app,sparkle,log_path,screenshot):
             assert info['SlateVerificationEnabled'], 'Native checks need a verify-enabled build'
             info['CFBundleIdentifier']=identifier
             info['SUEnableAutomaticChecks']=False
+            # These disposable hosts are re-signed ad-hoc below, without App Sandbox.
+            info['SUEnableInstallerLauncherService']=False
             if build:info['CFBundleVersion']=build
             info_path.write_bytes(plistlib.dumps(info))
             run_command(['/usr/bin/codesign','--force','--sign','-',target])
