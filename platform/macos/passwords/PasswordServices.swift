@@ -63,6 +63,9 @@ import WebKit
 }
 
 @MainActor final class PasswordSettingsView: NSView {
+    private let engine: ApplePasswords
+    private let access: AppleHelper.Access
+    private let store: UserDefaults
     private let apple = NSButton(checkboxWithTitle:"Use Apple Passwords",target:nil,action:nil)
     private let fills = NSButton(checkboxWithTitle:"Offer saved accounts under sign-in fields",target:nil,action:nil)
     private let passkeys = NSButton(checkboxWithTitle:"Offer passkeys and security keys",target:nil,action:nil)
@@ -70,10 +73,14 @@ import WebKit
     private let code = NSSecureTextField()
     private let connect = NSButton(title:"Connect…",target:nil,action:nil)
     private let verify = NSButton(title:"Verify Code",target:nil,action:nil)
+    private let open = NSButton(title:"Open Apple Passwords",target:nil,action:nil)
     private var bag = Set<AnyCancellable>()
-    override init(frame:NSRect) {
+    init(frame:NSRect, engine: ApplePasswords? = nil, access: AppleHelper.Access? = nil, store:UserDefaults? = nil) {
+        self.engine=engine ?? .shared
+        self.access=access ?? AppleHelper.access
+        self.store=store ?? .standard
         super.init(frame:frame)
-        for (view,y) in [(fills as NSView,186.0),(apple,154),(passkeys,122),(connect,88),(code,88),(verify,88),(status,10)] {
+        for (view,y) in [(fills as NSView,186.0),(apple,154),(passkeys,122),(connect,88),(code,88),(verify,88),(open,88),(status,10)] {
             view.frame=NSRect(x:8,y:y,width:frame.width-16,height:view === status ? 66 : 26)
             addSubview(view)
         }
@@ -82,39 +89,84 @@ import WebKit
         passkeys.target=self; passkeys.action=#selector(togglePasskeys)
         connect.target=self; connect.action=#selector(connectClicked)
         verify.target=self; verify.action=#selector(verifyClicked)
+        code.target=self;code.action=#selector(verifyClicked)
+        open.target=self;open.action=#selector(openClicked)
         connect.frame.size.width=112
         code.frame=NSRect(x:130,y:88,width:140,height:26); code.placeholderString="Six-digit code"; code.maximumNumberOfLines=1
         verify.frame=NSRect(x:278,y:88,width:110,height:26)
+        open.frame=NSRect(x:130,y:88,width:190,height:26)
+        connect.identifier=NSUserInterfaceItemIdentifier("apple-passwords-connect")
+        code.identifier=NSUserInterfaceItemIdentifier("apple-passwords-code")
+        verify.identifier=NSUserInterfaceItemIdentifier("apple-passwords-verify")
+        status.identifier=NSUserInterfaceItemIdentifier("apple-passwords-status")
         status.font = .systemFont(ofSize:11);status.textColor = .secondaryLabelColor
-        apple.toolTip="Optional, unofficial connection using Apple's signed system helper. Pairing is required after each launch."
+        status.isSelectable=true
+        apple.toolTip="Optional connection using Apple's signed system helper. Pairing is required after each launch."
         passkeys.toolTip=Preferences.entitledToPasskeys ? "Changes to availability apply to new tabs." : "This build needs Apple's approved browser passkey entitlement."
-        ApplePasswords.shared.$state.combineLatest(ApplePasswords.shared.$trouble).sink { [weak self] _,_ in self?.refresh() }.store(in:&bag)
-        refresh()
+        // @Published emits before the stored property changes. Render the values
+        // delivered by the publisher; rereading engine.state here lags one event.
+        self.engine.$state.combineLatest(self.engine.$trouble).sink { [weak self] state,trouble in
+            self?.refresh(state:state,trouble:trouble)
+        }.store(in:&bag)
+        refreshCurrent()
     }
+    override func draw(_ dirtyRect:NSRect) { NSColor.windowBackgroundColor.setFill();dirtyRect.fill() }
     required init?(coder:NSCoder) { fatalError("init(coder:) has not been implemented") }
-    private func refresh() {
-        fills.state=SlatePasswordServices.autofillEnabled ? .on : .off
-        apple.state=SlatePasswordServices.appleEnabled ? .on : .off
-        apple.isEnabled=ApplePasswordsOffer.helperHere
+    private func refreshCurrent() { refresh(state:engine.state,trouble:engine.trouble) }
+    private func refresh(state:ApplePasswords.State,trouble:String?) {
+        fills.state=(store.object(forKey:"passwords.autofill") as? Bool ?? true) ? .on : .off
+        apple.state=store.bool(forKey:"passwords.apple.enabled") ? .on : .off
+        apple.isEnabled=access.canConnect || apple.state == .on
         passkeys.state=SlatePasswordServices.passkeysEnabled ? .on : .off
         passkeys.isEnabled=Preferences.entitledToPasskeys
-        let state=ApplePasswords.shared.state
-        connect.title=state == .paired ? "Disconnect" : "Connect…"
-        connect.isEnabled=ApplePasswordsOffer.helperHere && (state == .idle || state == .paired)
+        switch state {
+        case .idle: connect.title="Connect…"
+        case .paired: connect.title="Disconnect"
+        case .starting,.code,.checking: connect.title="Cancel"
+        }
+        // An unavailable helper produces an inline explanation when clicked;
+        // never leave a button looking inert or allow a busy connection to stick.
+        connect.isEnabled=true
         code.isHidden=state != .code && state != .checking
         verify.isHidden=code.isHidden;verify.isEnabled=state == .code
-        if state != .code && state != .checking { code.stringValue="" }
-        let words=ApplePasswords.shared.trouble ?? (state == .paired ? "Connected. Accounts stay in Apple Passwords; selected passwords are filled without saving a copy in Slate." : state == .code || state == .checking ? "Enter the six-digit code shown by Apple's helper." : "Optional connection to Apple's system helper. Connect only when you want to use it; pair again after restarting Slate.")
-        status.stringValue = !ApplePasswordsOffer.helperHere ? "Apple Passwords needs macOS 15.4 or later and Apple's signed system helper." : words
-        if !Preferences.entitledToPasskeys { status.stringValue += "\nPasskeys require an Apple-approved browser build." }
+        open.isHidden=access.canConnect || !code.isHidden
+        if code.isHidden { code.stringValue="" }
+        let words:String
+        switch state {
+        case .starting: words="Connecting to Apple Passwords…"
+        case .checking: words="Checking the pairing code…"
+        case .code: words="Enter the six-digit code shown by Apple's helper."
+        case .paired: words="Connected. Accounts stay in Apple Passwords; selected passwords are filled without saving a copy in Slate."
+        case .idle: words="Connect when you want to use Apple Passwords. Pair again after restarting Slate."
+        }
+        status.stringValue=trouble ?? access.explanation ?? words
+        if !Preferences.entitledToPasskeys && access != .browserApprovalRequired {
+            status.stringValue += "\nPasskeys require an Apple-approved browser build."
+        }
     }
-    @objc private func toggleFills() { UserDefaults.standard.set(fills.state == .on,forKey:"passwords.autofill"); SlatePasswordServices.shared.preferencesChanged();refresh() }
-    @objc private func toggleApple() { UserDefaults.standard.set(apple.state == .on,forKey:"passwords.apple.enabled"); SlatePasswordServices.shared.preferencesChanged();refresh() }
-    @objc private func togglePasskeys() { UserDefaults.standard.set(passkeys.state == .on,forKey:"passkeys");refresh() }
+    @objc private func toggleFills() { store.set(fills.state == .on,forKey:"passwords.autofill"); SlatePasswordServices.shared.preferencesChanged();refreshCurrent() }
+    @objc private func toggleApple() { store.set(apple.state == .on,forKey:"passwords.apple.enabled"); SlatePasswordServices.shared.preferencesChanged();refreshCurrent() }
+    @objc private func togglePasskeys() { store.set(passkeys.state == .on,forKey:"passkeys");refreshCurrent() }
     @objc private func connectClicked() {
-        if ApplePasswords.shared.state == .paired { ApplePasswords.shared.disconnect() }
-        else { UserDefaults.standard.set(true,forKey:"passwords.apple.enabled");Task { await ApplePasswords.shared.connect() } }
-        refresh()
+        if engine.state != .idle { engine.disconnect() }
+        else {
+            guard access.canConnect else {
+                engine.explainUnavailable(access.explanation ?? "Apple Passwords is unavailable.")
+                return
+            }
+            store.set(true,forKey:"passwords.apple.enabled")
+            Task { await engine.connect() }
+        }
+        refreshCurrent()
     }
-    @objc private func verifyClicked() { let value=code.stringValue;code.stringValue="";Task { await ApplePasswords.shared.enter(value) } }
+    @objc private func verifyClicked() { let value=code.stringValue;code.stringValue="";Task { await engine.enter(value) } }
+    @objc private func openClicked() {
+        guard let url=NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.apple.Passwords") else {
+            status.stringValue="Apple Passwords couldn't be found on this Mac.";return
+        }
+        NSWorkspace.shared.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration()) { [weak self] _,error in
+            guard error != nil else { return }
+            DispatchQueue.main.async { self?.status.stringValue="Apple Passwords could not be opened." }
+        }
+    }
 }

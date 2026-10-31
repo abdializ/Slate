@@ -74,10 +74,7 @@ struct ApplePasswordsOffer {
     static let patience = 2
     @MainActor static var benchAsks = false
     @MainActor static var benchHelper: Bool?
-    static let helperHere: Bool = {
-        guard #available(macOS 15.4, *) else { return false }
-        return AppleHelper.program() != nil
-    }()
+    static let helperHere: Bool = AppleHelper.access.canConnect
     struct Field: Equatable {
         var page: URL?
         var privateTab: Bool

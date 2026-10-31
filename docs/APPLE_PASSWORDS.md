@@ -35,6 +35,20 @@ and a helper on one of the two system-volume paths, with the expected identifier
 and an Apple-anchored code signature. The helper is checked again before launch.
 There is no shell invocation and no protocol or secret log.
 
+On macOS 26 and later the helper also restricts its parent process. Its current
+signed launch requirements admit Apple's approved browser entitlement or named
+browser identities. An unapproved Slate build cannot connect merely by giving
+Chrome's extension origin. Slate now checks this before launch, explains the
+restriction inline, and offers Open Apple Passwords. The once-per-site offer is
+suppressed while this connection is unavailable. See [browser approval](APPLE_BROWSER_APPROVAL.md).
+
+The settings UI renders the values delivered by Combine's publishers. Published
+properties notify observers before their stored values change, so rereading the
+old property from the callback hid the pairing field in the previous build.
+Connecting, code entry, checking, cancellation, and unexpected helper exits now
+have immediate visible states. Tests click the actual native controls with a
+stand-in helper; no real pairing or passwords are used.
+
 The helper starts only from a native Connect button or a click on the offer.
 Turning the switch on alone does not start it. The paired session key is held
 only in memory and discarded on disconnect, helper exit, disabling filling or

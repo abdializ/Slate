@@ -76,6 +76,32 @@ enum AppleHelper {
         "/System/Library/CoreServices/PasswordManagerBrowserExtensionHelper.app",
     ]
 
+    enum Access: Equatable {
+        case available, olderSystem, missingHelper, browserApprovalRequired
+        var canConnect: Bool { self == .available }
+        var explanation: String? {
+            switch self {
+            case .available: return nil
+            case .olderSystem: return "Apple Passwords needs macOS 15.4 or later."
+            case .missingHelper: return "Apple's signed Passwords helper isn't available on this Mac."
+            case .browserApprovalRequired:
+                return "This macOS version requires Apple's browser approval for Apple Passwords. This Slate build isn't approved yet. Use passwords saved in Slate, or open Apple Passwords."
+            }
+        }
+    }
+
+    // Recent helpers have a parent launch constraint: Apple's approved browser
+    // entitlement or an explicitly listed browser identity. Slate does not claim
+    // another browser's signing identity and does not add ungranted entitlements.
+    static func assessAccess(version: OperatingSystemVersion, hasHelper: Bool, approvedBrowser: Bool) -> Access {
+        if version.majorVersion < 15 || (version.majorVersion == 15 && version.minorVersion < 4) { return .olderSystem }
+        guard hasHelper else { return .missingHelper }
+        if version.majorVersion >= 26 && !approvedBrowser { return .browserApprovalRequired }
+        return .available
+    }
+    static let access: Access = assessAccess(version: ProcessInfo.processInfo.operatingSystemVersion,
+        hasHelper: program() != nil, approvedBrowser: Preferences.entitledToPasskeys)
+
     /// The helper's program, if this Mac has it and it is Apple's.
     static func program() -> URL? {
         places.lazy.compactMap { path -> URL? in
@@ -146,6 +172,7 @@ final class ApplePasswords: ObservableObject {
             // on the screen of whoever is working beside it, and ask their
             // real Passwords app. Tests hand in a helper of their own.
             guard !Store.testing else { throw Unavailable(errorDescription: "Apple's Passwords helper isn't run in a test") }
+            guard AppleHelper.access.canConnect else { throw Unavailable(errorDescription: AppleHelper.access.explanation) }
             guard #available(macOS 15.4, *) else { throw Unavailable(errorDescription: "Needs macOS 15.4 or later") }
             guard let program = AppleHelper.program() else {
                 throw Unavailable(errorDescription: "Apple's Passwords helper isn't on this Mac")
@@ -160,6 +187,11 @@ final class ApplePasswords: ObservableObject {
     }
 
     // MARK: - pairing
+
+    func explainUnavailable(_ message: String) {
+        guard state == .idle else { return }
+        trouble = message
+    }
 
     /// Runs the helper and starts a pairing: the helper puts its code on
     /// screen. Only ever from a click of yours.
@@ -338,9 +370,12 @@ final class ApplePasswords: ObservableObject {
     /// The helper went: everything that was waiting fails, and the pairing
     /// with it.
     private func ended() {
+        let wasActive = state != .idle
         serial += 1
-        link = nil
         reset()
+        if wasActive {
+            trouble = "Apple's Passwords helper closed the connection. Pairing did not finish. Try connecting again."
+        }
         state = .idle
     }
 

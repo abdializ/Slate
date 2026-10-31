@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CryptoKit
 import WebKit
 
@@ -9,12 +10,14 @@ func fails(_ message:String,_ work:()throws->Void) { do{try work();fatalError(me
     var onMessage: (([String:Any])->Void)?
     var onEnd: (()->Void)?
     var starts=0, stops=0
+    var holdHello=false
+    var exitOnStart=false
     private var tid=""
-    func start()throws { starts += 1 }
+    func start()throws { starts += 1;if exitOnStart { onEnd?() } }
     func stop(){stops += 1}
     func send(_ message:[String:Any])throws {
         let command=message["cmd"] as! Int
-        if command==14 { onMessage?(["cmd":14,"capabilities":["secretSessionVersion":1,"shouldUseBase64":true]]);return }
+        if command==14 { if holdHello { return }; onMessage?(["cmd":14,"capabilities":["secretSessionVersion":1,"shouldUseBase64":true]]);return }
         guard command==2,let text=message["msg"] as? String,
               let outer=try JSONSerialization.jsonObject(with:Data(text.utf8)) as? [String:Any],
               let encoded=outer["PAKE"] as? String,let data=Data(base64Encoded:encoded),
@@ -99,6 +102,59 @@ func fails(_ message:String,_ work:()throws->Void) { do{try work();fatalError(me
         await pending.value
         check(apple.state == .code,"An old detached proof cannot overwrite a new pairing")
         apple.disconnect();check(apple.state == .idle,"Disconnect clears the session")
+        // Exercise the real native controls and publisher subscription. A pure
+        // state-machine test misses @Published's willSet behavior in the view.
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        let controlFake=FakeAppleLink(),controlEngine=ApplePasswords(makeLink:{controlFake})
+        let controls=PasswordSettingsView(frame:NSRect(x:0,y:0,width:450,height:218),engine:controlEngine,access:.available,store:defaults)
+        func button(_ id:String,in view:NSView)->NSButton { view.subviews.first{$0.identifier?.rawValue==id} as! NSButton }
+        func codeField(_ id:String,in view:NSView)->NSSecureTextField { view.subviews.first{$0.identifier?.rawValue==id} as! NSSecureTextField }
+        func status(in view:NSView)->String { (view.subviews.first{$0.identifier?.rawValue=="apple-passwords-status"} as! NSTextField).stringValue }
+        func waitFor(_ condition:()->Bool) async {
+            for _ in 0..<200 { if condition(){return};try? await Task.sleep(nanoseconds:10_000_000) }
+        }
+        button("apple-passwords-connect",in:controls).performClick(nil)
+        await waitFor { controlEngine.state == .code }
+        check(controlFake.starts==1 && controlEngine.state == .code,"Native Connect click starts pairing")
+        check(!codeField("apple-passwords-code",in:controls).isHidden,"Code field appears on the first code-state publication")
+        check(button("apple-passwords-verify",in:controls).isEnabled,"Verify enables immediately")
+        check(button("apple-passwords-connect",in:controls).title=="Cancel","Active pairing is cancellable")
+        controlFake.onEnd?()
+        check(controlEngine.state == .idle && controlEngine.trouble != nil,"Helper exit reports an error")
+        check(codeField("apple-passwords-code",in:controls).isHidden,"Helper exit removes the code field")
+        check(status(in:controls).contains("closed the connection"),"Helper exit error is visible without another publication")
+        let blockedFake=FakeAppleLink(),blockedEngine=ApplePasswords(makeLink:{blockedFake})
+        let blocked=PasswordSettingsView(frame:NSRect(x:0,y:0,width:450,height:218),engine:blockedEngine,access:.browserApprovalRequired,store:defaults)
+        button("apple-passwords-connect",in:blocked).performClick(nil)
+        check(blockedFake.starts==0,"Known-blocked Connect never launches the helper")
+        check(status(in:blocked).contains("browser approval"),"Blocked Connect has a visible explanation")
+        let waitingFake=FakeAppleLink();waitingFake.holdHello=true
+        let waitingEngine=ApplePasswords(makeLink:{waitingFake})
+        let waitingView=PasswordSettingsView(frame:NSRect(x:0,y:0,width:450,height:218),engine:waitingEngine,access:.available,store:defaults)
+        button("apple-passwords-connect",in:waitingView).performClick(nil)
+        await waitFor { waitingEngine.state == .starting }
+        check(status(in:waitingView).contains("Connecting"),"Starting state has visible progress")
+        button("apple-passwords-connect",in:waitingView).performClick(nil)
+        check(waitingEngine.state == .idle && waitingFake.stops==1,"Cancel stops a connection waiting for hello")
+        let dying=FakeAppleLink();dying.exitOnStart=true
+        let dyingEngine=ApplePasswords(makeLink:{dying});await dyingEngine.connect()
+        check(dyingEngine.state == .idle && dyingEngine.trouble != nil,"Early helper exit is not silent")
+        let old=OperatingSystemVersion(majorVersion:15,minorVersion:3,patchVersion:0)
+        let legacy=OperatingSystemVersion(majorVersion:15,minorVersion:4,patchVersion:0)
+        let modern=OperatingSystemVersion(majorVersion:27,minorVersion:0,patchVersion:0)
+        check(AppleHelper.assessAccess(version:old,hasHelper:true,approvedBrowser:true) == .olderSystem,"Minimum OS guard")
+        check(AppleHelper.assessAccess(version:legacy,hasHelper:true,approvedBrowser:false) == .available,"Legacy helper path remains available")
+        check(AppleHelper.assessAccess(version:modern,hasHelper:true,approvedBrowser:false) == .browserApprovalRequired,"Modern helper requires browser approval")
+        check(AppleHelper.assessAccess(version:modern,hasHelper:true,approvedBrowser:true) == .available,"Approved modern browser can connect")
+        check(AppleHelper.assessAccess(version:modern,hasHelper:false,approvedBrowser:true) == .missingHelper,"Missing helper fails closed")
+        await controlEngine.connect()
+        check(controlEngine.state == .code,"Pairing view reconnects after a helper exit")
+        // Render both actual settings states without opening a window.
+        for (view,name) in [(controls,"apple-pairing-controls"),(blocked,"apple-connection-blocked")] {
+            let image=view.bitmapImageRepForCachingDisplay(in:view.bounds)!
+            view.cacheDisplay(in:view.bounds,to:image)
+            try image.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:artifacts+"/"+name+".png"))
+        }
         let real=ApplePasswords();await real.connect()
         check(real.state == .idle && real.trouble  !=  nil,"Tests cannot launch Apple's real helper")
         if #available(macOS 14.4,*) {
