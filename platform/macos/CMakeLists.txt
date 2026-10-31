@@ -7,6 +7,7 @@ include("${PROJECT_SOURCE_DIR}/cmake/Sparkle.cmake")
 
 add_executable(Slate MACOSX_BUNDLE
   main.mm
+  window_chrome_layout.mm
   tab_switcher.mm
   app_updater.mm
   ../../engine/webkit_engine.mm
@@ -130,3 +131,9 @@ add_custom_command(TARGET Slate POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:Slate>" "${CMAKE_CURRENT_BINARY_DIR}/Release/Slate.app"
   VERBATIM
 )
+
+add_executable(sidebar_hide_geometry_tests "${PROJECT_SOURCE_DIR}/tests/sidebar_hide_geometry_tests.mm" window_chrome_layout.mm)
+target_include_directories(sidebar_hide_geometry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+target_compile_options(sidebar_hide_geometry_tests PRIVATE -fobjc-arc)
+target_link_libraries(sidebar_hide_geometry_tests PRIVATE "-framework Cocoa")
+add_test(NAME sidebar_hide_geometry COMMAND sidebar_hide_geometry_tests)

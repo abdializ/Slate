@@ -30,6 +30,7 @@
 #import "platform/macos/passwords_panel.h"
 #import "SlatePasswords-Swift.h"
 #import "SlateSearch-Swift.h"
+#import "window_chrome_layout.h"
 #import "platform/macos/import_dialog.h"
 #import "platform/macos/specs_panel.h"
 #import "platform/macos/downloads_panel.h"
@@ -5889,7 +5890,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.plateBottom=[self.chromePlate.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-kPlateInset];
  self.plateFromTraffic=[self.chromePlate.leadingAnchor constraintGreaterThanOrEqualToAnchor:root.leadingAnchor constant:0];
  self.plateLeading.priority=NSLayoutPriorityDefaultHigh;
- self.plateFromTraffic.active=self.verticalTabs;
+ self.plateFromTraffic.active=NO;
  [NSLayoutConstraint activateConstraints:@[
   self.plateFromTop,
   self.plateLeading,
@@ -6260,7 +6261,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.tabLeadingTitle.constant=showStrip ? 112 : 12;
  self.resizeHandle.hidden=width==0;
  self.plateFromTraffic.active=NO;
- self.navLeadingTitle.constant=([self trafficLayoutMode]==3 ? 88 : 16);
+ self.navLeadingTitle.constant=16;
  // The horizontal plate meets the tab strip without an exposed gap.
  // Its remaining edges keep the same inset as the vertical plate.
  const BOOL isFs = (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
@@ -6365,6 +6366,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)toggleTabsReveal:(id)sender {
  if(self.quitting) return;
+ [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
+ [self.peekDismissTimer invalidate]; self.peekDismissTimer=nil; self.sidebarPeeking=NO;
  self.tabsCollapsed=!self.tabsCollapsed;
  [self persistUiPrefs];
  fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
@@ -6412,6 +6415,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
 }
 - (void)revealSidebarPeek {
+ if(!self.verticalTabs || !self.tabsCollapsed || self.quitting) return;
  self.sidebarPeeking = YES;
  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
   context.duration = 0.2;
@@ -6735,7 +6739,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   if(self.sidebarHeaderHeight) [self layoutTrafficLights];
   if(self.sidebarAddHeight) self.sidebarAddHeight.constant=rail ? kRailBubble : 28;
   if(self.sidebarAddWidth) self.sidebarAddWidth.active=rail;
-  if(self.navLeadingTitle) self.navLeadingTitle.constant=16;
+  // layoutTrafficLights owns navigation clearance for hidden-tab layouts.
   self.sidebarAdd.wantsLayer=YES;
   self.sidebarAdd.layer.cornerRadius=rail ? 10 : 8;
   self.sidebarAdd.layer.masksToBounds=YES;
@@ -6848,12 +6852,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    bottomFromTop=MAX(bottomFromTop, NSMaxY(root.bounds)-NSMinY(buttonInRoot));
   }
  }
- // Only the browser plate and sidebar items avoid the native controls. The
- // sidebar background remains continuous behind the titlebar.
+ // Keep button clearance in the toolbar. A full-height page inset here
+ // leaves an empty sidebar-sized strip even though sidebarWidth is already 0.
+ SlateApplyWindowControlClearance(self.plateFromTraffic,self.navLeadingTitle,
+  [self trafficLayoutMode]==3,rightEdge,fullScreen ? 5.0 : kPlateInset);
  if(self.plateFromTraffic) {
-  CGFloat safeLeading=rightEdge>0 ? ceil(rightEdge+16) : 0;
-  if(fabs(self.plateFromTraffic.constant-safeLeading)>0.5) self.plateFromTraffic.constant=safeLeading;
-  self.plateFromTraffic.active=(![self stripRevealed] && ![self sidebarRevealed] && rightEdge>0);
   if(self.verticalTabs && [self sidebarRevealed] && self.sidebarWidth) {
    CGFloat railWidth=[self sidebarLayoutWidth];
    if(fabs(self.sidebarWidth.constant-railWidth)>0.5) {
@@ -6871,8 +6874,6 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   safeHeight=MAX(kSidebarHeaderHeight,safeHeight);
   if(fabs(self.sidebarHeaderHeight.constant-safeHeight)>0.5) self.sidebarHeaderHeight.constant=safeHeight;
  }
- if(self.navLeadingTitle)
-  self.navLeadingTitle.constant=(!fullScreen && [self trafficLayoutMode]==3 ? 88 : 16);
 }
 - (void)windowDidUpdate:(NSNotification*)notification {
  if(notification.object!=self.window || self.quitting) return;
