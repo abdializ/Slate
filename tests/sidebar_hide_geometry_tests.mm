@@ -28,9 +28,9 @@ int main() { @autoreleasepool {
  NSLayoutConstraint* plateTrailing=[plate.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-8];
  [NSLayoutConstraint activateConstraints:@[
   [sidebar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],[sidebar.topAnchor constraintEqualToAnchor:root.topAnchor],[sidebar.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],sideWidth,
-  pageLeading,plateTrailing,[plate.topAnchor constraintEqualToAnchor:root.topAnchor constant:-8],[plate.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:8],
+  pageLeading,plateTrailing,[plate.topAnchor constraintEqualToAnchor:root.topAnchor constant:8],[plate.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-8],
   [toolbar.leadingAnchor constraintEqualToAnchor:plate.leadingAnchor],[toolbar.trailingAnchor constraintEqualToAnchor:plate.trailingAnchor],[toolbar.topAnchor constraintEqualToAnchor:plate.topAnchor],[toolbar.heightAnchor constraintEqualToConstant:52],
-  navLeading,[nav.centerYAnchor constraintEqualToAnchor:toolbar.centerYAnchor],[nav.widthAnchor constraintEqualToConstant:120],[nav.heightAnchor constraintEqualToConstant:26],
+  navLeading,[nav.centerYAnchor constraintEqualToAnchor:toolbar.centerYAnchor constant:1],[nav.widthAnchor constraintEqualToConstant:120],[nav.heightAnchor constraintEqualToConstant:26],
   [page.leadingAnchor constraintEqualToAnchor:plate.leadingAnchor],[page.trailingAnchor constraintEqualToAnchor:plate.trailingAnchor],[page.topAnchor constraintEqualToAnchor:toolbar.bottomAnchor],[page.bottomAnchor constraintEqualToAnchor:plate.bottomAnchor]
  ]];
  [root layoutSubtreeIfNeeded];
@@ -68,5 +68,52 @@ int main() { @autoreleasepool {
  // Hidden horizontal tabs use the same row, with no special sidebar reservation.
  SlateApplyWindowControlClearance(trafficInset,navLeading,YES,0,5);
  Check(navLeading.constant==16 && !trafficInset.active,"no invisible-controls reservation");
- [window close]; puts("PASS: hide/show, icon rail, 3 window widths, full-screen toolbar clearance and no leftover sidebar gutter");
+ // Reproduce the screenshot: native titlebar buttons sit above the toolbar.
+ NSButton* nativeClose=[window standardWindowButton:NSWindowCloseButton];
+ NSView* nativeParent=nativeClose.superview;
+ NSRect originalNativeFrame=nativeClose.frame;
+ NSRect nativeRect=[nativeParent convertRect:nativeClose.frame toView:root];
+ NSRect navRect=[nav convertRect:nav.bounds toView:root];
+ Check(fabs(NSMidY(nativeRect)-NSMidY(navRect))>5,"old titlebar position reproduces vertical misalignment");
+ NSView* cluster=Box(root,NSColor.clearColor);
+ NSLayoutConstraint* controlTop=[cluster.topAnchor constraintEqualToAnchor:root.topAnchor constant:12];
+ [NSLayoutConstraint activateConstraints:@[
+  [cluster.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],controlTop,
+  [cluster.widthAnchor constraintEqualToConstant:68],[cluster.heightAnchor constraintEqualToConstant:18]
+ ]];
+ NSArray<NSButton*>* buttons=SlateCreateToolbarWindowControls(window,cluster);
+ Check(buttons.count==3,"three AppKit-created toolbar window controls");
+ for(BOOL fullscreen : {NO,YES}) for(int repeat=0;repeat<3;++repeat) {
+  [window setContentSize:NSMakeSize(repeat==0 ? 1200 : repeat==1 ? 780 : 480,repeat==2 ? 360 : 800)];
+  SlateConfigureToolbarWindowControls(window,cluster,buttons,YES,fullscreen);
+  [root layoutSubtreeIfNeeded];
+  SlateAlignWindowControlsWithNavigation(cluster,controlTop,nav);
+  [root layoutSubtreeIfNeeded];
+  NSRect controls=[cluster convertRect:cluster.bounds toView:root];
+  NSRect navigation=[nav convertRect:nav.bounds toView:root];
+  Check(fabs(NSMidY(controls)-NSMidY(navigation))<0.5,"window buttons align with navigation controls");
+  SlateApplyWindowControlClearance(trafficInset,navLeading,YES,NSMaxX(controls),5);
+  [root layoutSubtreeIfNeeded];
+  navigation=[nav convertRect:nav.bounds toView:root];
+  Check(NSMinX(navigation)>=NSMaxX(controls)+15.5,"toolbar buttons do not overlap window controls");
+  Check(fabs(NSMinX(plate.frame)-5)<0.5,"alignment never reintroduces sidebar gutter");
+  Check(!cluster.hiddenOrHasHiddenAncestor,"toolbar controls are visible");
+  Check(nativeClose.superview==nativeParent && NSEqualRects(nativeClose.frame,originalNativeFrame),"native titlebar hierarchy and geometry stay intact");
+  if(!fullscreen) Check(nativeClose.hidden && nativeClose.alphaValue==0,"no duplicate native controls in hidden-tabs mode");
+  for(NSButton* button in buttons) {
+   Check(button.target==window,"window control actions target the real window");
+   Check(button.action==@selector(performClose:) || button.action==@selector(performMiniaturize:) || button.action==@selector(toggleFullScreen:),"native window actions remain connected");
+   Check(button.enabled==!(fullscreen && button.action==@selector(performMiniaturize:)),"minimize stays enabled outside fullscreen");
+   NSPoint center=[button convertPoint:NSMakePoint(NSMidX(button.bounds),NSMidY(button.bounds)) toView:root.superview];
+   NSView* hit=[root hitTest:center];
+   Check(hit==button || [hit isDescendantOf:button],"each window control receives clicks at its visual center");
+   NSView* frame=root.superview;
+   NSPoint framePoint=[button convertPoint:NSMakePoint(NSMidX(button.bounds),NSMidY(button.bounds)) toView:frame.superview];
+   NSView* windowHit=[frame hitTest:framePoint];
+   Check(windowHit==button || [windowHit isDescendantOf:button],"native titlebar does not intercept toolbar window controls");
+  }
+  SlateConfigureToolbarWindowControls(window,cluster,buttons,NO,NO);
+  Check(cluster.hidden && !nativeClose.hidden && nativeClose.alphaValue==1,"showing tabs restores native titlebar controls");
+ }
+ [window close]; puts("PASS: hide/show, icon rail, 3 window widths, full-screen toolbar clearance, centered clickable window controls and no leftover sidebar gutter");
  } return 0; }

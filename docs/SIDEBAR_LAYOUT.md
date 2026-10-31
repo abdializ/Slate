@@ -22,3 +22,15 @@ It first reproduces the old gutter, then verifies full page width after hiding,
 restoration after showing, icon-rail widths, repeated toggles, 1200/780/480-point
 windows, fullscreen insets and toolbar-button clearance. It does not activate or
 resize the user's running browser.
+
+When both tab layouts are hidden, the native titlebar buttons would still sit
+above the toolbar row. The existing content-hosted AppKit button cluster now
+serves this layout as well as fullscreen. Its center follows the navigation
+cluster's actual laid-out center, and its measured right edge sets toolbar-only
+clearance. Titlebar-owned buttons stay in their original hierarchy and are
+hidden only while their toolbar counterparts are in use. Showing tabs restores
+them. Minimize is enabled in a normal window and disabled in fullscreen.
+
+The native regression also reproduces the previous vertical mismatch, checks
+actual click hit-testing for all three AppKit-created controls, verifies window
+action targets and minimize state, and repeats the hidden/shown transitions.

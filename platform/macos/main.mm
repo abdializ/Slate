@@ -6111,28 +6111,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.trafficCluster.wantsLayer=YES;
  [root addSubview:self.trafficCluster];
  self.trafficCluster.hidden=YES;
- // Separate AppKit-created controls stay in our full-screen chrome. Leave
- // the window's titlebar-owned buttons in AppKit's hierarchy for transitions.
- NSMutableArray<NSButton*>* fullScreenButtons=[NSMutableArray array];
- NSUInteger trafficIndex=0;
- for(NSWindowButton kind : {NSWindowCloseButton,NSWindowMiniaturizeButton,NSWindowZoomButton}) {
-  NSButton* button=[NSWindow standardWindowButton:kind forStyleMask:self.window.styleMask];
-  if(!button) continue;
-  button.frame=NSMakeRect(trafficIndex*20,2,14,14);
-  button.target=self.window;
-  button.action=kind==NSWindowCloseButton ? @selector(performClose:) :
-   kind==NSWindowMiniaturizeButton ? @selector(performMiniaturize:) : @selector(toggleFullScreen:);
-  button.refusesFirstResponder=YES;
-  button.accessibilityLabel=kind==NSWindowCloseButton ? @"Close window" :
-   kind==NSWindowMiniaturizeButton ? @"Minimize window" : @"Exit full screen";
-  button.identifier=kind==NSWindowCloseButton ? @"SlateFullscreenClose" :
-   kind==NSWindowMiniaturizeButton ? @"SlateFullscreenMinimize" : @"SlateFullscreenExit";
-  button.toolTip=button.accessibilityLabel;
-  [self.trafficCluster addSubview:button];
-  [fullScreenButtons addObject:button];
-  ++trafficIndex;
- }
- self.fullScreenTrafficButtons=fullScreenButtons;
+ // AppKit-created toolbar controls serve hidden tabs and fullscreen. Leave
+ // the titlebar-owned buttons in AppKit's hierarchy for transitions.
+ self.fullScreenTrafficButtons=SlateCreateToolbarWindowControls(self.window,self.trafficCluster);
  self.trafficMode=-1;
  [NSLayoutConstraint activateConstraints:@[
   self.trafficLeading=[self.trafficCluster.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],
@@ -6828,17 +6809,21 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(!self.window || self.quitting || !self.window.contentView) return;
  NSView* root=self.window.contentView;
  const BOOL fullScreen=(self.window.styleMask & NSWindowStyleMaskFullScreen)!=0;
- self.trafficCluster.hidden=!fullScreen;
+ const BOOL sharesToolbar=[self trafficLayoutMode]==3;
+ SlateConfigureToolbarWindowControls(self.window,self.trafficCluster,
+  self.fullScreenTrafficButtons,sharesToolbar,fullScreen);
  if(fullScreen) {
   const CGFloat top=[self stripRevealed] ? (kTitlebarHeight-18)/2 :
    [self sidebarRevealed] ? 14 : 5+(kToolbarHeight-18)/2;
   if(fabs(self.trafficTop.constant-top)>0.5) self.trafficTop.constant=top;
-  for(NSButton* button in self.fullScreenTrafficButtons)
-   button.enabled=button.action!=@selector(performMiniaturize:) && !self.window.attachedSheet;
+ }
+ if(sharesToolbar) {
+  [root layoutSubtreeIfNeeded];
+  SlateAlignWindowControlsWithNavigation(self.trafficCluster,self.trafficTop,self.navCluster);
  }
  CGFloat rightEdge=0;
  CGFloat bottomFromTop=0;
- if(fullScreen) {
+ if(fullScreen || sharesToolbar) {
   [root layoutSubtreeIfNeeded];
   NSRect controls=[self.trafficCluster convertRect:self.trafficCluster.bounds toView:root];
   rightEdge=NSMaxX(controls);
@@ -13173,7 +13158,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self.window.contentView layoutSubtreeIfNeeded];
   NSView* root=self.window.contentView;
   int failures=fullScreen!=expectedFullScreen;
-  if(fullScreen) {
+  if(fullScreen || [self trafficLayoutMode]==3) {
    failures+=self.trafficCluster.hiddenOrHasHiddenAncestor || self.fullScreenTrafficButtons.count!=3;
    NSRect controls=[self.trafficCluster convertRect:self.trafficCluster.bounds toView:root];
    NSRect nav=[self.navCluster convertRect:self.navCluster.bounds toView:root];
@@ -13184,7 +13169,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
     NSView* hit=[root hitTest:center];
     failures+=button.hiddenOrHasHiddenAncestor || button.window!=self.window ||
      !(hit==button || [hit isDescendantOf:button]);
-    if(button.action==@selector(performMiniaturize:)) failures+=button.enabled;
+    if(fullScreen && button.action==@selector(performMiniaturize:)) failures+=button.enabled;
     else failures+=!button.enabled || button.target!=self.window;
    }
   } else {
