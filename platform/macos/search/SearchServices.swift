@@ -55,9 +55,14 @@ enum Vault {
         get { Store.settings.data(forKey: "search.keywords").flatMap { try? JSONDecoder().decode([Keyword].self, from: $0) } ?? [] }
         set { Store.settings.set(try? JSONEncoder().encode(newValue), forKey: "search.keywords") }
     }
+    @objc public static func searchURL(_ words: String) -> String? { Engine.url(for: words, template: engine.template(custom: custom))?.absoluteString }
     @objc public static var engineName: String { engine.name(custom: custom) }
     @objc public static func configure(directory: String) { Store.directory = URL(fileURLWithPath: directory, isDirectory: true) }
-    @objc public static func editable(_ text: String) -> String { URL(string: text).map(Address.editable) ?? text }
+    @objc public static func editable(_ text: String) -> String {
+        guard var parts = URLComponents(string: text) else { return text }
+        parts.user = nil; parts.password = nil
+        return parts.url.map(Address.editable) ?? ""
+    }
     static func profile(_ value: String) -> String { value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "default" }
 
     @objc public static func resolve(_ typed: String, committed: Bool, siteTemplate: String?) -> [String: String] {
@@ -94,6 +99,10 @@ enum Vault {
         return ["name": site.name, "host": site.host, "template": site.template]
     }
     @objc public func stop() { revision += 1; suggester.stop() }
+    @objc public static func permitsSuggestions(_ typed: String, privateTab: Bool, siteActive: Bool) -> Bool {
+        Store.settings.bool(forKey: "search.suggestions") && !privateTab && !siteActive &&
+        Keyword.match(typed, in: keywords) == nil && EngineSuggest.sendable(typed) && EngineSuggest.endpoint(for: engine) != nil
+    }
     @objc public func suggest(_ typed: String, privateTab: Bool, siteActive: Bool, completion: @escaping ([String]) -> Void) {
         stop()
         let mine = revision

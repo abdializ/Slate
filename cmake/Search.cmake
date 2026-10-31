@@ -56,3 +56,8 @@ target_include_directories(search_components_tests PRIVATE "${PROJECT_SOURCE_DIR
 target_compile_options(search_components_tests PRIVATE -fobjc-arc -Wno-incomplete-implementation)
 target_link_libraries(search_components_tests PRIVATE SlateSearchServicesLib "-framework Cocoa" "-framework WebKit" "-framework PDFKit" "-framework QuartzCore")
 add_test(NAME search_components COMMAND search_components_tests "${SLATE_SEARCH_BUILD}/test-artifacts")
+add_executable(omnibox_components_tests "${PROJECT_SOURCE_DIR}/tests/omnibox_components_tests.mm" "${PROJECT_SOURCE_DIR}/platform/macos/omnibox_overlay.mm")
+target_include_directories(omnibox_components_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+target_compile_options(omnibox_components_tests PRIVATE -fobjc-arc)
+target_link_libraries(omnibox_components_tests PRIVATE "-framework Cocoa" "-framework QuartzCore")
+add_test(NAME omnibox_components COMMAND omnibox_components_tests "${SLATE_SEARCH_BUILD}/test-artifacts")

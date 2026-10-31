@@ -99,8 +99,42 @@ import WebKit
             check(replies.count == 1, "slow reply discarded")
             service.stop()
         }
+        omniboxTests()
         await pageFindTests()
         print("PASS: \(checks) search checks")
+    }
+    @MainActor static func omniboxTests() {
+        let profile = "omnibox-test"
+        Store.settings.set(false, forKey: "search.commands")
+        check(AddressCommand.matching("settings") == nil, "commands off by default")
+        Store.settings.set(true, forKey: "search.commands")
+        check(AddressCommand.matching(" Preferences ") == .settings, "whole command alias")
+        check(AddressCommand.matching("settings for gmail") == nil && AddressCommand.matching("sett") == nil, "commands never capture prefixes or searches")
+        for command in AddressCommand.allCases { for alias in command.aliases { check(AddressCommand.matching(alias) == command, "command alias " + alias) } }
+        OmniboxHistory.record("https://alpha.com/", title: "Alpha home", profile: profile, privateTab: false)
+        OmniboxHistory.record("https://secret.example/", title: "Private", profile: profile, privateTab: true)
+        check(OmniboxHistory.all(profile).count == 1, "private visits never stored")
+        check(OmniboxHistory.all("another-profile").isEmpty, "history isolated by profile")
+        let bookmarks = [1,2,3].map { ["url": "https://kept\($0).com/", "title": "Alpha bookmark \($0)"] }
+        let offers = SlateOmniboxServices.offers(for: "alpha", bookmarks: bookmarks, imported: [], profile: profile, privateTab: false)
+        check(offers.count == 4 && offers[0]["kind"] == "bookmark" && offers[1]["kind"] == "bookmark" && offers[2]["url"] == "https://alpha.com/" && offers.last?["kind"] == "search", "bookmarks first, one history front door retained, search last")
+        check(SlateOmniboxServices.completion(for: "alpha", offers: offers) == ".com", "history completion precedes bookmark completion")
+        let duplicate = SlateOmniboxServices.offers(for: "alpha", bookmarks: [["url":"https://alpha.com", "title":"Alpha saved"]], imported: [], profile: profile, privateTab: false)
+        check(duplicate.filter { $0["url"]?.hasPrefix("https://alpha.com") == true }.count == 1 && duplicate.first?["kind"] == "bookmark", "same place is one bookmarked row")
+        let hidden = SlateOmniboxServices.offers(for: "alpha", bookmarks: [], imported: [], profile: profile, privateTab: true)
+        check(!hidden.contains { $0["kind"] == "visited" }, "private suggestions never reveal history")
+        let seed = SlateOmniboxServices.offers(for: "g", bookmarks: [], imported: [], profile: "empty", privateTab: false)
+        check(SlateOmniboxServices.completion(for: "g", offers: seed) == nil, "one letter never autocompletes an unvisited seed")
+        let oneLetter = SlateOmniboxServices.offers(for: "a", bookmarks: [], imported: [], profile: profile, privateTab: false)
+        check(SlateOmniboxServices.completion(for: "a", offers: oneLetter) == "lpha.com", "one letter completes a visited front door")
+        OmniboxHistory.record("https://history.com/", title: "History site", profile: profile, privateTab: false)
+        let command = SlateOmniboxServices.offers(for: "history", bookmarks: [], imported: [], profile: profile, privateTab: false)
+        check(command.first?["kind"] == "command" && SlateOmniboxServices.completion(for: "history", offers: command) == nil, "command on top suppresses a misleading address ending")
+        check(SlateSearchServices.editable("https://name:password@example.com/path").contains("password") == false, "credentials absent from editable address")
+        check(SlateOmniboxServices.nextSelection(-1, count: 3, step: 1) == 0 && SlateOmniboxServices.nextSelection(2, count: 3, step: 1) == -1 && SlateOmniboxServices.nextSelection(0, count: 3, step: -1) == -1 && SlateOmniboxServices.nextSelection(-1, count: 3, step: -1) == 2, "arrows walk off the list to no selection")
+        OmniboxHistory.clear(profile)
+        check(OmniboxHistory.all(profile).isEmpty && !FileManager.default.fileExists(atPath: OmniboxHistory.file(profile).path), "clear forgets history and cancels pending writes")
+        Store.settings.set(false, forKey: "search.commands")
     }
     @MainActor static func pageFindTests() async {
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))

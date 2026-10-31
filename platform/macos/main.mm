@@ -108,6 +108,14 @@ slate::NavigationDecision ResolveSearchAddress(std::string_view raw, BOOL commit
  if([result[@"kind"] isEqual:@"search"]) kind=slate::InputKind::Search;
  return {kind, std::string([result[@"url"] UTF8String] ?: "")};
 }
+void CollectOmniboxBookmarks(NSArray<SlateBookmark*>* nodes, NSString* query, NSMutableArray* results) {
+ for(SlateBookmark* node in nodes) {
+  if(results.count>=30) return;
+  if(node.isFolder) { CollectOmniboxBookmarks(node.children,query,results); continue; }
+  if([node.url rangeOfString:query options:NSCaseInsensitiveSearch].location!=NSNotFound || [node.title rangeOfString:query options:NSCaseInsensitiveSearch].location!=NSNotFound)
+   [results addObject:@{@"url":node.url ?: @"",@"title":node.title ?: @""}];
+ }
+}
 NSString* DataDirectory() {
  NSString* override=NSProcessInfo.processInfo.environment[@"SLATE_DATA_DIR"];
  if(override.length && override.isAbsolutePath) return override;
@@ -508,6 +516,18 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) NSView* chromePlate;
 @property(strong) NSView* stage;
 @property(weak) SlateOmniboxCard* activeSearchCard;
+@property BOOL summoning;
+@property BOOL summonCycling;
+@property(strong) id summonMonitor;
+@property(copy) NSArray<NSString*>* engineWords;
+@property(copy) NSString* engineWordsProfile;
+@property TabId engineWordsTab;
+@property(copy) NSString* addressTyped;
+@property(copy) NSString* importedHistorySpace;
+@property(copy) NSString* addressEnding;
+@property BOOL addressDeleting;
+@property(strong) NSMutableDictionary<NSString*,NSDictionary*>* omniboxDrafts;
+@property TabId omniboxDraftTab;
 @property(strong) NSView* tabCluster;
 @property(strong) NSView* tabStrip;
 @property(strong) NSStackView* tabPills;
@@ -745,6 +765,12 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)saveSession;
 - (void)scheduleSave;
 - (void)activateTab:(TabId)identifier;
+- (void)summonTabs:(id)sender;
+- (void)runAddressCommand:(NSString*)command;
+- (void)showHistory:(id)sender;
+- (NSImage*)cachedOmniboxIcon:(NSString*)url;
+- (void)rememberOmniboxDraft;
+- (void)restoreOmniboxDraft:(TabId)identifier;
 - (BOOL)openSplitWithTab:(TabId)identifier side:(slate::SplitSide)side base:(TabId)base;
 - (BOOL)replaceEmptySplitTab:(TabId)empty withTab:(TabId)identifier;
 - (BOOL)isSplitPlaceholderTab:(TabId)identifier;
@@ -3324,6 +3350,9 @@ typedef NS_ENUM(NSInteger, SlateSuggestionKind) {
  SlateSuggestionKindURL=1,      // globe icon
  SlateSuggestionKindHistory=2,  // clock / globe icon
  SlateSuggestionKindSite=4,
+ SlateSuggestionKindBookmark=5,
+ SlateSuggestionKindCommand=6,
+ SlateSuggestionKindSuggested=7,
  SlateSuggestionKindOpen=3,     // open tab dot icon (5px circle)
 };
 @interface SlateSuggestion : NSObject
@@ -3332,13 +3361,27 @@ typedef NS_ENUM(NSInteger, SlateSuggestionKind) {
 @property(copy) NSString* query;
 @property SlateSuggestionKind kind;
 @property(copy) NSDictionary* site;
+@property(copy) NSDictionary<NSString*,NSString*>* payload;
+@property(copy) NSString* command;
 @property TabId tabId;
++ (instancetype)offer:(NSDictionary<NSString*,NSString*>*)offer;
 + (instancetype)search:(NSString*)title query:(NSString*)query;
 + (instancetype)url:(NSString*)title subtitle:(NSString*)subtitle query:(NSString*)query;
 + (instancetype)history:(NSString*)title subtitle:(NSString*)subtitle query:(NSString*)query;
 + (instancetype)open:(NSString*)title subtitle:(NSString*)subtitle query:(NSString*)query tabId:(TabId)tabId;
 @end
 @implementation SlateSuggestion
++ (instancetype)offer:(NSDictionary<NSString*,NSString*>*)offer {
+ SlateSuggestion* item=[self new]; item.payload=offer;
+ NSString* kind=offer[@"kind"];
+ item.kind=(SlateSuggestionKind)[@{@"visited":@(SlateSuggestionKindHistory),@"seed":@(SlateSuggestionKindURL),@"bookmark":@(SlateSuggestionKindBookmark),@"search":@(SlateSuggestionKindSearch),@"suggested":@(SlateSuggestionKindSuggested),@"command":@(SlateSuggestionKindCommand)}[kind] integerValue];
+ NSString* key=offer[@"key"] ?: @"";
+ item.title=![kind isEqual:@"suggested"] && [key.lowercaseString hasPrefix:@"www."] ? [key substringFromIndex:4] : key;
+ item.subtitle=offer[@"title"] ?: @"";
+ item.query=([kind isEqual:@"search"] || [kind isEqual:@"suggested"]) ? key : (offer[@"url"] ?: @"");
+ item.command=offer[@"command"];
+ return item;
+}
 + (instancetype)search:(NSString*)title query:(NSString*)query {
  SlateSuggestion* item=[self new];
  item.title=title; item.subtitle=@""; item.query=query; item.kind=SlateSuggestionKindSearch;
@@ -3370,120 +3413,19 @@ typedef NS_ENUM(NSInteger, SlateSuggestionKind) {
 - (BOOL)canBecomeKeyWindow { return NO; }
 - (BOOL)canBecomeMainWindow { return NO; }
 @end
-@interface SlateSuggestRow : NSView
+@interface SlateSuggestRow : SlateOmniboxRow
 @property(weak) SlateDelegate* owner;
 @property(strong) SlateSuggestion* item;
-@property(strong) NSView* fill;
-@property(strong) NSTextField* label;
-@property(nonatomic) BOOL highlighted;
 @end
 @implementation SlateSuggestRow
 - (instancetype)initWithItem:(SlateSuggestion*)item owner:(SlateDelegate*)owner {
- self=[super initWithFrame:NSZeroRect];
- if(self) {
-  _item=item; _owner=owner;
-  self.translatesAutoresizingMaskIntoConstraints=NO;
-  self.wantsLayer=YES;
-  // Highlight fill pill — inset from edges, rounded
-  _fill=[[NSView alloc] initWithFrame:NSZeroRect];
-  _fill.translatesAutoresizingMaskIntoConstraints=NO;
-  _fill.wantsLayer=YES;
-  _fill.layer.cornerRadius=8;
-  if(@available(macOS 11.0,*)) _fill.layer.cornerCurve=kCACornerCurveContinuous;
-  NSColor* ink = owner.barInk ?: NSColor.labelColor;
-  NSColor* muted = owner.barMuted ?: [ink colorWithAlphaComponent:0.55];
-
-  NSView* leadingIndicator = nil;
-  if(item.kind == SlateSuggestionKindOpen) {
-   NSView* dot = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 6, 6)];
-   dot.wantsLayer = YES;
-   dot.layer.cornerRadius = 3;
-   dot.layer.backgroundColor = [ink colorWithAlphaComponent:0.55].CGColor;
-   dot.translatesAutoresizingMaskIntoConstraints = NO;
-   leadingIndicator = dot;
-  } else {
-   NSString* iconName=(item.kind==SlateSuggestionKindSearch) ? @"magnifyingglass" : ((item.kind==SlateSuggestionKindHistory) ? @"clock" : @"globe");
-   NSImageSymbolConfiguration* iconConf=[NSImageSymbolConfiguration configurationWithPointSize:14 weight:NSFontWeightLight];
-   NSImageView* icon=[[NSImageView alloc] initWithFrame:NSZeroRect];
-   icon.image=[[NSImage imageWithSystemSymbolName:iconName accessibilityDescription:nil] imageWithSymbolConfiguration:iconConf];
-   icon.contentTintColor=muted;
-   icon.translatesAutoresizingMaskIntoConstraints=NO;
-   leadingIndicator = icon;
-  }
-  // Label: title (medium) + optional " — domain" (muted)
-  NSMutableAttributedString* astr=[[NSMutableAttributedString alloc] init];
-  NSString* mainTitle=item.title ?: @"";
-  NSDictionary* titleAttr=@{
-   NSFontAttributeName:[NSFont systemFontOfSize:14 weight:NSFontWeightMedium],
-   NSForegroundColorAttributeName:ink
-  };
-  [astr appendAttributedString:[[NSAttributedString alloc] initWithString:mainTitle attributes:titleAttr]];
-  if(item.subtitle.length) {
-   NSDictionary* mutedAttr=@{
-    NSFontAttributeName:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
-    NSForegroundColorAttributeName:muted
-   };
-   NSString* suffix=[NSString stringWithFormat:@"  —  %@", item.subtitle];
-   [astr appendAttributedString:[[NSAttributedString alloc] initWithString:suffix attributes:mutedAttr]];
-  }
-  _label=[NSTextField labelWithString:@""];
-  _label.attributedStringValue=astr;
-  _label.lineBreakMode=NSLineBreakByTruncatingTail;
-  _label.translatesAutoresizingMaskIntoConstraints=NO;
-  _label.refusesFirstResponder=YES;
-  [_label setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-  [_label setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-  [self addSubview:_fill];
-  [self addSubview:leadingIndicator];
-  [self addSubview:_label];
-
-  const CGFloat indicatorSize = (item.kind == SlateSuggestionKindOpen) ? 6 : 18;
-  const CGFloat indicatorLead = (item.kind == SlateSuggestionKindOpen) ? 22 : 18;
-  const CGFloat labelGap = (item.kind == SlateSuggestionKindOpen) ? 16 : 12;
-
-  [NSLayoutConstraint activateConstraints:@[
-   [self.heightAnchor constraintEqualToConstant:44],
-   // Fill spans full row with 4pt horizontal and 2pt vertical inset
-   [_fill.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:4],
-   [_fill.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-4],
-   [_fill.topAnchor constraintEqualToAnchor:self.topAnchor constant:2],
-   [_fill.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-2],
-   // Indicator: centered vertically
-   [leadingIndicator.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:indicatorLead],
-   [leadingIndicator.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-   [leadingIndicator.widthAnchor constraintEqualToConstant:indicatorSize],
-   [leadingIndicator.heightAnchor constraintEqualToConstant:indicatorSize],
-   // Label right of indicator
-   [_label.leadingAnchor constraintEqualToAnchor:leadingIndicator.trailingAnchor constant:labelGap],
-   [_label.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-18],
-   [_label.centerYAnchor constraintEqualToAnchor:self.centerYAnchor]
-  ]];
- }
+ NSString* kind=item.kind==SlateSuggestionKindSite ? @"site" : item.kind==SlateSuggestionKindOpen ? @"open" : item.payload[@"kind"] ?: (item.kind==SlateSuggestionKindSearch ? @"search" : @"visited");
+ __weak SlateDelegate* weakOwner=owner;
+ NSImage* icon=([kind isEqual:@"search"] || [kind isEqual:@"site"]) ? [owner cachedOmniboxIcon:item.payload[@"url"] ?: item.site[@"host"]] : nil;
+ self=[super initWithTitle:item.title detail:item.subtitle kind:kind image:icon action:^{ [weakOwner pickSuggestion:item]; }];
+ if(self) { _owner=owner; _item=item; }
  return self;
 }
-- (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
-- (BOOL)acceptsFirstResponder { return NO; }
-- (void)updateTrackingAreas {
- [super updateTrackingAreas];
- for(NSTrackingArea* area in self.trackingAreas) [self removeTrackingArea:area];
- NSTrackingArea* area=[[NSTrackingArea alloc] initWithRect:self.bounds
-  options:NSTrackingMouseEnteredAndExited|NSTrackingActiveAlways|NSTrackingInVisibleRect
-  owner:self userInfo:nil];
- [self addTrackingArea:area];
-}
-- (void)setHighlighted:(BOOL)highlighted {
- _highlighted=highlighted;
- NSColor* ink = self.owner.barInk ?: NSColor.labelColor;
- self.fill.layer.backgroundColor=highlighted
-  ? [ink colorWithAlphaComponent:0.12].CGColor
-  : NSColor.clearColor.CGColor;
-}
-- (void)mouseEntered:(NSEvent*)event {
- self.owner.suggestHighlight=[self.owner.suggestStack.arrangedSubviews indexOfObject:self];
- [self.owner applySuggestionHighlight];
-}
-- (void)mouseExited:(NSEvent*)event {}
-- (void)mouseDown:(NSEvent*)event { [self.owner pickSuggestion:self.item]; }
 @end
 
 static NSImage* g_graniteTile = nil;
@@ -4531,14 +4473,15 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    [_brandGlyph.centerXAnchor constraintEqualToAnchor:_brandGroup.centerXAnchor],
    [_brandGlyph.topAnchor constraintEqualToAnchor:_brandGroup.topAnchor],
    [_brandGlyph.widthAnchor constraintEqualToConstant:glyphWidth],
-   [_brandGlyph.heightAnchor constraintEqualToConstant:glyphHeight],
+   [_brandGlyph.heightAnchor constraintEqualToConstant:0],
    [_omniboxCard.centerXAnchor constraintEqualToAnchor:_brandGroup.centerXAnchor],
-   [_omniboxCard.topAnchor constraintEqualToAnchor:_brandGlyph.bottomAnchor constant:26.0],
+   [_omniboxCard.topAnchor constraintEqualToAnchor:_brandGroup.topAnchor],
    [_omniboxCard.widthAnchor constraintEqualToAnchor:_brandGroup.widthAnchor],
-   [_omniboxCard.heightAnchor constraintEqualToConstant:52.0],
+   [_omniboxCard.heightAnchor constraintEqualToConstant:kFieldHeight],
    [_omniboxCard.bottomAnchor constraintEqualToAnchor:_brandGroup.bottomAnchor]
   ]];
-  [self startGreetingTimer];
+  _brandGlyph.hidden=YES;
+  _greeting.hidden=YES;
  }
  return self;
 }
@@ -4569,20 +4512,19 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)viewWillMoveToWindow:(NSWindow*)newWindow {
  [super viewWillMoveToWindow:newWindow];
- if(newWindow) [self startGreetingTimer];
- else [self stopGreetingTimer];
+ [self stopGreetingTimer];
 }
 - (void)updateGreetingMessage {
   const auto* curTab=self.owner ? [self.owner selectedTab] : nullptr;
   const BOOL isIncog=curTab && curTab->incognito;
   if(isIncog) {
    self.greeting.stringValue=@"🕶 Untrackable Mode";
-   self.greeting.hidden=NO;
-   self.omniboxCard.placeholder=@"Search untrackably or enter address";
+   self.greeting.hidden=YES;
+   self.omniboxCard.placeholder=@"Enter a web address";
   } else {
    self.greeting.stringValue=@"";
    self.greeting.hidden=YES;
-   self.omniboxCard.placeholder=@"Search or enter address";
+   self.omniboxCard.placeholder=@"Enter a web address";
   }
   self.greeting.textColor=self.owner.barInk ?: NSColor.labelColor;
   [self setNeedsLayout:YES];
@@ -4716,12 +4658,12 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    ? self.enclosingScrollView.contentView.bounds.size.height
    : NSHeight(self.bounds);
 
-  const CGFloat cardW=MIN(680.0, MAX(280.0, w-32.0));
+  const CGFloat cardW=MIN(kFieldWidth, MAX(0.0, w-28.0));
   const NSSize glyphSize=self.brandGlyph.image.size;
   const CGFloat glyphHeight=glyphSize.width>0 ? 52.0*glyphSize.height/glyphSize.width : 64.0;
-  const CGFloat groupH=glyphHeight+26.0+52.0;
+  const CGFloat groupH=kFieldHeight;
   const CGFloat maxY=MAX(48.0, visibleHeight-groupH-32.0);
-  const CGFloat groupY=MIN(maxY, MAX(48.0, round(visibleHeight*0.35-groupH/2.0)));
+  const CGFloat groupY=MIN(maxY, MAX(48.0, round((visibleHeight-groupH)/2.0-30.0)));
   self.brandGroup.frame=NSMakeRect((w-cardW)/2.0,groupY,cardW,groupH);
   [self.brandGroup layoutSubtreeIfNeeded];
   [self.omniboxCard layoutSubtreeIfNeeded];
@@ -5261,16 +5203,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)showSuggestionsForCard:(SlateOmniboxCard*)card query:(NSString*)query { [self.owner showSuggestionsForCard:card query:query]; }
 - (void)moveSuggestionDelta:(NSInteger)delta { [self.owner moveSuggestionDelta:delta]; }
 - (void)hideSuggestions { [self.owner hideSuggestions]; }
-- (void)submitOmniboxCard:(SlateOmniboxCard*)card {
- if(self.owner.suggestPanel.visible && self.owner.suggestHighlight>=0 && self.owner.suggestHighlight<(NSInteger)self.owner.suggestions.count) {
-  [self.owner pickSuggestion:self.owner.suggestions[self.owner.suggestHighlight]]; return;
- }
- NSString* value=[card.field.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
- const auto target=ResolveSearchAddress(value.UTF8String ?: "", YES, card.searchSite[@"template"]);
- if(target.kind==slate::InputKind::Invalid) { [card shake]; return; }
- card.searchSite=nil; [self.owner hideSuggestions];
- [self.owner navigateDetachedTab:self.tabId toURL:target.url];
-}
+- (void)submitOmniboxCard:(SlateOmniboxCard*)card { [self.owner submitOmniboxCard:card]; }
 - (void)showSiteInformation:(id)sender {
  (void)sender;
  const auto* tab=model.find(self.tabId);
@@ -6138,63 +6071,36 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   self.addressTrailing=[self.address.trailingAnchor constraintEqualToAnchor:self.autofillButton.leadingAnchor constant:-4],
   [self.address.centerYAnchor constraintEqualToAnchor:self.omnibox.centerYAnchor]
  ]];
- // ── Suggestion dropdown ──────────────────────────────────────────────────
- // White/accent rounded card with drop shadow (square top corners applied during positioning)
- NSView* paletteRoot = [[NSView alloc] initWithFrame:NSZeroRect];
- paletteRoot.translatesAutoresizingMaskIntoConstraints = NO;
- paletteRoot.wantsLayer = YES;
- paletteRoot.layer.masksToBounds = NO;
- paletteRoot.layer.shadowColor = [NSColor.blackColor CGColor];
- paletteRoot.layer.shadowOpacity = 0.18;
- paletteRoot.layer.shadowRadius = 16;
- paletteRoot.layer.shadowOffset = CGSizeMake(0, -2);
-
- NSView* card = [[NSView alloc] initWithFrame:NSZeroRect];
- card.translatesAutoresizingMaskIntoConstraints = NO;
- card.wantsLayer = YES;
- card.layer.cornerRadius = 14;
- if(@available(macOS 11.0,*)) card.layer.cornerCurve = kCACornerCurveContinuous;
- card.layer.masksToBounds = YES;
- card.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
- self.suggestCard = card;
- [paletteRoot addSubview:card];
- [NSLayoutConstraint activateConstraints:@[
-  [card.leadingAnchor constraintEqualToAnchor:paletteRoot.leadingAnchor],
-  [card.trailingAnchor constraintEqualToAnchor:paletteRoot.trailingAnchor],
-  [card.topAnchor constraintEqualToAnchor:paletteRoot.topAnchor],
-  [card.bottomAnchor constraintEqualToAnchor:paletteRoot.bottomAnchor],
- ]];
-
- // ── Suggestion stack ────────────────────────────────────────────────────
- self.suggestStack = [NSStackView stackViewWithViews:@[]];
- self.suggestStack.orientation = NSUserInterfaceLayoutOrientationVertical;
- self.suggestStack.spacing = 0;
- self.suggestStack.alignment = NSLayoutAttributeLeading;
- self.suggestStack.distribution = NSStackViewDistributionFill;
- self.suggestStack.edgeInsets = NSEdgeInsetsMake(4, 0, 4, 0);
- self.suggestStack.translatesAutoresizingMaskIntoConstraints = NO;
-
- [card addSubview:self.suggestStack];
- [NSLayoutConstraint activateConstraints:@[
-  [self.suggestStack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
-  [self.suggestStack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
-  [self.suggestStack.topAnchor constraintEqualToAnchor:card.topAnchor],
-  [self.suggestStack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
- ]];
-
- // ── NSPanel ──────────────────────────────────────────────────────────────
- self.suggestPanel=[[SlateSuggestPanel alloc] initWithContentRect:NSMakeRect(0,0,520,40)
-  styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel
-  backing:NSBackingStoreBuffered defer:NO];
- self.suggestPanel.opaque=NO;
- self.suggestPanel.backgroundColor=NSColor.clearColor;
- self.suggestPanel.hasShadow=NO; // shadow is on paletteRoot.layer
- self.suggestPanel.hidesOnDeactivate=YES;
- self.suggestPanel.floatingPanel=YES;
- self.suggestPanel.becomesKeyOnlyIfNeeded=YES;
- self.suggestPanel.releasedWhenClosed=NO;
- self.suggestPanel.level=NSPopUpMenuWindowLevel;
- self.suggestPanel.contentView=paletteRoot;
+ // The reference's six-point list padding, hairline and neutral ground.
+ NSView* paletteRoot=[[NSView alloc] initWithFrame:NSZeroRect];
+ paletteRoot.wantsLayer=YES; paletteRoot.layer.cornerRadius=14;
+ paletteRoot.layer.cornerCurve=kCACornerCurveContinuous; paletteRoot.layer.borderWidth=1;
+ paletteRoot.layer.masksToBounds=YES;
+ self.suggestCard=paletteRoot;
+ NSScrollView* offersScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect];
+ offersScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+ offersScroll.drawsBackground=NO; offersScroll.hasVerticalScroller=YES;
+ offersScroll.autohidesScrollers=YES; offersScroll.scrollerStyle=NSScrollerStyleOverlay;
+ self.suggestStack=[[SlateOmniboxStack alloc] initWithFrame:NSZeroRect];
+ self.suggestStack.orientation=NSUserInterfaceLayoutOrientationVertical;
+ self.suggestStack.alignment=NSLayoutAttributeLeading; self.suggestStack.spacing=0;
+ self.suggestStack.edgeInsets=NSEdgeInsetsMake(6,6,6,6);
+ self.suggestStack.distribution=NSStackViewDistributionFill;
+ offersScroll.documentView=self.suggestStack;
+ [paletteRoot addSubview:offersScroll];
+ self.suggestPanel=[[SlateSuggestPanel alloc] initWithContentRect:NSMakeRect(0,0,560,46)
+  styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
+ self.suggestPanel.opaque=NO; self.suggestPanel.backgroundColor=NSColor.clearColor;
+ self.suggestPanel.hasShadow=YES; self.suggestPanel.hidesOnDeactivate=YES;
+ self.suggestPanel.floatingPanel=YES; self.suggestPanel.becomesKeyOnlyIfNeeded=YES;
+ self.suggestPanel.releasedWhenClosed=NO; self.suggestPanel.contentView=paletteRoot;
+ __weak SlateDelegate* summonOwner=self;
+ self.summonMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged handler:^NSEvent*(NSEvent* event) {
+  if(summonOwner.summoning && summonOwner.summonCycling && !(event.modifierFlags & NSEventModifierFlagCommand)) {
+   summonOwner.summonCycling=NO; [summonOwner submitOmniboxCard:summonOwner.omniboxOverlay.card];
+  }
+  return event;
+ }];
  self.status=[self label:@"" size:11 color:NSColor.tertiaryLabelColor];
  self.status.translatesAutoresizingMaskIntoConstraints=NO; self.status.hidden=YES;
  [root addSubview:self.status];
@@ -7257,6 +7163,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.tabIcons removeAllObjects];
 
  // Step 2: Set current space ID
+ [self rememberOmniboxDraft]; self.omniboxDraftTab=0;
  self.spacesManager.currentSpaceId = newSpaceId;
  [self.spacesManager saveSpaces];
 
@@ -9109,6 +9016,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)rebuildHome {
  if(!self.homeBoard) return;
+ [self restoreOmniboxDraft:model.selected()];
  const BOOL systemDark=[[NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua,NSAppearanceNameAqua]]
   isEqualToString:NSAppearanceNameDarkAqua];
  const BOOL isDark=(self.themeMode==1) ? NO : ((self.themeMode==2) ? YES : systemDark);
@@ -10151,6 +10059,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 // Slate note: Selecting an unloaded tab creates its runtime on demand; selecting an already loaded tab
 // reuses it.
 - (void)activateTab:(TabId)identifier {
+ [self rememberOmniboxDraft];
  if(self.quitting) { [self scheduleRefresh]; return; }
  if(SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)]) {
   [detached selectTab:identifier];
@@ -10331,11 +10240,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
     it->second.video_quality="";
     it->second.is_hdr=false;
    }
-   if(finished && identifier==model.selected()) {
+   if(finished && (identifier==model.selected() || [weakSelf detachedTabForWindow:NSApp.keyWindow].tabId==identifier)) {
     if(weakSelf.findBar.isVisible) [weakSelf.findBar performSearchWithQuery:weakSelf.findBar.searchField.stringValue];
     const auto* tab=model.find(identifier);
-    for(NSView* view in it->second.host.subviews) if([view isKindOfClass:WKWebView.class])
-     [[SlateSearchServices shared] visited:(WKWebView*)view profile:weakSelf.spacesManager.currentSpaceId ?: @"default" privateTab:tab && tab->incognito];
+    for(NSView* view in it->second.host.subviews) if([view isKindOfClass:WKWebView.class]) {
+     WKWebView* web=(WKWebView*)view;
+     [SlateOmniboxServices record:web.URL.absoluteString ?: @"" title:web.title ?: @"" profile:weakSelf.spacesManager.currentSpaceId ?: @"default" privateTab:!tab || tab->incognito];
+     [[SlateSearchServices shared] visited:web profile:weakSelf.spacesManager.currentSpaceId ?: @"default" privateTab:!tab || tab->incognito];
+    }
    }
    if(started || finished) {
     if(identifier==model.selected()) [weakSelf updateNavChrome];
@@ -10595,6 +10507,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   }
   if(!history.empty()) {
    importedHistory=history;
+   self.importedHistorySpace=self.spacesManager.currentSpaceId ?: @"default";
   }
   [weakSelf showImportNotification:summary];
  }];
@@ -10790,6 +10703,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 // Slate note: Remove page-owned runtime objects after close completion, retaining or deleting tab metadata
 // according to the close reason.
 - (void)finishClose:(TabId)identifier {
+ NSString* suffix=[NSString stringWithFormat:@":%llu",(unsigned long long)identifier];
+ for(NSString* key in [self.omniboxDrafts.allKeys copy]) if([key hasSuffix:suffix]) [self.omniboxDrafts removeObjectForKey:key];
  SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)];
  const auto closeReason=model.close_reason(identifier);
  if(detached && closeReason!=slate::CloseReason::Discard) {
@@ -10980,6 +10895,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)navigate:(id)sender {
  if(self.quitting || model.closing(model.selected())) return;
  NSString* text=[self.address.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+ NSString* command=self.addressEnding ? nil : [SlateOmniboxServices commandFor:text];
+ if(command) { [self hideSuggestions]; [self runAddressCommand:command]; return; }
  if(!text.length) {
   if([self.address respondsToSelector:@selector(shake)]) [(id)self.address shake];
   return;
@@ -10994,7 +10911,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.address.stringValue=resolved;
  self.addressDirty=NO;
  self.addressOpen=NO;
- const auto identifier=model.selected(); model.update(identifier,decision.url,{});
+ const auto identifier=model.selected();
+ [self.omniboxDrafts removeObjectForKey:[NSString stringWithFormat:@"%@:%llu",self.spacesManager.currentSpaceId ?: @"default",(unsigned long long)identifier]]; self.omniboxDraftTab=0;
+ model.update(identifier,decision.url,{});
  if(!runtimes.contains(identifier)) [self activateTab:identifier];
  else if(runtimes.at(identifier).engine) {
   runtimes.at(identifier).engine->navigate(decision.url);
@@ -11134,6 +11053,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(fetchSuggestions) object:nil];
  [self.suggestTask cancel]; self.suggestTask=nil;
  [[SlateSearchServices shared] stop];
+ self.engineWords=@[];
  self.suggestions=@[];
  self.suggestHighlight=-1;
  for(NSView* row in [self.suggestStack.arrangedSubviews copy]) {
@@ -11143,73 +11063,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.suggestPanel orderOut:nil];
 }
 - (void)positionSuggestPanel {
- if(self.activeSearchCard.field.currentEditor) { [self positionSuggestPanelBelowOverlay:self.activeSearchCard]; return; }
- if(self.omniboxOverlay && self.omniboxOverlay.card.field.currentEditor != nil) {
-  [self positionSuggestPanelBelowOverlay:self.omniboxOverlay.card];
-  return;
- }
- if(self.homeSearchField && self.homeSearchField.currentEditor != nil) {
-  [self positionSuggestPanelBelowHomeSearch];
-  return;
- }
- if(!self.suggestions.count || !self.omnibox || !self.window) return;
- // Convert title bar omnibox frame to screen coords using un-flipped window base coordinates
- NSRect fieldInWindow = [self.omnibox convertRect:self.omnibox.bounds toView:nil];
- NSRect fieldScreen = [self.window convertRectToScreen:fieldInWindow];
- // Panel width matches omnibox width, capped to 640pt max and centered
- const CGFloat panelW = MIN(640.0, NSWidth(fieldScreen));
- const CGFloat rowCount = MIN(8.0, (CGFloat)self.suggestions.count);
- const CGFloat height = rowCount * 44.0 + 8.0; // 44pt per row + 8pt total vertical stack padding
- const CGFloat panelX = NSMidX(fieldScreen) - panelW / 2.0;
- const CGFloat panelY = NSMinY(fieldScreen) - height - 4.0;
- NSRect frame = NSMakeRect(panelX, panelY, panelW, height);
- if(self.suggestCard) {
-  self.suggestCard.layer.cornerRadius = 14;
-  if(@available(macOS 11.0, *)) self.suggestCard.layer.cornerCurve = kCACornerCurveContinuous;
-  self.suggestCard.layer.borderWidth = 1.0;
-
-  NSColor* accent = self.barColor;
-  BOOL isDark = YES;
-  if(accent) {
-   CGFloat r=0, g=0, b=0, a=0;
-   NSColor* rgb=[accent colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: accent;
-   [rgb getRed:&r green:&g blue:&b alpha:&a];
-   CGFloat lum=0.2126*r + 0.7152*g + 0.0722*b;
-   isDark=lum<0.55;
-  } else {
-   isDark=[[self.window.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua];
-  }
-
-  NSColor* cardBg=nil;
-  NSColor* borderColor=nil;
-  if(accent) {
-   if(isDark) {
-    cardBg=[accent blendedColorWithFraction:0.32 ofColor:[NSColor blackColor]];
-    if(!cardBg) cardBg=[NSColor colorWithCalibratedWhite:0.18 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:1.0 alpha:0.20];
-   } else {
-    cardBg=[accent blendedColorWithFraction:0.35 ofColor:[NSColor whiteColor]];
-    if(!cardBg) cardBg=[NSColor colorWithCalibratedWhite:0.96 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:0.0 alpha:0.16];
-   }
-  } else {
-   if(isDark) {
-    cardBg=[NSColor colorWithCalibratedWhite:0.18 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:1.0 alpha:0.20];
-   } else {
-    cardBg=[NSColor colorWithCalibratedWhite:0.96 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:0.0 alpha:0.16];
-   }
-  }
-  self.suggestCard.layer.backgroundColor=cardBg.CGColor;
-  self.suggestCard.layer.borderColor=borderColor.CGColor;
- }
- NSWindow* fieldWindow=self.activeSearchCard.window ?: self.window;
- if(self.suggestPanel.parentWindow != fieldWindow) {
-  [self.suggestPanel.parentWindow removeChildWindow:self.suggestPanel];
-  [fieldWindow addChildWindow:self.suggestPanel ordered:NSWindowAbove];
- }
- [self.suggestPanel setFrame:frame display:YES];
+ NSView* anchor=self.activeSearchCard ?: self.address;
+ [self positionSuggestPanelBelowOverlay:anchor];
 }
 - (void)positionSuggestPanelBelowHomeSearch {
  [self positionSuggestPanelBelowOverlay:self.homeBoard.omniboxCard];
@@ -11227,7 +11082,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)showSuggestionList:(NSArray*)items fromHomeSearch:(BOOL)homeSearch {
  self.suggestions=items ?: @[];
- self.suggestHighlight=self.suggestions.count ? 0 : -1;
+ self.suggestHighlight=self.summoning && self.suggestions.count ? 0 : -1;
  for(NSView* row in [self.suggestStack.arrangedSubviews copy]) {
   [self.suggestStack removeArrangedSubview:row];
   [row removeFromSuperview];
@@ -11239,100 +11094,115 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  for(SlateSuggestion* item in self.suggestions) {
   SlateSuggestRow* row=[[SlateSuggestRow alloc] initWithItem:item owner:self];
   [self.suggestStack addArrangedSubview:row];
-  [row.widthAnchor constraintEqualToAnchor:self.suggestStack.widthAnchor].active=YES;
+  [row.widthAnchor constraintEqualToAnchor:self.suggestStack.widthAnchor constant:-12].active=YES;
  }
  [self applySuggestionHighlight];
  if(homeSearch) [self positionSuggestPanelBelowHomeSearch];
  else [self positionSuggestPanel];
+ NSScrollView* scroll=self.suggestStack.enclosingScrollView;
+ [scroll.contentView scrollToPoint:NSZeroPoint]; [scroll reflectScrolledClipView:scroll.contentView];
  NSWindow* fieldWindow=self.activeSearchCard.window ?: self.window;
  if(self.suggestPanel.parentWindow != fieldWindow) {
   [self.suggestPanel.parentWindow removeChildWindow:self.suggestPanel];
   [fieldWindow addChildWindow:self.suggestPanel ordered:NSWindowAbove];
  }
+ BOOL arriving=!self.suggestPanel.visible;
  [self.suggestPanel orderFront:nil];
+ if(arriving && !SlateOmniboxReducedMotion()) {
+  self.suggestPanel.alphaValue=0;
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) { context.duration=0.14; self.suggestPanel.animator.alphaValue=1; } completionHandler:nil];
+ } else self.suggestPanel.alphaValue=1;
 }
 - (NSArray*)localSuggestionsFor:(NSString*)query {
  NSMutableArray* items=[NSMutableArray array];
- const auto decision=ResolveSearchAddress(query.UTF8String ?: "", NO, self.activeSearchCard.searchSite[@"template"]);
- if(decision.kind==slate::InputKind::Search) {
-  NSString* searchTitle=[NSString stringWithFormat:@"Search %@ for \u201c%@\u201d", self.activeSearchCard.searchSite[@"name"] ?: [SlateSearchServices engineName], query];
-  [items addObject:[SlateSuggestion search:searchTitle query:query]];
- } else if(decision.kind==slate::InputKind::Url && !decision.url.empty()) {
-  NSString* urlStr=[NSString stringWithUTF8String:decision.url.c_str()];
-  // Extract domain as subtitle
-  NSURL* parsedUrl=[NSURL URLWithString:urlStr];
-  NSString* domain=parsedUrl.host ?: urlStr;
-  [items addObject:[SlateSuggestion url:urlStr subtitle:domain query:query]];
+ const TabId current=[self activeBrowserTab];
+ const auto* context=model.find(current);
+ BOOL privateTab=context && context->incognito;
+ if(self.summoning) {
+  std::vector<const slate::Tab*> tabs;
+  for(const auto& tab:model.tabs()) if(tab.id!=current && tab.incognito==privateTab && tab.url!="about:blank" && !tab.url.empty()) {
+   NSString* text=[NSString stringWithFormat:@"%@ %@",Text(tab.title),Text(tab.url)];
+   if(!query.length || [text rangeOfString:query options:NSCaseInsensitiveSearch].location!=NSNotFound) tabs.push_back(&tab);
+  }
+  std::stable_sort(tabs.begin(),tabs.end(),[](const auto* a,const auto* b){ return a->last_used>b->last_used; });
+  for(const auto* tab:tabs) {
+   [items addObject:[SlateSuggestion open:TabLabel(*tab) subtitle:[SlateSearchServices editable:Text(tab->url)] query:Text(tab->url) tabId:tab->id]];
+   if(items.count>=(query.length ? 3 : 6)) break;
+  }
+  return items;
  }
- const auto* context=model.find([self activeBrowserTab]);
- const BOOL privateTab=context && context->incognito;
- if(self.activeSearchCard.searchSite) return items;
+ if(self.activeSearchCard.searchSite) {
+  if(query.length) {
+   NSDictionary* target=[SlateSearchServices resolve:query committed:NO siteTemplate:self.activeSearchCard.searchSite[@"template"]];
+   if(target[@"url"]) [items addObject:[SlateSuggestion offer:@{@"key":query,@"title":self.activeSearchCard.searchSite[@"name"],@"url":target[@"url"],@"kind":@"search"}]];
+  }
+  return items;
+ }
+ NSMutableArray* kept=[NSMutableArray array];
+ if(query.length) CollectOmniboxBookmarks([SlateBookmarks sharedStore].roots,query,kept);
+ NSMutableArray* imported=[NSMutableArray array];
+ if(!privateTab && query.length && [self.importedHistorySpace isEqual:self.spacesManager.currentSpaceId ?: @"default"]) for(const auto& entry:importedHistory) {
+  NSString* url=Text(entry.url); NSString* title=Text(entry.title);
+  if([url rangeOfString:query options:NSCaseInsensitiveSearch].location!=NSNotFound || [title rangeOfString:query options:NSCaseInsensitiveSearch].location!=NSNotFound)
+   [imported addObject:@{@"url":url,@"title":title}];
+  if(imported.count>=30) break;
+ }
+ NSArray* offers=[SlateOmniboxServices offersFor:query bookmarks:kept imported:imported profile:self.spacesManager.currentSpaceId ?: @"default" privateTab:privateTab];
  NSDictionary* site=[[SlateSearchServices shared] siteFor:query profile:self.spacesManager.currentSpaceId ?: @"default" privateTab:privateTab];
  self.activeSearchCard.suggestedSite=site;
  if(site) {
   SlateSuggestion* row=[SlateSuggestion search:[@"Search " stringByAppendingString:site[@"name"]] query:query];
   row.kind=SlateSuggestionKindSite; row.site=site;
-  row.subtitle=[NSString stringWithFormat:@"%@ · Tab to search", site[@"host"]];
   [items addObject:row];
  }
- // Open tabs match: dot indicator, switches to existing tab rather than opening duplicate
- if(query.length >= 1) {
-  NSString* qLower = query.lowercaseString;
-  const TabId currentId = model.selected();
-  int openCount = 0;
-  for(const auto& t : model.tabs()) {
-   if(t.incognito != privateTab || t.id == currentId || t.url.empty() || t.url == "about:blank") continue;
-   NSString* tUrl = Text(t.url);
-   NSString* tTitle = Text(t.title);
-   if([tUrl.lowercaseString containsString:qLower] || [tTitle.lowercaseString containsString:qLower]) {
-    NSString* displayTitle = tTitle.length > 0 ? tTitle : tUrl;
-    NSURL* parsed = [NSURL URLWithString:tUrl];
-    NSString* domain = parsed.host ?: tUrl;
-    [items addObject:[SlateSuggestion open:displayTitle subtitle:domain query:tUrl tabId:t.id]];
-    openCount++;
-    if(openCount >= 2) break;
-   }
-  }
- }
- if(!privateTab && query.length >= 2 && !importedHistory.empty()) {
-  NSString* qLower = query.lowercaseString;
-  int count = 0;
-  for(const auto& h : importedHistory) {
-   NSString* hUrl = [NSString stringWithUTF8String:h.url.c_str()];
-   NSString* hTitle = [NSString stringWithUTF8String:h.title.c_str()];
-   if([hUrl.lowercaseString containsString:qLower] || [hTitle.lowercaseString containsString:qLower]) {
-    NSURL* parsed = [NSURL URLWithString:hUrl];
-    NSString* domain = parsed.host ?: hUrl;
-    NSString* displayTitle = hTitle.length > 0 ? hTitle : hUrl;
-    [items addObject:[SlateSuggestion history:displayTitle subtitle:domain query:hUrl]];
-    count++;
-    if(count >= 3) break;
-   }
+ for(NSDictionary* offer in offers) [items addObject:[SlateSuggestion offer:offer]];
+ if(!privateTab && self.engineWordsTab==current && [self.engineWordsProfile isEqual:self.spacesManager.currentSpaceId ?: @"default"] && [SlateSearchServices permitsSuggestions:query privateTab:NO siteActive:NO]) {
+  NSMutableSet* seen=[NSMutableSet set]; for(SlateSuggestion* item in items) [seen addObject:item.title.lowercaseString];
+  for(NSString* word in self.engineWords) if([word.lowercaseString hasPrefix:query.lowercaseString] && ![seen containsObject:word.lowercaseString]) {
+   NSString* target=[SlateSearchServices searchURL:word];
+   if(target) [items addObject:[SlateSuggestion offer:@{@"key":word,@"title":@"",@"kind":@"suggested",@"url":target}]];
   }
  }
  return items;
 }
+- (NSString*)completionForCard:(SlateOmniboxCard*)card query:(NSString*)query {
+ if(self.summoning || card.searchSite) return nil;
+ NSMutableArray* offers=[NSMutableArray array];
+ for(SlateSuggestion* item in self.suggestions) if(item.payload) [offers addObject:item.payload];
+ return [SlateOmniboxServices completionFor:query offers:offers];
+}
+- (NSImage*)cachedOmniboxIcon:(NSString*)raw {
+ NSString* host=[NSURL URLWithString:[raw containsString:@"://"] ? raw : [@"https://" stringByAppendingString:raw ?: @""]].host.lowercaseString;
+ if(!host.length) return nil;
+ const auto* active=model.find([self activeBrowserTab]);
+ for(const auto& tab:model.tabs()) if(tab.incognito==(active && active->incognito) && [[NSURL URLWithString:Text(tab.url)].host.lowercaseString isEqual:host]) {
+  NSImage* image=self.tabIcons[@(tab.id)]; if(image) return image;
+ }
+ return nil;
+}
 - (void)requestEngineSuggestions:(NSString*)query field:(NSTextField*)field card:(SlateOmniboxCard*)card {
- const auto* tab=model.find([self activeBrowserTab]);
  const TabId sourceTab=[self activeBrowserTab];
  NSString* sourceProfile=[self.spacesManager.currentSpaceId copy] ?: @"default";
- const BOOL privateTab=tab && tab->incognito;
- __weak SlateDelegate* weakSelf=self;
- __weak NSTextField* weakField=field;
- __weak SlateOmniboxCard* weakCard=card;
+ const auto* tab=model.find(sourceTab);
+ BOOL privateTab=!tab || tab->incognito;
+ if(self.summoning) { [[SlateSearchServices shared] stop]; self.engineWords=@[]; return; }
+ __weak SlateDelegate* weakSelf=self; __weak NSTextField* weakField=field; __weak SlateOmniboxCard* weakCard=card;
  [[SlateSearchServices shared] suggest:query privateTab:privateTab siteActive:card.searchSite!=nil completion:^(NSArray<NSString*>* words) {
-  SlateDelegate* owner=weakSelf;
-  NSTextField* current=weakField;
-  if(!owner || !current.currentEditor || ![current.stringValue isEqual:query]) return;
+  SlateDelegate* owner=weakSelf; NSTextField* field=weakField; SlateOmniboxCard* card=weakCard;
+  NSString* current=card ? card.typedText : (owner.addressEnding ? owner.addressTyped : field.stringValue);
   const auto* now=model.find([owner activeBrowserTab]);
-  if(!now || now->incognito || now->id!=sourceTab || ![(owner.spacesManager.currentSpaceId ?: @"default") isEqual:sourceProfile]) return;
-  NSMutableArray* rows=[[owner localSuggestionsFor:query] mutableCopy];
-  for(NSString* word in words) {
-   [rows addObject:[SlateSuggestion search:word query:word]];
-   if(rows.count>=8) break;
+  if(!owner || owner.summoning || !field.currentEditor || !field.window.isKeyWindow || ![current isEqual:query] || !now || now->incognito || now->id!=sourceTab || ![(owner.spacesManager.currentSpaceId ?: @"default") isEqual:sourceProfile]) return;
+  NSInteger picked=owner.suggestHighlight;
+  if(picked>=0 && picked<(NSInteger)owner.suggestions.count && ((SlateSuggestion*)owner.suggestions[picked]).kind==SlateSuggestionKindSuggested) return;
+  owner.engineWords=words; owner.engineWordsTab=sourceTab; owner.engineWordsProfile=sourceProfile;
+  NSMutableArray* rows=[[owner localSuggestionsFor:query] mutableCopy]; NSMutableSet* seen=[NSMutableSet set];
+  for(SlateSuggestion* item in rows) [seen addObject:item.title.lowercaseString];
+  for(NSString* word in words) if(![seen containsObject:word.lowercaseString]) {
+   NSString* target=[SlateSearchServices searchURL:word];
+   if(target) [rows addObject:[SlateSuggestion offer:@{@"key":word,@"title":@"",@"kind":@"suggested",@"url":target}]];
   }
-  [owner showSuggestionList:rows fromHomeSearch:current==[owner homeSearchField]];
-  if(weakCard) [owner positionSuggestPanelBelowOverlay:weakCard];
+  [owner showSuggestionList:rows fromHomeSearch:field==[owner homeSearchField]];
+  owner.suggestHighlight=picked; [owner applySuggestionHighlight];
  }];
 }
 - (void)fetchHomeSearchSuggestions {
@@ -11343,38 +11213,39 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)fetchSuggestions {
  if(self.quitting || !self.address.currentEditor) { [self hideSuggestions]; return; }
  self.activeSearchCard=nil;
- NSString* query=self.address.stringValue;
+ NSString* query=self.addressEnding ? self.addressTyped : self.address.stringValue;
  if(!query.length) { [self hideSuggestions]; return; }
  [self showSuggestionList:[self localSuggestionsFor:query]];
  [self requestEngineSuggestions:query field:self.address card:nil];
 }
 - (void)goFromSuggestPanel:(id)sender {
- // "Go" button: navigate using the currently highlighted suggestion or typed text
- if(self.suggestHighlight>=0 && self.suggestHighlight<(NSInteger)self.suggestions.count) {
-  SlateSuggestion* item=self.suggestions[self.suggestHighlight];
-  if(item.query.length) {
-   self.address.stringValue=item.query;
-   self.addressDirty=YES;
-  }
- }
+ if(self.activeSearchCard) { [self submitOmniboxCard:self.activeSearchCard]; return; }
+ if(self.suggestHighlight>=0 && self.suggestHighlight<(NSInteger)self.suggestions.count) { [self pickSuggestion:self.suggestions[self.suggestHighlight]]; return; }
  [self navigate:nil];
 }
 - (void)pickSuggestion:(id)item {
  SlateSuggestion* suggestion=[item isKindOfClass:SlateSuggestion.class] ? item : nil;
  if(!suggestion) return;
+ if(suggestion.kind==SlateSuggestionKindCommand) {
+  [self.activeSearchCard setText:@"" selectAll:NO]; self.activeSearchCard.searchSite=nil;
+  [self hideSuggestions]; [self dismissOmniboxOverlay]; self.summoning=NO;
+  [self runAddressCommand:suggestion.command]; return;
+ }
  if(suggestion.kind==SlateSuggestionKindSite) {
   SlateOmniboxCard* card=self.activeSearchCard;
   if(!card) { [self focusAddress:nil]; card=self.omniboxOverlay.card ?: self.homeBoard.omniboxCard; }
   [card activateSite:suggestion.site]; self.activeSearchCard=card; return;
  }
  if(suggestion.kind==SlateSuggestionKindOpen && suggestion.tabId!=0) {
+  self.summoning=NO;
   [self activateTab:suggestion.tabId];
   [self hideSuggestions];
   [self dismissOmniboxOverlay];
   return;
  }
  if(!suggestion.query.length) return;
- const auto target=ResolveSearchAddress(suggestion.query.UTF8String ?: "", YES, self.activeSearchCard.searchSite[@"template"]);
+ NSString* destination=suggestion.payload[@"url"] ?: suggestion.query;
+ const auto target=ResolveSearchAddress(destination.UTF8String ?: "", YES, suggestion.payload[@"url"] ? nil : self.activeSearchCard.searchSite[@"template"]);
  if(target.kind==slate::InputKind::Invalid) { NSBeep(); return; }
  SlateDetachedTabWindow* detached=[self detachedTabForWindow:self.activeSearchCard.window];
  if(detached) {
@@ -11383,6 +11254,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self navigateDetachedTab:detached.tabId toURL:target.url];
   return;
  }
+ [self.activeSearchCard setText:@"" selectAll:NO];
  self.address.stringValue=Text(target.url);
  self.activeSearchCard.searchSite=nil;
  self.addressDirty=YES;
@@ -11391,11 +11263,15 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)moveSuggestion:(NSInteger)delta {
  if(!self.suggestPanel.visible || !self.suggestions.count) return;
- NSInteger next=self.suggestHighlight+delta;
- if(next<0) next=(NSInteger)self.suggestions.count-1;
- if(next>=(NSInteger)self.suggestions.count) next=0;
- self.suggestHighlight=next;
+ NSMutableArray<NSNumber*>* indexes=[NSMutableArray array];
+ for(NSUInteger i=0;i<self.suggestions.count;++i) if(((SlateSuggestion*)self.suggestions[i]).kind!=SlateSuggestionKindSite) [indexes addObject:@(i)];
+ NSInteger current=[indexes indexOfObject:@(self.suggestHighlight)]; if(current==NSNotFound) current=-1;
+ NSInteger next=[SlateOmniboxServices nextSelection:current count:indexes.count step:delta];
+ self.suggestHighlight=next<0 ? -1 : indexes[next].integerValue;
  [self applySuggestionHighlight];
+ if(self.suggestHighlight>=0) {
+  NSView* row=self.suggestStack.arrangedSubviews[self.suggestHighlight]; [row scrollRectToVisible:row.bounds];
+ }
 }
 - (void)moveSuggestionDelta:(NSInteger)delta {
  [self moveSuggestion:delta];
@@ -11992,6 +11868,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  it->second.engine->reload_ignore_cache();
 }
 - (void)focusAddress:(id)sender {
+ self.summoning=NO; self.summonCycling=NO;
  if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [window focusAddress]; return; }
  const auto* tab=model.find(model.selected());
  NSTextField* homeField=[self homeSearchField];
@@ -11999,8 +11876,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(tab && tab->url=="about:blank") {
   [self dismissOmniboxOverlay];
   if(homeField) {
-   [self.window makeFirstResponder:homeField];
-   [homeField selectText:nil];
+   [self.homeBoard.omniboxCard focusSelectingAll:NO];
   }
   return;
  }
@@ -12018,7 +11894,54 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (const slate::Tab*)selectedTab {
  return model.find([self activeBrowserTab]);
 }
+- (void)rememberOmniboxDraft {
+ if(!self.omniboxDraftTab || !self.homeBoard) return;
+ const auto* tab=model.find(self.omniboxDraftTab);
+ if(!tab || tab->url!="about:blank") return;
+ if(!self.omniboxDrafts) self.omniboxDrafts=[NSMutableDictionary dictionary];
+ SlateOmniboxCard* card=self.homeBoard.omniboxCard;
+ self.omniboxDrafts[[NSString stringWithFormat:@"%@:%llu",self.spacesManager.currentSpaceId ?: @"default",(unsigned long long)self.omniboxDraftTab]]=@{@"text":card.typedText ?: @"",@"site":card.searchSite ?: @{}};
+}
+- (void)restoreOmniboxDraft:(TabId)identifier {
+ if(self.omniboxDraftTab==identifier) return;
+ [self rememberOmniboxDraft]; self.omniboxDraftTab=identifier;
+ NSDictionary* draft=self.omniboxDrafts[[NSString stringWithFormat:@"%@:%llu",self.spacesManager.currentSpaceId ?: @"default",(unsigned long long)identifier]];
+ self.homeBoard.omniboxCard.searchSite=[draft[@"site"] count] ? draft[@"site"] : nil;
+ [self.homeBoard.omniboxCard setText:draft[@"text"] ?: @"" selectAll:NO];
+}
+- (void)summonTabs:(id)sender {
+ if(self.summoning && self.omniboxOverlay.isShowing) { self.summonCycling=YES; [self moveSuggestion:1]; return; }
+ self.summoning=YES; self.summonCycling=NO;
+ if(!self.omniboxOverlay) self.omniboxOverlay=[[SlateOmniboxOverlay alloc] initWithDelegate:self];
+ SlateDetachedTabWindow* detached=[self activeDetachedWindow];
+ [self.omniboxOverlay showOver:detached ? detached.pageContainer : self.stage initialText:@""];
+}
+- (void)runAddressCommand:(NSString*)command {
+ if([command isEqual:@"settings"]) [self showSettings:nil];
+ else if([command isEqual:@"newTab"]) [self newTab:nil];
+ else if([command isEqual:@"newPrivateTab"]) [self newIncognitoTab:nil];
+ else if([command isEqual:@"newSpace"]) [self askNewSpace:nil];
+ else if([command isEqual:@"bookmarks"]) [self showBookmarksPanel:nil];
+ else if([command isEqual:@"history"]) [self showHistory:nil];
+ else if([command isEqual:@"downloads"]) [self toggleDownloads:nil];
+ else if([command isEqual:@"passwords"]) [self showPasswordsPanel:nil];
+ else if([command isEqual:@"toggleSidebar"]) [self toggleTabsReveal:nil];
+}
+- (void)showHistory:(id)sender {
+ __weak SlateDelegate* weakSelf=self;
+ NSMutableArray* imported=[NSMutableArray array];
+ if([self.importedHistorySpace isEqual:self.spacesManager.currentSpaceId ?: @"default"]) for(const auto& item:importedHistory) {
+  [imported addObject:@{@"url":Text(item.url),@"title":Text(item.title)}];
+  if(imported.count>=2000) break;
+ }
+ NSString* historyProfile=self.spacesManager.currentSpaceId ?: @"default";
+ [SlateOmniboxHistoryPanel showWithProfile:historyProfile imported:imported open:^(NSString* url) { [weakSelf openUrl:url]; } clear:^{ if([weakSelf.importedHistorySpace isEqual:historyProfile]) importedHistory.clear(); }];
+}
+- (void)omniboxOverlayDidDismiss:(SlateOmniboxOverlay*)overlay {
+ self.summoning=NO; self.summonCycling=NO;
+}
 - (void)dismissOmniboxOverlay {
+ self.summoning=NO; self.summonCycling=NO;
  if(self.omniboxOverlay && self.omniboxOverlay.isShowing) {
   [self.omniboxOverlay dismiss];
  }
@@ -12026,7 +11949,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)showSuggestionsForCard:(SlateOmniboxCard*)card query:(NSString*)query {
  if(self.quitting || !card) { [self hideSuggestions]; return; }
  self.activeSearchCard=card;
- if(!query.length) { card.suggestedSite=nil; [self hideSuggestions]; return; }
+ if(!query.length && !self.summoning) { card.suggestedSite=nil; [self hideSuggestions]; return; }
  [self showSuggestionList:[self localSuggestionsFor:query] fromHomeSearch:card==self.homeBoard.omniboxCard];
  [self positionSuggestPanelBelowOverlay:card];
  [self requestEngineSuggestions:query field:card.field card:card];
@@ -12035,104 +11958,74 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self showSuggestionsForCard:self.omniboxOverlay.card query:query];
 }
 - (void)positionSuggestPanelBelowOverlay:(NSView*)fieldCard {
- NSWindow* fieldWindow=fieldCard.window;
- if(!self.suggestions.count || !fieldCard || !fieldWindow) return;
- NSRect fieldInWindow=[fieldCard convertRect:fieldCard.bounds toView:nil];
- NSRect fieldScreen=[fieldWindow convertRectToScreen:fieldInWindow];
- const CGFloat panelW=MIN(640.0, NSWidth(fieldScreen));
- const CGFloat rowCount=MIN(8.0, (CGFloat)self.suggestions.count);
- const CGFloat height=rowCount * 44.0 + 8.0;
- const CGFloat panelX=NSMidX(fieldScreen) - panelW / 2.0;
- const CGFloat panelY=NSMinY(fieldScreen) - height - 6.0;
- NSRect frame=NSMakeRect(panelX, panelY, panelW, height);
- if(self.suggestCard) {
-  self.suggestCard.layer.cornerRadius=14;
-  if(@available(macOS 11.0, *)) self.suggestCard.layer.cornerCurve=kCACornerCurveContinuous;
-  self.suggestCard.layer.borderWidth=1.0;
-
-  NSColor* accent=self.barColor;
-  BOOL isDark=YES;
-  if(accent) {
-   CGFloat r=0, g=0, b=0, a=0;
-   NSColor* rgb=[accent colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: accent;
-   [rgb getRed:&r green:&g blue:&b alpha:&a];
-   CGFloat lum=0.2126*r + 0.7152*g + 0.0722*b;
-   isDark=lum<0.55;
-  } else {
-   isDark=[[self.window.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua];
-  }
-
-  NSColor* cardBg=nil;
-  NSColor* borderColor=nil;
-  if(accent) {
-   if(isDark) {
-    cardBg=[accent blendedColorWithFraction:0.32 ofColor:[NSColor blackColor]];
-    if(!cardBg) cardBg=[NSColor colorWithCalibratedWhite:0.18 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:1.0 alpha:0.20];
-   } else {
-    cardBg=[accent blendedColorWithFraction:0.35 ofColor:[NSColor whiteColor]];
-    if(!cardBg) cardBg=[NSColor colorWithCalibratedWhite:0.96 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:0.0 alpha:0.16];
-   }
-  } else {
-   if(isDark) {
-    cardBg=[NSColor colorWithCalibratedWhite:0.18 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:1.0 alpha:0.20];
-   } else {
-    cardBg=[NSColor colorWithCalibratedWhite:0.96 alpha:0.95];
-    borderColor=[NSColor colorWithWhite:0.0 alpha:0.16];
-   }
-  }
-  self.suggestCard.layer.backgroundColor=cardBg.CGColor;
-  self.suggestCard.layer.borderColor=borderColor.CGColor;
+ NSWindow* window=fieldCard.window;
+ if(!self.suggestions.count || !window) return;
+ NSRect field=[window convertRectToScreen:[fieldCard convertRect:fieldCard.bounds toView:nil]];
+ NSRect screen=window.screen.visibleFrame;
+ BOOL inlineField=![fieldCard isKindOfClass:SlateOmniboxCard.class];
+ CGFloat width=inlineField ? MIN(460,MAX(320,field.size.width+24)) : field.size.width;
+ width=MIN(width,NSWidth(screen)-16);
+ CGFloat fullHeight=self.suggestions.count*34+12;
+ CGFloat x=inlineField ? field.origin.x-20 : NSMidX(field)-width/2;
+ x=MIN(MAX(x,NSMinX(screen)+8),NSMaxX(screen)-width-8);
+ CGFloat height=MIN(fullHeight,MAX(46,NSMinY(field)-NSMinY(screen)-16));
+ CGFloat y=NSMinY(field)-8-height;
+ if(inlineField && fullHeight>NSMinY(field)-NSMinY(screen)-16) {
+  height=MIN(fullHeight,MAX(46,NSMaxY(screen)-NSMaxY(field)-16)); y=NSMaxY(field)+8;
  }
- if(self.suggestPanel.parentWindow != fieldWindow) {
-  [self.suggestPanel.parentWindow removeChildWindow:self.suggestPanel];
-  [fieldWindow addChildWindow:self.suggestPanel ordered:NSWindowAbove];
+ y=MIN(MAX(y,NSMinY(screen)+8),NSMaxY(screen)-height-8);
+ NSRect frame=NSMakeRect(round(x),round(y),round(width),round(height));
+ self.suggestCard.layer.backgroundColor=SlateOmniboxGround(window.effectiveAppearance).CGColor;
+ self.suggestCard.layer.borderColor=SlateOmniboxHairline(window.effectiveAppearance).CGColor;
+ self.suggestPanel.appearance=window.effectiveAppearance;
+ if(self.suggestPanel.parentWindow!=window) {
+  [self.suggestPanel.parentWindow removeChildWindow:self.suggestPanel]; [window addChildWindow:self.suggestPanel ordered:NSWindowAbove];
  }
  [self.suggestPanel setFrame:frame display:YES];
+ self.suggestStack.enclosingScrollView.frame=self.suggestCard.bounds;
+ self.suggestStack.frame=NSMakeRect(0,0,width,fullHeight);
+ [self.suggestStack layoutSubtreeIfNeeded];
 }
 - (void)submitOmniboxCard:(SlateOmniboxCard*)card {
- if(self.suggestPanel.visible && self.suggestHighlight>=0 && self.suggestHighlight<(NSInteger)self.suggestions.count) {
-  SlateSuggestion* item=self.suggestions[self.suggestHighlight];
-  [self pickSuggestion:item];
-  return;
+ NSEventModifierFlags modifiers=NSApp.currentEvent.modifierFlags;
+ BOOL aside=(modifiers & NSEventModifierFlagCommand) && !self.summoning;
+ BOOL front=(modifiers & NSEventModifierFlagShift)!=0;
+ SlateSuggestion* picked=self.suggestPanel.visible && self.suggestHighlight>=0 && self.suggestHighlight<(NSInteger)self.suggestions.count ? self.suggestions[self.suggestHighlight] : nil;
+ if(!picked) for(SlateSuggestion* item in self.suggestions) if(item.kind==SlateSuggestionKindCommand) { picked=item; break; }
+ if(picked && (picked.kind==SlateSuggestionKindOpen || picked.kind==SlateSuggestionKindCommand || !aside)) { [self pickSuggestion:picked]; return; }
+ NSString* text=picked ? (picked.payload[@"url"] ?: picked.query) : card.field.stringValue;
+ if(!text.length && self.summoning) { [self dismissOmniboxOverlay]; return; }
+ const auto target=ResolveSearchAddress(text.UTF8String ?: "",YES,picked.payload[@"url"] ? nil : card.searchSite[@"template"]);
+ if(target.kind==slate::InputKind::Invalid || target.url.empty()) { [card shake]; return; }
+ const TabId previous=[self activeBrowserTab]; const auto* source=model.find(previous); BOOL privateTab=source && source->incognito;
+ SlateDetachedTabWindow* detached=[self detachedTabForWindow:card.window];
+ card.searchSite=nil; [card setText:@"" selectAll:NO];
+ [self hideSuggestions]; [self dismissOmniboxOverlay];
+ if(aside) {
+  [self openUrl:Text(target.url) incognito:privateTab];
+  if(!front) [self activateTab:previous];
+ } else if(detached) [self navigateDetachedTab:detached.tabId toURL:target.url];
+ else {
+  self.address.stringValue=Text(target.url); [self navigate:nil];
  }
- NSString* text=[card.field.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
- if(!text.length) {
-  [card shake];
-  return;
- }
- const auto decision=ResolveSearchAddress(text.UTF8String ?: "", YES, card.searchSite[@"template"]);
- if(decision.kind==slate::InputKind::Invalid || decision.url.empty()) {
-  NSBeep();
-  [card shake];
-  return;
- }
- card.searchSite=nil;
- self.address.stringValue=[NSString stringWithUTF8String:decision.url.c_str()];
- self.addressDirty=NO;
- if(self.omniboxOverlay && self.omniboxOverlay.isShowing) {
-  [self.omniboxOverlay dismiss];
- } else {
-  [self hideSuggestions];
-  card.field.stringValue=@"";
- }
- [self navigate:nil];
 }
 - (void)submitOverlay:(SlateOmniboxOverlay*)overlay {
  [self submitOmniboxCard:overlay.card];
 }
 - (void)controlTextDidChange:(NSNotification*)notification {
- if(notification.object==[self homeSearchField]) return;
  if(notification.object!=self.address) return;
- [SlateSiteCardPanel hide];
- if(self.address.superview && [self.address.superview isKindOfClass:SlateOmnibox.class]) {
-  [((SlateOmnibox*)self.address.superview) applyContrast];
+ [SlateSiteCardPanel hide]; self.activeSearchCard=nil;
+ self.addressDirty=YES; self.addressTyped=self.address.stringValue; self.addressEnding=nil;
+ [self fetchSuggestions];
+ NSTextView* editor=(NSTextView*)self.address.currentEditor;
+ if(!self.addressDeleting && !editor.hasMarkedText) {
+  NSString* suffix=[self completionForCard:nil query:self.addressTyped];
+  if(suffix.length) {
+   self.addressEnding=suffix; self.address.stringValue=[self.addressTyped stringByAppendingString:suffix];
+   editor.selectedRange=NSMakeRange(self.addressTyped.length,suffix.length);
+  }
  }
- self.addressDirty=YES;
- [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(fetchSuggestions) object:nil];
- [self performSelector:@selector(fetchSuggestions) withObject:nil afterDelay:0.16];
+ self.addressDeleting=NO;
 }
 - (void)controlTextDidBeginEditing:(NSNotification*)notification {
  NSTextView* editor=(NSTextView*)[self.window fieldEditor:NO forObject:notification.object];
@@ -12145,7 +12038,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  if(notification.object==[self homeSearchField]) return;
  if(notification.object!=self.address) return;
- self.addressOpen=YES;
+ self.address.stringValue=[SlateSearchServices editable:self.address.stringValue];
+ self.addressOpen=YES; self.addressTyped=self.address.stringValue; self.addressEnding=nil;
  [self layoutOmnibox];
  [self fetchSuggestions];
 }
@@ -12186,6 +12080,16 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   return NO;
  }
  if(control!=self.address) return NO;
+ if(commandSelector==@selector(deleteWordBackward:)) {
+  self.addressDeleting=YES;
+  if(self.addressEnding.length && textView.selectedRange.length && NSMaxRange(textView.selectedRange)==textView.string.length) {
+   [textView delete:nil]; self.addressDeleting=YES; [textView deleteWordBackward:nil]; return YES;
+  }
+  return NO;
+ }
+ if(commandSelector==@selector(deleteBackward:) || commandSelector==@selector(deleteForward:) || commandSelector==@selector(deleteWordForward:)) { self.addressDeleting=YES; return NO; }
+ if(commandSelector==@selector(moveRight:) && self.addressEnding.length) { self.addressEnding=nil; self.addressTyped=self.address.stringValue; textView.selectedRange=NSMakeRange(textView.string.length,0); return YES; }
+
  if(commandSelector==@selector(insertTab:)) {
   const auto* tab=model.find([self activeBrowserTab]);
   NSDictionary* site=[[SlateSearchServices shared] siteFor:self.address.stringValue profile:self.spacesManager.currentSpaceId ?: @"default" privateTab:tab && tab->incognito];
@@ -13683,6 +13587,10 @@ static void InstallMenus(SlateDelegate* delegate) {
  NSMenuItem* focus = [nav addItemWithTitle:@"Open Location…" action:@selector(focusAddress:) keyEquivalent:@"l"];
  focus.keyEquivalentModifierMask = NSEventModifierFlagCommand;
  focus.target = delegate;
+ NSMenuItem* summon=[nav addItemWithTitle:@"Switch to Open Tab…" action:@selector(summonTabs:) keyEquivalent:@"k"];
+ summon.keyEquivalentModifierMask=NSEventModifierFlagCommand; summon.target=delegate;
+ NSMenuItem* history=[nav addItemWithTitle:@"History…" action:@selector(showHistory:) keyEquivalent:@"y"];
+ history.keyEquivalentModifierMask=NSEventModifierFlagCommand; history.target=delegate;
  [nav addItem:[NSMenuItem separatorItem]];
  NSMenuItem* nextTab = [nav addItemWithTitle:@"Next Tab" action:@selector(selectNextTab:) keyEquivalent:@"]"];
  nextTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;

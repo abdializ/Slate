@@ -47,6 +47,9 @@ final class SearchSettingsView: NSView {
         label("Sends search words to your chosen engine as you type. Off by default and always off in private tabs. Addresses, email addresses, file paths and text that resembles a key stay on this Mac.", secondary: true)
         addToggle("Search sites from the address field", key: "search.sites", fallback: true)
         label("Type a site’s name, then press Tab to search there. Backspace in an empty field removes the site. Sites you visit can add their own shortcut.", secondary: true)
+        addToggle("Address bar commands", key: "search.commands", fallback: false)
+        label("Use whole commands such as settings, history or new private tab. Off by default; other words continue to search.", secondary: true)
+        addToggle("Use lighter motion when this Mac is low on power", key: "motion.light", fallback: false)
         label("Site shortcuts", bold: true)
         label("Type a keyword and a space, such as “yt cats”. These work with any search engine.", secondary: true)
         shortcuts.orientation = .vertical; shortcuts.alignment = .leading; shortcuts.spacing = 8
