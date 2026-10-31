@@ -1,3 +1,5 @@
+// File purpose: Implements the toolbar download indicator and native download list/actions.
+
 #import "platform/macos/downloads_panel.h"
 #import "platform/macos/plate_components.h"
 #import <QuartzCore/QuartzCore.h>
@@ -44,6 +46,7 @@ static NSImage* DownloadSymbol(NSString* name, NSString* label) {
  self.meter.frame=NSMakeRect(64,9,MAX(40,w-144),4);
  self.primary.frame=NSMakeRect(w-72,28,28,28); self.secondary.frame=NSMakeRect(w-38,28,28,28);
 }
+// Slate note: Render a row from its download model, including status and the actions currently available.
 - (void)configureWithItem:(SlateDownloadItem*)item ink:(NSColor*)ink muted:(NSColor*)muted {
  BOOL changed=self.item!=item; self.item=item;
  if(changed) self.fileImage.image=item.fileIcon;

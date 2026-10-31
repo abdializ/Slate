@@ -1,3 +1,7 @@
+// File purpose: Checks a generated PCM-to-AAC-to-WAV round trip using native audio tools and the
+// decoder. Tests document the behavior they assert; they do not change production browser
+// behavior.
+
 #include "engine/platform_audio.h"
 #import <Foundation/Foundation.h>
 #include <cmath>
@@ -21,6 +25,8 @@ std::string WriteWav(const std::vector<int16_t>& pcm, int rate) {
 }
 }
 
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  std::vector<int16_t> pcm(4410);
  for(size_t i=0;i<pcm.size();++i)
@@ -39,6 +45,7 @@ int main() {
  [convert launch]; [convert waitUntilExit];
  if(convert.terminationStatus!=0) { fprintf(stderr,"afconvert failed\n"); return 1; }
  std::string decoded, error;
+ // Slate note: Decode the generated AAC sample and subsequently verify a valid WAV container is produced.
  if(!slate::DecodeAudioFileToWav(m4aPath.fileSystemRepresentation,&decoded,&error)) {
   fprintf(stderr,"decode failed: %s\n",error.c_str()); return 1;
  }

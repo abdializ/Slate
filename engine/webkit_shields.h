@@ -1,3 +1,7 @@
+// File purpose: Declares native WebKit content-rule compilation, per-site application, and
+// compatibility scripts. Injected streaming helpers use site-specific heuristics. They do not
+// guarantee removal of integrated stream ads.
+
 #pragma once
 #import <WebKit/WebKit.h>
 #include <mutex>
@@ -6,6 +10,8 @@
 
 namespace slate {
 
+// Slate note: The singleton shares compiled rules across page controllers and tracks which hosts have
+// shields disabled.
 class WebKitShields {
  public:
   static WebKitShields& Shared();

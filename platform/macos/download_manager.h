@@ -1,7 +1,11 @@
+// File purpose: Declares download state, WebKit/URLSession transfers, pause/resume, local history,
+// and safe file publication.
+
 #pragma once
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
+// Slate note: Finishing distinguishes received bytes from a safely published file that is ready to open.
 typedef NS_ENUM(NSInteger, SlateDownloadState) {
     SlateDownloadStateInProgress = 0,
     SlateDownloadStateCompleted,
@@ -55,6 +59,8 @@ typedef NS_ENUM(NSInteger, SlateDownloadState) {
 
 extern NSString* const SlateDownloadsChangedNotification;
 extern NSString* const SlateDownloadProgressNotification;
+// Emitted once for each new download; never for progress updates or restored history.
+extern NSString* const SlateDownloadStartedNotification;
 
 @interface SlateDownloadManager : NSObject <WKDownloadDelegate, NSURLSessionDownloadDelegate>
 

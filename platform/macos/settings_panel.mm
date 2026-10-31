@@ -1,3 +1,7 @@
+#import "app_updater.h"
+// File purpose: Implements the native settings pages and their connection to browser
+// preferences/actions.
+
 #import "platform/macos/settings_panel.h"
 #import "platform/macos/passwords_panel.h"
 #import "platform/macos/import_dialog.h"
@@ -251,6 +255,8 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   [self makeKeyAndOrderFront:nil];
 }
 
+// Slate note: Refresh visible settings from the browser state so reopening the panel reflects current
+// preferences.
 - (void)updateFromDelegate {
   if (!self.slateDelegate) return;
 
@@ -842,29 +848,52 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   title.autoresizingMask = NSViewMinYMargin;
   [_containerView addSubview:title];
 
-  NSTextField* ver = [NSTextField labelWithString:@"Version 0.1.0 (Build 20260925.1) — Apple Silicon (arm64)"];
+  NSDictionary* info=NSBundle.mainBundle.infoDictionary;
+  NSString* version=[NSString stringWithFormat:@"Version %@ (Build %@) — Apple Silicon",info[@"CFBundleShortVersionString"],info[@"CFBundleVersion"]];
+  NSTextField* ver = [NSTextField labelWithString:version];
   ver.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
   ver.textColor = [NSColor secondaryLabelColor];
   ver.frame = NSMakeRect(90, top - 24, 360, 18);
   ver.autoresizingMask = NSViewMinYMargin;
   [_containerView addSubview:ver];
 
-  NSTextField* sub = [NSTextField labelWithString:@"Ultra-fast, native macOS WebKit browser with hardened runtime"];
+  NSTextField* sub = [NSTextField labelWithString:@"A native Mac browser, built for your browsing workspace"];
   sub.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightRegular];
   sub.textColor = [NSColor tertiaryLabelColor];
   sub.frame = NSMakeRect(90, top - 42, 360, 18);
   sub.autoresizingMask = NSViewMinYMargin;
   [_containerView addSubview:sub];
 
+  SlateAppUpdater* updater=[SlateAppUpdater sharedUpdater];
+  NSButton* check=[NSButton buttonWithTitle:@"Check for Updates…" target:updater action:@selector(checkForUpdates:)];
+  check.bezelStyle=NSBezelStyleRounded;
+  check.frame=NSMakeRect(24,top-88,170,28); check.autoresizingMask=NSViewMinYMargin;
+  [check bind:NSEnabledBinding toObject:updater withKeyPath:@"canCheckForUpdates" options:nil];
+  [_containerView addSubview:check];
+  NSButton* automatic=[NSButton checkboxWithTitle:@"Automatically check for updates" target:self action:@selector(updateChecksChanged:)];
+  automatic.state=updater.automaticallyChecksForUpdates ? NSControlStateValueOn : NSControlStateValueOff;
+  automatic.frame=NSMakeRect(24,top-120,340,24); automatic.autoresizingMask=NSViewMinYMargin;
+  [_containerView addSubview:automatic];
+  NSButton* downloads=[NSButton checkboxWithTitle:@"Automatically download updates" target:self action:@selector(updateDownloadsChanged:)];
+  downloads.state=updater.automaticallyDownloadsUpdates ? NSControlStateValueOn : NSControlStateValueOff;
+  downloads.enabled=updater.automaticallyChecksForUpdates;
+  downloads.frame=NSMakeRect(24,top-148,340,24); downloads.autoresizingMask=NSViewMinYMargin;
+  [_containerView addSubview:downloads];
+  NSTextField* updateNote=[NSTextField wrappingLabelWithString:updater.status];
+  [updateNote bind:NSValueBinding toObject:updater withKeyPath:@"status" options:nil];
+  updateNote.font=[NSFont systemFontOfSize:11]; updateNote.textColor=NSColor.secondaryLabelColor;
+  updateNote.frame=NSMakeRect(24,top-187,430,32); updateNote.autoresizingMask=NSViewMinYMargin;
+  [_containerView addSubview:updateNote];
+
   // Button to view hardware specs
   NSButton* specsBtn = [NSButton buttonWithTitle:@"View System Hardware Specs" target:self action:@selector(viewSpecsClicked:)];
   specsBtn.bezelStyle = NSBezelStyleRounded;
-  specsBtn.frame = NSMakeRect(24, top - 84, 210, 28);
+  specsBtn.frame = NSMakeRect(250, top - 88, 210, 28);
   specsBtn.autoresizingMask = NSViewMinYMargin;
   [_containerView addSubview:specsBtn];
 
   // Keyboard Shortcuts Cheat Sheet
-  top -= 128;
+  top -= 220;
   NSTextField* scTitle = [NSTextField labelWithString:@"Keyboard Shortcuts"];
   scTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
   scTitle.frame = NSMakeRect(24, top, 200, 18);
@@ -902,6 +931,18 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   }
 }
 
+#if defined(SLATE_ENABLE_VERIFY)
+- (void)prepareUpdaterVerification:(SlateDelegate*)delegate {
+ self.slateDelegate=delegate; self.currentPage=@"about"; [self renderCurrentPage];
+}
+#endif
+- (void)updateChecksChanged:(NSButton*)sender {
+ [SlateAppUpdater sharedUpdater].automaticallyChecksForUpdates=sender.state==NSControlStateValueOn;
+ [self renderCurrentPage];
+}
+- (void)updateDownloadsChanged:(NSButton*)sender {
+ [SlateAppUpdater sharedUpdater].automaticallyDownloadsUpdates=sender.state==NSControlStateValueOn;
+}
 - (void)viewSpecsClicked:(id)sender {
   [[SlateSpecsPanel sharedPanel] showForWindow:self];
 }

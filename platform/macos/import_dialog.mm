@@ -1,3 +1,6 @@
+// File purpose: Implements the native dialog for selecting a source browser and categories to
+// import.
+
 #import "platform/macos/import_dialog.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
@@ -117,6 +120,8 @@
   [self.parentWindow endSheet:self.window];
 }
 
+// Slate note: Read the selected categories and source, then complete the dialog with the requested import
+// operation.
 - (void)onImport:(id)sender {
   NSString* selected = self.sourcePopup.titleOfSelectedItem;
   BOOL importBookmarks = (self.bookmarksCheck.state == NSControlStateValueOn);

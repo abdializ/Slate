@@ -1,3 +1,6 @@
+// File purpose: Declares bookmarks/history import from supported profiles and password import from
+// CSV.
+
 #pragma once
 #include "core/library.h"
 #include "core/credential_store.h"
@@ -20,6 +23,8 @@ struct ImportSummary {
   std::string error_message;
 };
 
+// Slate note: Static import entry points accept explicit source paths and return imported records or
+// counts.
 class BrowserImporter {
  public:
   static bool HasDiaInstalled();

@@ -1,3 +1,7 @@
+// File purpose: Checks trusted image right-click routing and rejection of synthetic/unsafe
+// requests. Tests document the behavior they assert; they do not change production browser
+// behavior.
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -22,6 +26,8 @@ const context = {
     messages.push(url);
   }}}}},
 };
+// Slate note: The harness executes extracted JavaScript with mock browser objects; these assertions are
+// component checks, not proof of live-site compatibility.
 vm.runInNewContext(script, context);
 
 function rightClick(path, trusted = true) {
@@ -41,6 +47,7 @@ image.currentSrc = 'https://encrypted-tbn0.gstatic.com/images?q=tbn:sample';
 assert.deepEqual(rightClick([image]), {prevented: true, stopped: true});
 assert.equal(messages.pop(), image.currentSrc);
 assert.deepEqual(rightClick([{tagName: 'A'}]), {prevented: false, stopped: false});
+// Slate note: A synthetic right-click must leave the native image-download handler untouched.
 assert.deepEqual(rightClick([image], false), {prevented: false, stopped: false});
 image.currentSrc = 'file:///etc/passwd';
 assert.deepEqual(rightClick([image]), {prevented: false, stopped: false});

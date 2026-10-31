@@ -1,14 +1,20 @@
+// File purpose: Checks address/search classification, URL construction, and blocked schemes. Tests
+// document the behavior they assert; they do not change production browser behavior.
+
 #include "core/navigation.h"
 #include <cstdlib>
 #include <iostream>
 using namespace slate;
 void check(bool condition) { if(!condition) std::abort(); }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  auto search=resolve_address_bar("mitosis");
  check(search.kind==InputKind::Search && search.url=="https://www.google.com/search?q=mitosis");
  auto words=resolve_address_bar("  office hours  ");
  check(words.kind==InputKind::Search && words.url.find("q=office%20hours")!=std::string::npos);
  auto host=resolve_address_bar("google.com");
+ // Slate note: A bare public hostname gets an HTTPS destination rather than being sent as a search query.
  check(host.kind==InputKind::Url && host.url=="https://google.com");
  auto path=resolve_address_bar("example.edu/lab");
  check(path.kind==InputKind::Url && path.url=="https://example.edu/lab");

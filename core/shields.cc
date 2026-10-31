@@ -1,3 +1,6 @@
+// File purpose: Implements content-blocking settings, per-site pauses, request classification, and
+// block counters.
+
 #include "shields.h"
 #include <algorithm>
 #include <cctype>
@@ -39,6 +42,8 @@ ShieldController ShieldController::from_list_files(const std::vector<std::string
  }
  return from_rules(joined.str());
 }
+// Slate note: Allow top-level documents and honor global/per-site settings before matching subresource
+// rules.
 FilterDecision ShieldController::classify(const FilterRequest& request) const {
  if(request.kind==ResourceKind::Document) return {};
  const auto page=host_from_url(request.source_url.empty() ? request.url : request.source_url);

@@ -1,3 +1,6 @@
+// File purpose: Implements Keychain-backed password persistence and reads of older saved-vault
+// formats.
+
 #include "platform/macos/credential_persistence.h"
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
@@ -32,6 +35,8 @@ NSData* ReadLegacyMasterKey() {
   throw std::runtime_error("The legacy password encryption key is unavailable. The original file was preserved.");
 }
 
+// Slate note: Use the profile path as the Keychain account so separate profiles do not read the same
+// vault.
 NSDictionary* VaultIdentity(const std::string& path) {
  return @{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
           (__bridge id)kSecAttrService:@"Slate Password Vault",

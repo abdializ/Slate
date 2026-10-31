@@ -1,3 +1,6 @@
+// File purpose: Stores active and parked split pairs, divider ratios, and pane-selection rules.
+// This is layout state over existing tab IDs; it does not own or create page views.
+
 #pragma once
 
 #include "core/browser_engine.h"
@@ -79,6 +82,8 @@ struct WorkspaceLayout {
   active=side;
  }
 
+ // Slate note: Bring the selected parked pair forward while preserving the outgoing pair and its divider
+ // position.
  void select(TabId id) {
   if(!id) return;
   if(!contains(id)) {
@@ -132,6 +137,7 @@ struct WorkspaceLayout {
   ratio = 1.0 - ratio;
  }
 
+ // Slate note: Keep both panes usable by clamping the divider according to the available window width.
  double clamped_ratio(double width) const {
   if(width <= 0) return 0.5;
   const double minimum = std::min(360.0, std::max(160.0, width * 0.35));

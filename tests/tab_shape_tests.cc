@@ -1,8 +1,14 @@
+// File purpose: Checks selected-tab path bounds, symmetry, coordinate flipping, and toolbar
+// joining. Tests document the behavior they assert; they do not change production browser
+// behavior.
+
 #include "platform/macos/active_browser_tab_shape.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
 
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  for(CGFloat width : {30.0, 48.0, 110.0, 154.0, 180.0, 360.0}) {
   const CGFloat height=38.0;
@@ -18,6 +24,7 @@ int main() {
     const bool left=CGPathContainsPoint(path, nullptr, CGPointMake(x, y), false);
     const bool right=CGPathContainsPoint(path, nullptr, CGPointMake(width-x, y), false);
     const bool reflected=CGPathContainsPoint(flipped, nullptr, CGPointMake(x, height-y), false);
+    // Slate note: Hit regions must stay symmetric and agree after vertical coordinate flipping.
     assert(left==right && left==reflected);
    }
   }

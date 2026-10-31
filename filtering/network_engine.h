@@ -1,3 +1,6 @@
+// File purpose: Declares the supported subset of ad-block network rules and indexed request
+// matching.
+
 #pragma once
 #include <cstdint>
 #include <string>
@@ -5,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 namespace slate {
+// Slate note: Each resource kind is a bit so a rule can apply to several request types.
 enum class ResourceKind : uint32_t {
  Document=1u<<0, Subdocument=1u<<1, Script=1u<<2, Image=1u<<3, Stylesheet=1u<<4,
  Font=1u<<5, Media=1u<<6, Xhr=1u<<7, Websocket=1u<<8, Ping=1u<<9, Other=1u<<10

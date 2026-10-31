@@ -1,3 +1,6 @@
+// File purpose: Implements native application footprint sampling and cancellable system memory-
+// pressure observations.
+
 #include "memory_monitor.h"
 #include <dispatch/dispatch.h>
 #include <sys/sysctl.h>
@@ -14,6 +17,8 @@ struct MonitorState {
   auto sample=sample_memory(pressure); sample.pressure_known=known; callback(sample);
  }
 };
+// Slate note: Use dispatch pressure events and a periodic sampler on the main queue; shutdown cancels both
+// sources.
 class MacMemoryMonitor final : public MemoryMonitor {
  public:
  explicit MacMemoryMonitor(std::function<void(MemorySample)> callback) {

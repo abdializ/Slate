@@ -1,3 +1,7 @@
+// File purpose: Checks user-intent PiP decisions, ad-player transitions, page-cache refresh, and
+// bounded mutation work. Tests document the behavior they assert; they do not change production
+// browser behavior.
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -6,6 +10,8 @@ const path = require('node:path');
 const header = fs.readFileSync(path.join(__dirname, '../engine/media_monitor_js.h'), 'utf8');
 const script = header.split('R"JS(')[1].split(')JS"')[0];
 
+// Slate note: The harness executes extracted JavaScript with mock browser objects; these assertions are
+// component checks, not proof of live-site compatibility.
 function fixture({ad = false, hidden = false} = {}) {
   const listeners = new Map();
   const messages = [];
@@ -63,6 +69,7 @@ function fixture({ad = false, hidden = false} = {}) {
   const f = fixture();
   assert.equal(f.messages.at(-1).user_started, false);
   f.fire('message', {data: {type: 'slatePiPEnter'}});
+  // Slate note: Playback without a trusted user gesture must not trigger automatic picture-in-picture.
   assert.equal(f.pipCalls(), 0, 'autoplay must not enter PiP');
   f.fire('pointerdown', {isTrusted: true, target: f.video});
   f.fire('play', {target: f.video});

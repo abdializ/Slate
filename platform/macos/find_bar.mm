@@ -1,3 +1,6 @@
+// File purpose: Implements find-in-page UI with HTML and PDF search, highlights, and match
+// navigation.
+
 #import "find_bar.h"
 #import "pdf_overlay.h"
 #import <PDFKit/PDFKit.h>
@@ -316,6 +319,7 @@
 
 #pragma mark - Search Execution
 
+// Slate note: Route PDF documents through PDFKit search before using the HTML-page search path.
 - (void)performSearchWithQuery:(NSString*)query {
   _lastQuery = query ?: @"";
   WKWebView* webView = _targetWebView;

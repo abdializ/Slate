@@ -1,3 +1,6 @@
+// File purpose: Contains C++-embedded video isolation/control scripts and a known-player URL
+// helper.
+
 #pragma once
 #include <string>
 #include <string_view>
@@ -11,6 +14,9 @@ namespace slate {
 // while keeping the page live and responsive.
 // Defends the element mark across dynamic player rebuilds (ad breaks, quality switches, React re-renders).
 
+// Slate note: The raw string contains a script that isolates a selected video while leaving its page
+// machinery alive. This header is tested separately; the native floating-window module also
+// defines its own scripts.
 inline constexpr char kFloatingVideoIsolateOn[] = R"JS(
 (function () {
   var videos = document.querySelectorAll('video');

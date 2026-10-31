@@ -1,3 +1,6 @@
+// File purpose: Implements shared native panel colors, cards, rows, search fields, and action
+// controls.
+
 #import "platform/macos/plate_components.h"
 #import <QuartzCore/QuartzCore.h>
 
@@ -5,6 +8,8 @@
 
 @implementation SlatePalette
 
+// Slate note: Resolve the panel background dynamically for light or dark appearance instead of fixing a
+// single color.
 + (NSColor*)ground {
   if (@available(macOS 10.15, *)) {
     return [NSColor colorWithName:nil dynamicProvider:^NSColor*(NSAppearance* appearance) {

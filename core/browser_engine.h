@@ -1,9 +1,14 @@
+// File purpose: Defines the C++ interface the native UI uses to control a page engine. WebKit
+// implements this interface. The default occlusion and trim methods below are no-ops; calling them
+// alone does not prove that page memory is reclaimed.
+
 #pragma once
 #include <cstdint>
 #include <string>
 namespace slate {
 using TabId = uint64_t;
 // UI-thread interface. CEF types must never cross this boundary.
+// Slate note: Virtual methods let the UI navigate and close a page without depending on WKWebView types.
 class BrowserEngine {
  public:
   virtual ~BrowserEngine() = default;

@@ -1,3 +1,7 @@
+// File purpose: Checks profile-specific Keychain persistence and failure behavior using
+// replacement Keychain functions. Tests document the behavior they assert; they do not change
+// production browser behavior.
+
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
 #include "platform/macos/credential_persistence.h"
@@ -25,6 +29,8 @@ extern "C" OSStatus SecItemAdd(CFDictionaryRef query,CFTypeRef* result) {
  assert([item[(__bridge id)kSecAttrAccessible] isEqual:(__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly]);
  vault[item[(__bridge id)kSecAttrAccount]]=item[(__bridge id)kSecValueData]; return errSecSuccess;
 }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() { @autoreleasepool {
  vault=[NSMutableDictionary dictionary];
  NSString* path=[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
@@ -34,6 +40,7 @@ int main() { @autoreleasepool {
  slate::save_credentials(filename,store);
  auto loaded=slate::load_credentials(filename);
  assert(loaded->items().size()==1 && loaded->items()[0].password=="synthetic-test-value");
+ // Slate note: Saving to the mock Keychain must not also create a password file on disk.
  assert(![[NSFileManager defaultManager] fileExistsAtPath:path]);
  assert(slate::load_credentials(filename+"-other-profile")->items().empty());
  NSData* previous=[vault[path] copy]; failure=errSecAuthFailed;

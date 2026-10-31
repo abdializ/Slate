@@ -1,3 +1,7 @@
+// File purpose: Checks unsafe navigation, exact-origin credentials, filter exceptions, and
+// download security helpers. Tests document the behavior they assert; they do not change
+// production browser behavior.
+
 #include "core/navigation.h"
 #include "core/credential_store.h"
 #import "platform/macos/download_manager.h"
@@ -10,6 +14,8 @@
 
 using namespace slate;
 
+// Slate note: Keep unsafe schemes out of address-bar navigation even when capitalization or payload syntax
+// varies.
 static void TestAddressBarSecurity() {
   // Test 1: Dangerous schemes must be rejected
   assert(resolve_address_bar("javascript:alert(document.cookie)").kind == InputKind::Invalid);
@@ -229,6 +235,8 @@ static void TestWebKitShieldsProtection() {
   }
 }
 
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
   std::cout << "Running Slate security test suite...\n";
   TestAddressBarSecurity();

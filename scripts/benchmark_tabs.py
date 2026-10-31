@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# File purpose: Runs isolated Slate/Chrome tab workloads and attributes whole-browser memory
+# samples.
+
 """Controlled macOS tab benchmark; never uses an existing browser profile.
 
 Requires a Release Slate build with SLATE_ENABLE_VERIFY=ON, Google Chrome,
@@ -75,6 +78,8 @@ def coalition(pid):
     return tuple(info[:2])
 
 
+# Slate note: Identify the browser process group and helpers; missing helpers invalidate the measurement
+# rather than silently understating memory.
 def owned_pids(main, browser, require_helpers=True):
     table = processes()
     if main not in table:

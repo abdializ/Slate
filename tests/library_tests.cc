@@ -1,14 +1,20 @@
+// File purpose: Checks bookmark deduplication/validation and logical tab-group operations. Tests
+// document the behavior they assert; they do not change production browser behavior.
+
 #include "core/library.h"
 #include "core/tab_model.h"
 #include <cstdlib>
 #include <iostream>
 using namespace slate;
 void check(bool condition) { if(!condition) std::abort(); }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  BookmarkList list;
  const auto a=list.add("https://example.com/a","Alpha");
  const auto b=list.add("https://example.com/b","Beta");
  check(list.items().size()==2 && list.find(a) && list.find_url("https://example.com/b")->title=="Beta");
+ // Slate note: Adding the same URL updates its title while retaining the original bookmark ID.
  check(list.add("https://example.com/a","Alpha renamed")==a);
  check(list.items().size()==2 && list.find(a)->title=="Alpha renamed");
  check(list.remove(b) && !list.find(b) && list.items().size()==1);

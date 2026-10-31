@@ -1,3 +1,6 @@
+// File purpose: Declares sign-in monitoring, framework-aware autofill, typing/fullscreen signals,
+// and optional passkey suppression.
+
 #pragma once
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
@@ -6,6 +9,8 @@
 /// framework-safe autofill, passkey suppression, typing state, and fullscreen detection.
 ///
 /// Direct translation of FormRelay into Objective-C++.
+// Slate note: Class methods supply scripts to the WebKit adapter; native code still validates and
+// authorizes messages.
 @interface SlateFormRelay : NSObject
 
 /// Script message handler name: "officeForms"

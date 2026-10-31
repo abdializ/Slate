@@ -1,5 +1,8 @@
 # Ad blocking and media audit
 
+> **File notes:** Describes how filtering and media compatibility interact.
+
+
 ## Before this change
 
 - `WebKitShields` already compiled a shared `WKContentRuleList` from bundled EasyList/EasyPrivacy extracts and reused WebKit's persistent compiled-list store. Its parser only handled a small domain-rule subset and accepted some modifiers too broadly. A single 20,000-rule cap could exhaust itself on EasyList before reaching EasyPrivacy.

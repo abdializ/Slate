@@ -1,12 +1,19 @@
+// File purpose: Checks the embedded floating-video helpers and known-player URL recognition. Tests
+// document the behavior they assert; they do not change production browser behavior.
+
 #include "engine/floating_video_js.h"
 #include <cassert>
 #include <iostream>
 #include <string>
 
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
   std::cout << "Running floating video tests...\n";
 
   // Test KnownPlayers database
+  // Slate note: Known-player matching recognizes the host/path pattern; it does not test actual video
+  // playback.
   assert(slate::KnownPlayers::knows("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
   assert(slate::KnownPlayers::knows("https://youtu.be/dQw4w9WgXcQ"));
   assert(slate::KnownPlayers::knows("https://netflix.com/browse"));

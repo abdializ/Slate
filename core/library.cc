@@ -1,3 +1,5 @@
+// File purpose: Implements the small C++ bookmark list and its validation rules.
+
 #include "library.h"
 #include <algorithm>
 #include <stdexcept>
@@ -7,6 +9,7 @@ bool http_url(const std::string& url) {
  return url.rfind("https://",0)==0 || url.rfind("http://",0)==0;
 }
 }
+// Slate note: Validate restored entries and IDs before accepting them as bookmark state.
 BookmarkList::BookmarkList(std::vector<Bookmark> restored) : items_(std::move(restored)) {
  if(items_.size()>200) throw std::runtime_error("Too many bookmarks");
  std::vector<std::string> ids;

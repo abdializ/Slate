@@ -1,3 +1,7 @@
+// File purpose: Implements native WebKit content-rule compilation, per-site application, and
+// compatibility scripts. Injected streaming helpers use site-specific heuristics. They do not
+// guarantee removal of integrated stream ads.
+
 #import "engine/webkit_shields.h"
 #include "engine/stealth_js.h"
 #include <fstream>
@@ -8,7 +12,7 @@
 
 namespace slate {
 
-static NSString* const kSlateContentRuleListIdentifier = @"SlateShieldsV14";
+static NSString* const kSlateContentRuleListIdentifier = @"SlateShieldsV16";
 
 static NSString* const kYahooAdDefuserSource = @R"JS(
 (function() {
@@ -103,6 +107,11 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
   if (document.contentType === 'application/pdf' || (window.location && window.location.pathname && window.location.pathname.endsWith('.pdf'))) return;
   if (window.__slate_pie_defuser_installed__) return;
   window.__slate_pie_defuser_installed__ = true;
+
+  const pageHost = (window.location.hostname || '').toLowerCase();
+  const isDisneyPlayer = pageHost === 'disneyplus.com' || pageHost.endsWith('.disneyplus.com');
+  // Disney's playback response owns its encrypted audio/video timeline, including
+  // insertion metadata. Removing fields cannot remove server-stitched media safely.
 
   // 1. Safe Deep Object Pruner (Pie Adblock & uBlock Origin engine)
   function deepPrune(obj, path) {
@@ -203,19 +212,6 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
       pruneStreamingJson(obj.playerResponse);
     }
 
-    // Disney+ SSAI manifest pruning
-    if (obj.stream && typeof obj.stream === 'object') {
-      if ('insertion' in obj.stream) delete obj.stream.insertion;
-      if (Array.isArray(obj.stream.sources)) {
-        for (let i = 0; i < obj.stream.sources.length; i++) {
-          const src = obj.stream.sources[i];
-          if (src && typeof src === 'object' && 'insertion' in src) delete src.insertion;
-        }
-      }
-    }
-    if ('pods' in obj && Array.isArray(obj.pods)) obj.pods = [];
-    if ('ads' in obj && Array.isArray(obj.ads)) obj.ads = [];
-
     // Hulu & Peacock ad break pruning
     if ('breaks' in obj && Array.isArray(obj.breaks)) obj.breaks = [];
     if ('pause_ads' in obj) delete obj.pause_ads;
@@ -223,6 +219,59 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
     return obj;
   }
 
+  // Disney ad configuration is separate from its stream insertion timeline.
+  // Filter the five ad-only configuration entries, without reconstructing fetch
+  // responses or changing media sources, insertion points, pods, or DRM data.
+  if (isDisneyPlayer) {
+    function filterDisneyAdConfiguration(value) {
+      try {
+        if (!value || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, 'ads')) return value;
+        const ads = value.ads;
+        if (!ads || typeof ads !== 'object' || Array.isArray(ads)) return value;
+        for (const key of ['metadata', 'document', 'dxc', 'live', 'vod']) {
+          if (Object.prototype.hasOwnProperty.call(ads, key)) delete ads[key];
+        }
+      } catch(e) {} // Frozen objects remain usable by the player.
+      return value;
+    }
+    try {
+      JSON.parse = new Proxy(JSON.parse, {
+        apply(target, receiver, args) {
+          return filterDisneyAdConfiguration(Reflect.apply(target, receiver, args));
+        }
+      });
+    } catch(e) {}
+    try {
+      if (typeof Response !== 'undefined' && typeof Response.prototype.json === 'function') {
+        Response.prototype.json = new Proxy(Response.prototype.json, {
+          apply(target, receiver, args) {
+            return Reflect.apply(target, receiver, args).then(filterDisneyAdConfiguration);
+          }
+        });
+      }
+    } catch(e) {}
+    // Native XHR JSON responses bypass JSON.parse. Text, Blob, and binary getters
+    // retain their original values and descriptors; no request hooks are needed.
+    try {
+      if (typeof XMLHttpRequest !== 'undefined') {
+        const descriptor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'response');
+        if (descriptor && descriptor.get) {
+          Object.defineProperty(XMLHttpRequest.prototype, 'response', {
+            ...descriptor,
+            get: new Proxy(descriptor.get, {
+              apply(target, receiver, args) {
+                const value = Reflect.apply(target, receiver, args);
+                return receiver.responseType === 'json' ? filterDisneyAdConfiguration(value) : value;
+              }
+            })
+          });
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Other players retain the existing general response filtering.
+  if (!isDisneyPlayer) {
   // 2. Hook window.fetch (Pie Adblock json-prune-fetch-response)
   try {
     if (typeof window.fetch === 'function') {
@@ -373,6 +422,8 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
     });
   } catch(e) {}
 
+  } // broad response rewriting is never installed on Disney+
+
   // Click only explicit ad-skip controls. Intro/recap controls belong to the show.
   const kSkipSelectors = [
     '[data-testid="player-skip-ad"]',
@@ -461,7 +512,7 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
     }
 
     // Disney+ ad indicators
-    if (host.includes('disneyplus.com')) {
+    if (isDisneyPlayer) {
       if (anyVisibleAdIndicator(
         '[class*="ad-timer"], [class*="ad-badge"], [class*="ad-countdown"], [class*="ad-banner"], ' +
         '[aria-label*="advertisement" i]'
@@ -524,6 +575,14 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
       if (adActive) {
         if (!video.hasAttribute("data-slate-ad-break")) video.setAttribute("data-slate-ad-break", "1");
       } else video.removeAttribute("data-slate-ad-break");
+    }
+    if (isDisneyPlayer || video.mediaKeys) {
+      if (video.__slate_ad_boosted__) {
+        video.__slate_ad_boosted__ = false;
+        video.muted = video.__slate_orig_muted__;
+        try { video.playbackRate = video.__slate_orig_rate__ || 1.0; } catch(e) {}
+      }
+      return;
     }
     if (adActive) {
       if (video.paused || video.ended) return;
@@ -667,6 +726,8 @@ void WebKitShields::Initialize(const std::vector<std::string>& rule_file_paths) 
   }];
 }
 
+// Slate note: Translate supported list rules into WebKit content-rule JSON and compile them
+// asynchronously.
 void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths) {
   const std::vector<std::string> paths = rule_file_paths;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -952,9 +1013,10 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
           @"selector": @"#Slot300_250_1, #Slot300_250_2, #Slot300_600, [id^='Slot300_'], [data-test-id='right-rail-ad'], [data-test-id='right-rail-ad-container'], [data-test-id='right-rail-ad-frame'], [data-test-id='right-rail-slot'], [data-test-id='ad-slot'], [data-test-id='search-ad'], [data-test-id='message-ad'], div[class*='right-rail-ad'], div[class*='ad-rail'], div[class*='rightRailAd'], div[class*='ad-wrapper'], div[class*='ad_wrapper'], .slot-300-250, .slot-300-600, .uh-dmos-wrapper, .uh-dmos-overlay, [data-test-id='right-rail'] iframe, div[class*='video-dock'], div[class*='docked-player'], div[class*='docked-video'], div[class*='floating-video'], div[class*='floating-player'], div[class*='mini-player'], div[class*='sticky-player'], div[class*='ymail-video'], div[class*='news-video'], div[id*='video-dock'], div[id*='docked-player'], div[id*='docked-video'], div[id*='floating-video'], div[id*='floating-player'], div[id*='mini-player'], div[id*='sticky-player']"
         }
       },
-      // Group 2: Web-wide floating, docked, and outstream video players
+      // Generic player class names also occur on Disney's legitimate video surface.
+      // Keep these cosmetic guesses off its document; network protection stays on.
       @{
-        @"trigger": @{ @"url-filter": @".*" },
+        @"trigger": @{ @"url-filter": @".*", @"unless-domain": @[ @"*disneyplus.com" ] },
         @"action": @{
           @"type": @"css-display-none",
           @"selector": @"div[class*='video-dock'], div[class*='docked-player'], div[class*='docked-video'], div[class*='floating-video'], div[class*='floating-player'], div[class*='mini-player'], div[class*='sticky-player'], div[class*='outstream'], div[id*='outstream'], [class*='connatix'], [id*='connatix'], connatix-player, [class*='primis'], [id*='primis'], [class*='aniview'], [id*='aniview'], [class*='anyclip'], [id*='anyclip'], anyclip-widget, [class*='vrtcal'], [class*='playwire'], [class*='seedtag'], [class*='teads-inread'], [class*='teads'], [class*='outstream-ad'], [class*='outstream-player'], [class*='floating-ad'], [class*='sticky-ad'], div[class*='video-card'][class*='ad'], div[class*='video-card'][class*='sponsored'], div[class*='vpaid']"
@@ -976,9 +1038,9 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
           @"selector": @"div[id^='taboola-'], div[class*='taboola-'], .trc_related_container, .trc_rbox_div, div[class*='OUTBRAIN'], div[id^='outbrain'], div[class*='outbrain'], div[class*='sponsored-post'], div[class*='sponsored-content'], div[class*='sponsor-ad'], div[class*='promoted-item']"
         }
       },
-      // Group 5: Generic ad units, slots, banners, sidebars, placeholders
+      // A generic ad-wrapper can be an ancestor of Disney's shared main video.
       @{
-        @"trigger": @{ @"url-filter": @".*" },
+        @"trigger": @{ @"url-filter": @".*", @"unless-domain": @[ @"*disneyplus.com" ] },
         @"action": @{
           @"type": @"css-display-none",
           @"selector": @"div[class*='ad-container'], div[class*='ad-wrapper'], div[class*='ad-slot'], div[class*='ad-banner'], div[class*='ad-placeholder'], div[class*='ads-container'], div[class*='ads-wrapper'], div[class*='ads-slot'], div[class*='ad_container'], div[class*='ad_wrapper'], div[class*='ad_slot'], div[class*='ad-sidebar'], div[class*='ad-unit'], div[class*='ad-placement'], [data-ad-container], [data-ad-slot], [data-ad-unit]"
@@ -1000,6 +1062,16 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
 
     // In WebKit Content Blockers, ignore-previous-rules must follow block rules
     [rules addObjectsFromArray:exceptionRules];
+
+    // Restore these explicit tracker blocks after broad playback-host exceptions.
+    // These are destinations present in the bundled EasyPrivacy list, not media APIs.
+    for(NSString* tracker in @[@"ads.digital.disneyadvertising.com",
+                              @"analytics.disneyplus.com", @"sanalytics.disneyplus.com",
+                              @"beacons.digital.disneyadvertising.com"]) {
+      NSString* escaped=[tracker stringByReplacingOccurrencesOfString:@"." withString:@"\\."];
+      NSString* regex=[NSString stringWithFormat:@"^https?://+([^:/]+\\.)?%@([:/].*)?$",escaped];
+      [rules addObject:@{ @"trigger":@{ @"url-filter":regex }, @"action":@{ @"type":@"block" } }];
+    }
 
     NSError* jsonError = nil;
     NSData* jsonData = [NSJSONSerialization dataWithJSONObject:rules options:0 error:&jsonError];

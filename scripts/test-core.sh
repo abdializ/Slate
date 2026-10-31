@@ -1,7 +1,10 @@
 #!/bin/bash
+# File purpose: Compiles and runs focused C++ tests in a disposable temporary directory.
+
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRATCH="$(mktemp -d)"
+# Slate note: Remove the scratch test binaries on exit; the source checkout remains the test input.
 trap 'rm -rf "$SCRATCH"' EXIT
 clang++ -std=c++20 -Wall -Wextra -Werror -Wno-missing-field-initializers -I "$ROOT" "$ROOT/core/resource_controller.cc" "$ROOT/tests/core_tests.cc" -o "$SCRATCH/core_tests"
 "$SCRATCH/core_tests"

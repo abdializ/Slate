@@ -1,6 +1,10 @@
+// File purpose: Declares bounded, cancellable icon requests, thumbnail decoding, and an in-memory
+// cache.
+
 #pragma once
 #import <Foundation/Foundation.h>
 
+// Slate note: The returned request token lets navigation or tab closure cancel work owned by that tab.
 @interface SlateFaviconRequest : NSObject
 - (void)cancel;
 @end

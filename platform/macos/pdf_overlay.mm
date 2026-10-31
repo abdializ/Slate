@@ -1,3 +1,6 @@
+// File purpose: Implements PDF detection and a native HUD for page navigation, zoom, printing, and
+// saving.
+
 #import "platform/macos/pdf_overlay.h"
 #import "platform/macos/download_manager.h"
 #import "platform/macos/downloads_panel.h"
@@ -36,6 +39,8 @@ static char kPDFMouseMonitorKey;
  return pdfView != nil;
 }
 
+// Slate note: Retry briefly because WebKit can create its PDF view asynchronously after navigation
+// finishes.
 + (void)checkAndConfigureForWebView:(WKWebView*)webView {
  if (!webView) return;
  

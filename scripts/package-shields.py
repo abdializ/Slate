@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# File purpose: Copies local filter lists and attribution into app resources, retaining supported
+# EasyList network syntax.
+
 import sys, os
 
 def main():
@@ -15,6 +18,8 @@ def main():
                  open(os.path.join(dst_dir, fname), "w", encoding="utf-8") as out:
                 out.write(f.read())
 
+    # Slate note: Filter upstream list entries before packaging; keep bundled attribution alongside the
+    # rule files.
     for fname in ["easylist-network.txt", "easyprivacy-network.txt"]:
         src = os.path.join(src_dir, fname)
         if not os.path.exists(src):

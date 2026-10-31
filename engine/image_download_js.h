@@ -1,7 +1,12 @@
+// File purpose: Contains the isolated-world script that routes trusted image right-clicks to the
+// native Save Image menu.
+
 #pragma once
 
 // Runs in WebKit's isolated client world. Only an actual user right-click on
 // an HTTP(S) image replaces WebKit's context menu; other elements keep theirs.
+// Slate note: isTrusted filters synthetic events; composedPath finds the clicked image; HTTP(S) validation
+// limits what gets sent to the native handler.
 static constexpr const char* kImageDownloadJs = R"SLATEJS((() => {
   document.addEventListener('contextmenu', event => {
     if (!event.isTrusted) return;

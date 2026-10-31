@@ -1,6 +1,10 @@
+// File purpose: Contains an older audible-tab and automatic picture-in-picture script.
+
 #pragma once
 // Audible-tab reporting and automatic picture-in-picture when the page is
 // left. Does not change codecs, sandbox, or autoplay policy.
+// Slate note: pickVideo chooses a media candidate; page events report playback and request PiP. Current
+// WebKit integration uses media_monitor_js.h instead of injecting this helper.
 inline constexpr char kPageChromeJs[] = R"JS((function(){
  if(window.__slatePageChrome) return;
  window.__slatePageChrome=1;

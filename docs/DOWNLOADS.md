@@ -1,5 +1,8 @@
 # Slate downloads redesign
 
+> **File notes:** Describes staged downloads, safe filenames, publication, quarantine, and resumable transfers.
+
+
 The downloads shelf uses native AppKit controls, macOS file icons, a visual-effect panel, search, and All / Active / Finished filters. Open it with the toolbar button or Command-J. Escape closes it; Command-F focuses search. Completed files open on double-click and can be revealed in Finder.
 
 Downloads show transferred bytes, speed, estimated time when available, and honest failure messages. Transfers can be cancelled or paused and resumed where WebKit, the source tab, and the website support resumption. Resume data stays in memory; interrupted transfers are shown as cancelled after a restart. Large file copying and publication run off the main thread.

@@ -1,3 +1,6 @@
+// File purpose: Implements workspace metadata, parked tab records, local storage, and per-space
+// website data stores.
+
 #import "spaces_manager.h"
 
 static NSString* const kFirstSpaceUUID = @"00000000-0000-0000-0000-000000000001";
@@ -217,6 +220,8 @@ static NSString* const kFirstSpaceUUID = @"00000000-0000-0000-0000-000000000001"
     [self saveSpaces];
 }
 
+// Slate note: Shared-sign-in Spaces use the default store; other Spaces request a persistent store keyed
+// by their UUID.
 - (WKWebsiteDataStore*)dataStoreForSpace:(SlateSpace*)space {
     if (!space || space.isFirst || space.sharesSignIns) {
         return [WKWebsiteDataStore defaultDataStore];

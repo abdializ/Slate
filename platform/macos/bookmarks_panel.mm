@@ -1,3 +1,6 @@
+// File purpose: Implements bookmark dropdowns, management UI, tree dragging, and native bookmark
+// menus.
+
 #import "platform/macos/bookmarks_panel.h"
 #import "platform/macos/plate_components.h"
 #import "platform/macos/browser_importer.h"
@@ -8,6 +11,8 @@ static NSPasteboardType const kBookmarkUTIType = @"slate.bookmark.id";
 
 #pragma mark - Helper Functions for Browser Import
 
+// Slate note: Recursively convert Chromium bookmark folders and URL entries into Slate native bookmark
+// nodes.
 static NSArray<SlateBookmark*>* ParseChromiumChildren(NSArray* children) {
   if (![children isKindOfClass:[NSArray class]]) return @[];
   NSMutableArray<SlateBookmark*>* items = [NSMutableArray array];

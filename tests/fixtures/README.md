@@ -1,5 +1,8 @@
 # Manual tab lifecycle smoke test
 
+> **File notes:** Explains local verification fixtures and the provenance/license of media samples.
+
+
 Start a loopback-only test page from the repository root:
 
 ```sh

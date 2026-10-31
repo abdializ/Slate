@@ -1,7 +1,12 @@
+// File purpose: Checks exact-origin password matching, updates, removal, and search. Tests
+// document the behavior they assert; they do not change production browser behavior.
+
 #include "core/credential_store.h"
 #include <cassert>
 #include <iostream>
 
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
   using namespace slate;
 
@@ -26,6 +31,7 @@ int main() {
   // Never silently share a password with another host.
   auto subFound = store.find_for_origin("https://api.github.com");
   assert(subFound.empty());
+  // Slate note: An HTTP page must not receive a credential saved for the HTTPS origin.
   assert(store.find_for_origin("http://github.com").empty());
   assert(store.find_for_origin("https://github.com:8443").empty());
   assert(store.find_for_origin("https://github.com:443").size()==1);

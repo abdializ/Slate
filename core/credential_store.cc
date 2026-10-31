@@ -1,3 +1,6 @@
+// File purpose: Implements the in-memory password collection, exact-origin lookup, updates, and
+// search. Persistent storage is handled separately by platform/macos/credential_persistence.mm.
+
 #include "core/credential_store.h"
 #include <algorithm>
 #include <chrono>
@@ -6,6 +9,8 @@ namespace slate {
 
 namespace {
 
+// Slate note: Normalize scheme, host, and default port before matching; similar-looking domains must not
+// share credentials.
 std::string normalize_host(const std::string& input) {
   if(input.empty() || input.find_first_of(" \t\r\n\\")!=std::string::npos) return {};
   std::string s=input;

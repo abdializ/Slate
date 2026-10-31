@@ -1,7 +1,12 @@
+// File purpose: Declares workspace metadata, parked tab records, local storage, and per-space
+// website data stores.
+
 #pragma once
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
+// Slate note: sharesSignIns chooses shared versus separate website storage; downloads stores an optional
+// folder preference.
 @interface SlateSpace : NSObject
 
 @property (nonatomic, copy) NSString* identifier;

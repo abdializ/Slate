@@ -1,5 +1,8 @@
 # Saved passwords — September 24, 2026
 
+> **File notes:** Describes password matching, Keychain storage, authenticated actions, and legacy migration.
+
+
 This implements the saved-password interaction from the supplied Search project
 in Slate's native AppKit UI. Open Slate > Saved in Slate (Option-Command-P).
 

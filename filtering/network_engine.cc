@@ -1,3 +1,6 @@
+// File purpose: Implements the supported subset of ad-block network rules and indexed request
+// matching.
+
 #include "network_engine.h"
 #include <algorithm>
 #include <cctype>
@@ -126,6 +129,8 @@ void collect_tokens(std::string_view text, std::vector<std::string>& out) {
 }
 }
 
+// Slate note: Parse supported network syntax while skipping list comments, cosmetic rules, and unsupported
+// constructs.
 FilterEngine FilterEngine::parse(std::string_view rules) {
  FilterEngine engine;
  std::string text(rules);
@@ -215,6 +220,8 @@ FilterEngine FilterEngine::parse(std::string_view rules) {
  return engine;
 }
 
+// Slate note: Build candidates from host/token indexes before applying resource-type, domain, and
+// exception checks.
 FilterDecision FilterEngine::classify(const FilterRequest& request) const {
  const auto url=parse_url(request.url);
  const auto source=parse_url(request.source_url);

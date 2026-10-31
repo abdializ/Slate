@@ -1,8 +1,13 @@
+// File purpose: Contains older codec diagnostics and a narrow mediaCapabilities compatibility
+// patch.
+
 #pragma once
 // Page-level media diagnostics plus a VP9/AV1 mediaCapabilities correction.
 // Chromium reports those types as supported=false even when canPlayType and
 // local playback succeed; sites then skip them and try H.264. Do not advertise
 // H.264/AAC, replace MSE, or spoof canPlayType.
+// Slate note: The script checks reported capabilities and logs media diagnostics. Its existence does not
+// establish codec or DRM support, and the current WebKit engine does not inject this helper.
 inline constexpr char kMediaCompatJs[] = R"JS((function(){
  if(window.__slateMediaCompat) return;
  window.__slateMediaCompat=1;

@@ -1,3 +1,6 @@
+// File purpose: Declares PDF detection and a native HUD for page navigation, zoom, printing, and
+// saving.
+
 #pragma once
 
 #import <Cocoa/Cocoa.h>
@@ -6,6 +9,7 @@
 
 @class SlatePDFOverlayHUD;
 
+// Slate note: The helper locates a PDFKit view inside a WebKit page and manages its native controls.
 @interface SlatePDFOverlay : NSObject
 + (PDFView*)findPDFViewInView:(NSView*)view;
 + (BOOL)isPDFWebView:(WKWebView*)webView;

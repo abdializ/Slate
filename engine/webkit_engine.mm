@@ -1,3 +1,6 @@
+// File purpose: Implements the bridge between the C++ BrowserEngine interface and native WKWebView
+// pages.
+
 #import "engine/webkit_engine.h"
 #import "engine/webkit_shields.h"
 #include "engine/page_theme_js.h"
@@ -803,6 +806,8 @@ class WebKitEngine final : public BrowserEngine {
       : events_(std::move(events)), incognito_(incognito) {
     NSView* parent = (__bridge NSView*)native_view;
 
+    // Slate note: Preserve a supplied popup configuration, or create one for a new page; storage and
+    // injected scripts are configured before constructing the WKWebView.
     WKWebViewConfiguration* config = popup_configuration
         ? (__bridge WKWebViewConfiguration*)popup_configuration
         : [[WKWebViewConfiguration alloc] init];
@@ -1184,6 +1189,8 @@ class WebKitEngine final : public BrowserEngine {
     [config.userContentController addScriptMessageHandler:delegate_ name:@"omidJsSessionService"];
 
     NSRect frame = parent.bounds;
+    // Slate note: Construct the actual native page view after configuration; this is where a saved logical
+    // tab becomes a rendering engine.
     web_view_ = [[WKWebView alloc] initWithFrame:frame configuration:config];
     web_view_.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     web_view_.allowsMagnification = YES;
@@ -1359,6 +1366,8 @@ class WebKitEngine final : public BrowserEngine {
     fprintf(stderr, "SLATE_AUTOFILL_FILLED origin=%s user=%s\n", url.absoluteString.UTF8String ?: "", username.c_str());
   }
 
+  // Slate note: This adapter currently reports only a limited observation; it does not inspect all
+  // DOM/application state. Automatic page destruction must not rely on it.
   void inspect_protection() override {
     if (events_.protection_changed && web_view_) {
       ProtectionSignals signals;
@@ -1404,6 +1413,8 @@ class WebKitEngine final : public BrowserEngine {
     if (web_view_) [web_view_ stopLoading];
   }
 
+  // Slate note: Release native handlers and page-owned work through the engine close path, then notify the
+  // application.
   void close() override {
     if (!closed_) {
       closed_ = true;

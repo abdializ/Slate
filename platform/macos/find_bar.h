@@ -1,3 +1,6 @@
+// File purpose: Declares find-in-page UI with HTML and PDF search, highlights, and match
+// navigation.
+
 #pragma once
 
 #import <Cocoa/Cocoa.h>
@@ -5,6 +8,8 @@
 
 @class SlateDelegate;
 
+// Slate note: The targetWebView points at the selected page; the same bar can be retargeted after a tab
+// switch.
 @interface SlateFindBar : NSVisualEffectView <NSTextFieldDelegate>
 
 @property (nonatomic, weak) SlateDelegate* owner;

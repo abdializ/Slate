@@ -1,6 +1,10 @@
+// File purpose: Contains site compatibility overrides used by the WebKit shields adapter.
+
 #pragma once
 
 namespace slate {
+// Slate note: The bypass suffix list excludes sensitive sign-in and streaming hosts from overrides. This
+// compatibility script is not a guarantee of anonymous or undetectable browsing.
 inline constexpr char kStealthJs[] = R"JS((function() {
   if (window.__slate_stealth_active__) return;
   try {

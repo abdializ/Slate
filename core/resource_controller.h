@@ -1,3 +1,7 @@
+// File purpose: Declares tab lifecycle data and a pure policy that recommends state transitions.
+// The production memory-pressure handler does not apply automatic discard recommendations.
+// Automatic unloading is disabled.
+
 #pragma once
 #include <chrono>
 #include <optional>
@@ -6,6 +10,8 @@
 #include "browser_engine.h"
 #include "protection.h"
 namespace slate {
+// Slate note: Discarded means the tab record exists without a live engine; Cold is a policy label, not a
+// guaranteed WebKit freeze.
 enum class Lifecycle { Active, Warm, Cold, Discarded, Protected };
 enum class Pressure { Normal, Warning, Critical };
 struct Tab {
@@ -22,6 +28,7 @@ struct Tab {
  std::string group_id; // Empty means ungrouped.
  bool incognito = false; // Isolated in-memory untrackable mode.
  bool pip_active = false; // Native Picture-in-Picture active for this tab.
+ int zoom_percent = 100; // Independent page scale, including split and detached tabs.
  bool is_protected(std::chrono::steady_clock::time_point now) const {
   return protected_content || pip_active || page_interacted || protection.blocks_discard(now);
  }

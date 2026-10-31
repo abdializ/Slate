@@ -1,7 +1,13 @@
+// File purpose: Checks split membership, parked pairs, pane selection/replacement, swapping, and
+// divider bounds. Tests document the behavior they assert; they do not change production browser
+// behavior.
+
 #include "platform/macos/split_workspace.h"
 #include <cassert>
 #include <cmath>
 
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  slate::WorkspaceLayout workspace;
  assert(!workspace.split());
@@ -14,6 +20,8 @@ int main() {
  // Focusing an already visible pane must not replace the other pane.
  workspace.select(10);
  assert(workspace.left==10 && workspace.right==20 && workspace.active_tab()==10);
+ // Slate note: Selecting an unrelated single tab hides the pair but must not replace its membership or
+ // selected side.
  workspace.select(30);
  assert(workspace.left==10 && workspace.right==20 && workspace.active_tab()==10);
  assert(!workspace.visible_for(30));

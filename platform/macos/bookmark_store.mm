@@ -1,3 +1,6 @@
+// File purpose: Implements bookmark/folder trees, local persistence, and bridges to the C++
+// bookmark list.
+
 #include "bookmark_store.h"
 #import <Foundation/Foundation.h>
 #include <algorithm>
@@ -432,6 +435,8 @@ NSNotificationName const SlateBookmarksChangedNotification = @"SlateBookmarksCha
   [self saveToPath:_currentFilePath ?: [self defaultFilePath]];
 }
 
+// Slate note: Serialize the tree as JSON and write it atomically so readers do not see a partially written
+// file.
 - (void)saveToPath:(NSString*)path {
   _currentFilePath = [path copy];
   NSMutableArray* rows = [NSMutableArray array];

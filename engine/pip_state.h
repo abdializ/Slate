@@ -1,3 +1,6 @@
+// File purpose: Combines per-frame picture-in-picture reports with authoritative native
+// presentation state.
+
 #pragma once
 #include <map>
 #include <optional>
@@ -11,6 +14,8 @@ class PiPState {
  std::optional<bool> native_;
  std::map<std::string,bool> frames_;
 public:
+ // Slate note: Once a native observation exists it wins; a replaced iframe or ad player cannot contradict
+ // the native PiP window.
  bool active() const {
   if(native_) return *native_;
   for(const auto& [id,active]:frames_) if(active) return true;

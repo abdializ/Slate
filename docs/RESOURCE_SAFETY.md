@@ -1,5 +1,8 @@
 # Resource lifecycle and safety
 
+> **File notes:** Defines the current lifecycle/protection boundary and prerequisites for automatic unloading.
+
+
 Slate's resource goal is to keep a large tab workspace available without requiring every saved tab to have a live page. The current macOS application uses AppKit and WebKit. This document describes the current implementation and the work required before enabling automatic unloading.
 
 ## Logical tabs and live pages

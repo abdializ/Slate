@@ -1,3 +1,6 @@
+// File purpose: Implements download state, WebKit/URLSession transfers, pause/resume, local
+// history, and safe file publication.
+
 #import "platform/macos/download_manager.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <sys/xattr.h>
@@ -9,6 +12,7 @@
 
 NSString* const SlateDownloadsChangedNotification = @"SlateDownloadsChangedNotification";
 NSString* const SlateDownloadProgressNotification = @"SlateDownloadProgressNotification";
+NSString* const SlateDownloadStartedNotification = @"SlateDownloadStartedNotification";
 
 static BOOL SecureAttachQuarantine(int fd, const char* path) {
  // Check if quarantine attribute is already securely present (e.g. attached by WebKit Networking process)
@@ -97,6 +101,8 @@ static NSString* DownloadsPersistencePath() {
 
 // Only publish a fully written, quarantined regular file. RENAME_EXCL never
 // replaces another file, even if a download finishes during a name collision.
+// Slate note: Publish staged bytes only after filename/destination checks and quarantine handling;
+// completion must not expose an unfinished file.
 static BOOL PublishDownload(SlateDownloadItem* item, NSString* directory, NSError** error) {
  int fd=open(item.stagingURL.path.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW);
  struct stat st;
@@ -432,6 +438,9 @@ static BOOL IsUnfinished(SlateDownloadItem* item) {
  item.activeDownload = download;
  [_downloadMap setObject:item forKey:download];
  [_items insertObject:item atIndex:0];
+ dispatch_async(dispatch_get_main_queue(), ^{
+  [NSNotificationCenter.defaultCenter postNotificationName:SlateDownloadStartedNotification object:self userInfo:@{@"item":item}];
+ });
  [self startProgressTimerIfNeeded];
  [self notifyChanged];
 }
@@ -450,6 +459,9 @@ static BOOL IsUnfinished(SlateDownloadItem* item) {
  item.activeTask = task;
  [_taskMap setObject:item forKey:task];
  [_items insertObject:item atIndex:0];
+ dispatch_async(dispatch_get_main_queue(), ^{
+  [NSNotificationCenter.defaultCenter postNotificationName:SlateDownloadStartedNotification object:self userInfo:@{@"item":item}];
+ });
  [task resume];
  [self startProgressTimerIfNeeded];
  [self notifyChanged];

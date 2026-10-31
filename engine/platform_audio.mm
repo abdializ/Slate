@@ -1,3 +1,7 @@
+// File purpose: Implements AudioToolbox conversion of supported audio files/bytes into 16-bit PCM
+// WAV. This utility is built by the audio test target; the current WebKit adapter does not call it
+// as a custom audio-scheme pipeline.
+
 #include "platform_audio.h"
 #import <AudioToolbox/AudioToolbox.h>
 #import <Foundation/Foundation.h>
@@ -93,6 +97,8 @@ bool DecodeAudioFileToWav(const std::string& path, std::string* wav, std::string
  }
 }
 
+// Slate note: Stage a bounded byte payload in a temporary file, decode it with AudioToolbox, then remove
+// the temporary file.
 bool DecodeAudioBytesToWav(const void* data, size_t size, std::string* wav, std::string* error) {
  if(!data || size<16 || !wav) { SetError(error,"invalid audio bytes"); return false; }
  if(size>32ull*1024*1024) { SetError(error,"audio source too large"); return false; }

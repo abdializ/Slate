@@ -1,3 +1,7 @@
+// File purpose: Implements logical tab identity, selection, groups, pinning, zoom, and close
+// bookkeeping. Pinning controls placement. Keep loaded controls unloading. Neither is a serialized
+// running-page snapshot.
+
 #include "tab_model.h"
 #include <algorithm>
 #include <limits>
@@ -20,6 +24,7 @@ TabModel::TabModel(std::vector<Tab> restored, std::vector<TabGroup> groups)
  for(auto& tab: tabs_) {
   if(!tab.id || tab.id==std::numeric_limits<TabId>::max() || !ids.insert(tab.id).second)
    throw std::runtime_error("Invalid or duplicate tab ID");
+  if(tab.zoom_percent<25 || tab.zoom_percent>500) throw std::runtime_error("Invalid page zoom");
   next_id_=std::max(next_id_,tab.id+1);
   tab.state=Lifecycle::Discarded;
   tab.protection={}; tab.page_interacted=false;
@@ -54,6 +59,14 @@ TabId TabModel::add(std::string url, bool incognito) {
  select(id);
  return id;
 }
+bool TabModel::set_zoom(TabId id, int percent) {
+ if(auto* tab=mutable_tab(id)) {
+  tab->zoom_percent=std::clamp(percent,25,500);
+  return true;
+ }
+ return false;
+}
+// Slate note: Select a logical tab and update lifecycle labels without allocating a page view.
 bool TabModel::select(TabId id) {
  if(!find(id) || closing(id)) return false;
  for(auto& tab:tabs_) {
@@ -163,6 +176,8 @@ bool TabModel::set_group_collapsed(const std::string& id, bool collapsed) {
  group->collapsed=collapsed;
  return true;
 }
+// Slate note: Ignore observations from an older document generation so late callbacks cannot overwrite
+// newer page state.
 void TabModel::observe(TabId id,const ProtectionSignals& signals) {
  if(auto* tab=mutable_tab(id)) {
   if(signals.document_generation<tab->protection.document_generation) return;
@@ -186,6 +201,8 @@ bool TabModel::begin_close(TabId id,CloseReason reason) {
  return true;
 }
 void TabModel::cancel_close(TabId id) { closing_.erase(id); }
+// Slate note: Removing a tab deletes its record; discarding keeps the record and marks its live page
+// absent.
 void TabModel::closed(TabId id) {
  const auto pending=closing_.find(id);
  const auto reason=pending==closing_.end() ? CloseReason::Discard : pending->second;

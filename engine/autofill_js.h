@@ -1,7 +1,13 @@
+// File purpose: Contains the JavaScript that finds visible sign-in inputs and requests native
+// credential suggestions.
+
 #pragma once
 
 namespace slate {
 
+// Slate note: findLoginFormElements chooses visible password/username inputs; messages ask the native
+// handler for suggestions. Native handler validation remains the authority for credential
+// access.
 inline constexpr char kAutofillJs[] = R"JS(
 (function() {
   'use strict';

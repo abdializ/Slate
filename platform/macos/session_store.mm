@@ -1,3 +1,6 @@
+// File purpose: Implements JSON persistence of tab metadata and groups for lazy session
+// restoration.
+
 #include "session_store.h"
 #include "core/tab_model.h"
 #import <Foundation/Foundation.h>
@@ -11,6 +14,8 @@ bool valid_url(NSString* value) {
  NSURL* url=[NSURL URLWithString:value];
  return ([url.scheme isEqualToString:@"https"] || [url.scheme isEqualToString:@"http"]) && url.host.length;
 }
+// Slate note: Validate the saved schema before rebuilding logical tabs, restoring them without live page
+// engines.
 class JsonSessionStore final : public SessionStore {
  public:
  explicit JsonSessionStore(std::string path):path_(std::move(path)) {}
@@ -50,6 +55,11 @@ class JsonSessionStore final : public SessionStore {
    Tab tab{id,[url UTF8String],[title UTF8String],Lifecycle::Discarded,
     [row[@"selected"] boolValue],[row[@"protected"] boolValue]};
    tab.pinned=pinned;
+   if(NSNumber* zoom=row[@"zoom"]) {
+    require([zoom isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)zoom)!=CFBooleanGetTypeID());
+    require([zoom doubleValue]>=25 && [zoom doubleValue]<=500 && [zoom doubleValue]==[zoom intValue]);
+    tab.zoom_percent=[zoom intValue];
+   }
    if(row[@"group"]) {
     require([row[@"group"] isKindOfClass:NSString.class] && [row[@"group"] length]<=32);
     tab.group_id=[row[@"group"] UTF8String];
@@ -89,7 +99,7 @@ class JsonSessionStore final : public SessionStore {
    require(url && title && url.length<=8192 && title.length<=4096 && valid_url(url));
    NSMutableDictionary* row=[@{@"id":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(tab.id)],
     @"url":url,@"title":title,@"selected":@(tab.selected),@"protected":@(tab.protected_content),
-    @"pinned":@(tab.pinned)} mutableCopy];
+    @"pinned":@(tab.pinned),@"zoom":@(tab.zoom_percent)} mutableCopy];
    if(!tab.group_id.empty())
     row[@"group"]=[NSString stringWithUTF8String:tab.group_id.c_str()];
    [rows addObject:row];

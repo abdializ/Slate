@@ -1,3 +1,7 @@
+// File purpose: Checks network rule matching, exceptions, site/global switches, counters, and
+// bundled-list coverage. Tests document the behavior they assert; they do not change production
+// browser behavior.
+
 #include "core/shields.h"
 #include "filtering/network_engine.h"
 #include <cassert>
@@ -7,6 +11,8 @@
 #ifndef SLATE_SOURCE_DIR
 #define SLATE_SOURCE_DIR "."
 #endif
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  using namespace slate;
  const auto engine=FilterEngine::parse(R"(
@@ -39,6 +45,7 @@ int main() {
  auto decision=shields.classify({.url="https://ads.example/x",.source_url="https://news.example/",.kind=ResourceKind::Image});
  assert(decision.action==FilterAction::Block);
  auto main=shields.classify({.url="https://ads.example/",.source_url="",.kind=ResourceKind::Document});
+ // Slate note: Network shields must allow the top-level document instead of blocking the page itself.
  assert(main.action==FilterAction::Allow);
  shields.pause_site("news.example");
  shields.note_block("news.example","paused rule");
@@ -78,6 +85,16 @@ int main() {
  auto yt=lists.classify({.url="https://rr5---sn-abc.googlevideo.com/videoplayback?id=1",
   .source_url="https://www.youtube.com/watch?v=jNQXAC9IVRw",.kind=ResourceKind::Media});
  assert(yt.action==FilterAction::Allow);
+ for(const auto& host : {"ads.digital.disneyadvertising.com", "analytics.disneyplus.com", "sanalytics.disneyplus.com", "beacons.digital.disneyadvertising.com"}) {
+  auto tracker=lists.classify({.url=std::string("https://")+host+"/event",.source_url="https://www.disneyplus.com/play/session",.kind=ResourceKind::Script});
+  assert(tracker.action==FilterAction::Block);
+ }
+ auto disneyLicense=lists.classify({.url="https://disney.api.edge.bamgrid.com/drm/fairplay/license",
+  .source_url="https://www.disneyplus.com/play/session",.kind=ResourceKind::Xhr});
+ assert(disneyLicense.action==FilterAction::Allow);
+ auto disneyVideo=lists.classify({.url="https://media.disney-plus.net/content/video.m3u8",
+  .source_url="https://www.disneyplus.com/play/session",.kind=ResourceKind::Media});
+ assert(disneyVideo.action==FilterAction::Allow);
  const auto started=std::chrono::steady_clock::now();
  constexpr int kLookups=400;
  uint64_t hits=0;

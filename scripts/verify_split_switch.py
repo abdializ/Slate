@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# File purpose: Checks loaded split/single-page switches, live-view identity, edited state, and
+# PiP follow-up behavior.
+
 """Native split-switch regression; requires macOS and SLATE_ENABLE_VERIFY=ON.
 
 Run: python3 scripts/verify_split_switch.py --app build/platform/macos/Slate.app
@@ -16,6 +19,8 @@ import tempfile
 import threading
 
 
+# Slate note: Exercise a verification build with disposable data and local pages so continuity assertions
+# do not depend on personal browsing state.
 def verify(app, log_path, followup=False):
     with tempfile.TemporaryDirectory(prefix='slate-split-switch-') as scratch:
         root = Path(scratch)
@@ -68,7 +73,7 @@ def verify(app, log_path, followup=False):
         subprocess.run(['/usr/bin/ditto', '--norsrc', '--noextattr', str(app), str(staged)], check=True)
         subprocess.run(['/usr/bin/xattr', '-cr', str(staged)], check=True)
         subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(staged)], check=True, capture_output=True)
-        env = dict(os.environ, SLATE_DATA_DIR=str(root / 'data'), SLATE_COMMAND_FILE=str(command_file))
+        env = dict(os.environ, SLATE_AUTOMATED_INPUT_ONLY='1', SLATE_DATA_DIR=str(root / 'data'), SLATE_COMMAND_FILE=str(command_file))
         try:
             result = subprocess.run([str(staged / 'Contents/MacOS/Slate')], env=env,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)

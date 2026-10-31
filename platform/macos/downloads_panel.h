@@ -1,9 +1,13 @@
+// File purpose: Declares the toolbar download indicator and native download list/actions.
+
 #pragma once
 #import <Cocoa/Cocoa.h>
 #import "platform/macos/download_manager.h"
 
 @class SlateDelegate;
 
+// Slate note: The button reflects manager state; progress rendering is separate from the underlying
+// transfer.
 @interface SlateDownloadButton : NSView
 
 @property (nonatomic, weak) SlateDelegate* owner;

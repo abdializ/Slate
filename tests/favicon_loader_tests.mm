@@ -1,3 +1,7 @@
+// File purpose: Checks icon size/request/cache limits, cancellation, private-cache bypass, and
+// loader teardown. Tests document the behavior they assert; they do not change production browser
+// behavior.
+
 #import "platform/macos/favicon_loader.h"
 #import <AppKit/AppKit.h>
 #include <cassert>
@@ -35,6 +39,8 @@ static void waitUntil(const char* stage, BOOL (^done)(void)) {
  if(!done()) std::cerr << "Timeout: " << stage << "\n";
  assert(done());
 }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  @autoreleasepool {
   NSBitmapImageRep* large=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nullptr pixelsWide:512 pixelsHigh:512 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
@@ -92,6 +98,7 @@ int main() {
   for(int i=0;i<150;i++)
    [tokens addObject:[loader loadURL:[NSURL URLWithString:[NSString stringWithFormat:@"https://icons.test/slow/%d",i]] private:NO completion:^(NSData*){invalidResults++;}]];
   waitUntil("four active downloads", ^BOOL {return starts>=before+4;});
+  // Slate note: Even a burst of requests must respect the four-active-request budget.
   assert(starts==before+4 && peak<=4);
   assert([[loader valueForKey:@"pending"] count]<=128);
   for(SlateFaviconRequest* request in tokens) [request cancel];

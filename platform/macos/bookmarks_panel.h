@@ -1,7 +1,12 @@
+// File purpose: Declares bookmark dropdowns, management UI, tree dragging, and native bookmark
+// menus.
+
 #pragma once
 #import <Cocoa/Cocoa.h>
 #import "platform/macos/bookmark_store.h"
 
+// Slate note: The owner protocol lets the panel request navigation/bookmark actions without owning the
+// browser implementation.
 @protocol SlateBookmarksOwner <NSObject>
 - (void)openHomeAddress:(NSString*)address;
 - (void)toggleBookmark:(id)sender;

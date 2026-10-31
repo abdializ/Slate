@@ -1,3 +1,5 @@
+// File purpose: Builds the Core Graphics outline for a selected horizontal tab.
+
 #pragma once
 #include <CoreGraphics/CoreGraphics.h>
 #include <algorithm>
@@ -12,6 +14,7 @@ static inline CGPathRef CreateActiveBrowserTabPath(CGRect bounds, bool flipped,
  const CGFloat shoulder=std::min(18.0, w/4.0);
  const CGFloat depth=std::min(10.0, h/3.0);
  const CGFloat base=joinsToolbar ? -2.0 : 0.0;
+ // Slate note: This cubic-Bezier factor approximates rounded corners.
  const CGFloat k=0.5522847498;
  CGMutablePathRef path=CGPathCreateMutable();
  CGPathMoveToPoint(path, nullptr, -shoulder, base);
@@ -24,6 +27,7 @@ static inline CGPathRef CreateActiveBrowserTabPath(CGRect bounds, bool flipped,
  CGPathAddCurveToPoint(path, nullptr, w, depth*0.35, w+shoulder*0.45, base, w+shoulder, base);
  CGPathCloseSubpath(path);
  if(!flipped) return path;
+ // Slate note: Mirror the path vertically when the caller uses the opposite coordinate orientation.
  CGAffineTransform mirror=CGAffineTransformMake(1, 0, 0, -1, 0, h);
  CGPathRef reflected=CGPathCreateCopyByTransformingPath(path, &mirror);
  CGPathRelease(path);

@@ -1,3 +1,6 @@
+// File purpose: Implements sign-in monitoring, framework-aware autofill, typing/fullscreen
+// signals, and optional passkey suppression.
+
 #import "form_relay.h"
 
 @implementation SlateFormRelay
@@ -309,6 +312,8 @@
 )JS";
 }
 
+// Slate note: JSON-encode values before placing them into JavaScript so quotes and special characters
+// cannot become executable source.
 + (NSString *)fillScriptWithUser:(NSString *)username password:(NSString *)password {
   NSData* userData = [NSJSONSerialization dataWithJSONObject:@[username ?: @"", password ?: @""] options:0 error:nil];
   NSString* json = [[NSString alloc] initWithData:userData encoding:NSUTF8StringEncoding] ?: @"[\"\", \"\"]";

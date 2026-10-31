@@ -1,8 +1,12 @@
+// File purpose: Declares shared native panel colors, cards, rows, search fields, and action
+// controls.
+
 #pragma once
 #import <Cocoa/Cocoa.h>
 
 /// The unified palette for Slate panels and cards, matching the reference design:
 /// ground, hairline, ink, muted, faint, wash, accent.
+// Slate note: Central color helpers keep native panels consistent with the current macOS appearance.
 @interface SlatePalette : NSObject
 + (NSColor*)ground;
 + (NSColor*)hairline;

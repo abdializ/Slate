@@ -1,3 +1,6 @@
+// File purpose: Implements the address-site card with connection/certificate information and page
+// actions.
+
 #import "platform/macos/site_card_panel.h"
 #import "platform/macos/plate_components.h"
 #import <Cocoa/Cocoa.h>
@@ -338,6 +341,8 @@ static NSString* CleanSiteHost(NSURL* url) {
   _glassView.layer.borderColor = [SlatePalette hairline].CGColor;
 }
 
+// Slate note: Invalidate cached certificate presentation when the URL changes, then render the new page
+// information.
 - (void)updateWithURL:(NSURL*)url trust:(SecTrustRef)trust secureContent:(BOOL)secure zoom:(int)zoom {
   BOOL urlChanged = ![_pageURL isEqual:url];
   _pageURL = url;

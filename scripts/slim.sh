@@ -1,9 +1,13 @@
 #!/bin/bash
+# File purpose: Removes older CEF SDK/build leftovers and reports local workspace/app sizes.
+
 # Remove unused legacy CEF SDK and leftover local probe profiles.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Drop legacy CEF third_party folder completely (WebKit uses macOS system frameworks)
+# Slate note: This is an explicit cleanup operation for legacy third-party build content, not part of
+# normal page-memory management.
 rm -rf "$ROOT/third_party"
 
 if [[ -d "$ROOT/build" ]]; then

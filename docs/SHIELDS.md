@@ -1,5 +1,8 @@
 # Slate Shields V0.1
 
+> **File notes:** Describes filter lists, per-site controls, and the supported blocking architecture.
+
+
 Slate Shields is built into the browser. It is not an extension. Network
 requests are classified locally against bundled EasyList and EasyPrivacy
 network-rule extracts, then cancelled in CEF before the resource downloads.

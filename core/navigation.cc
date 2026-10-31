@@ -1,3 +1,5 @@
+// File purpose: Implements address-bar parsing into a URL, a Google search, or an invalid input.
+
 #include "navigation.h"
 #include <algorithm>
 #include <cctype>
@@ -65,6 +67,7 @@ std::string google_search(std::string_view query) {
 }
 NavigationDecision ok(InputKind kind, std::string url) { return {kind,std::move(url)}; }
 }
+// Slate note: Reject executable/local-file schemes before treating an input as a URL or search.
 NavigationDecision resolve_address_bar(std::string_view raw) {
  const std::string text=trim(raw);
  if(text.empty()) return {};

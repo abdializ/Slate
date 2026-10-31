@@ -1,8 +1,13 @@
+// File purpose: Checks bookmark JSON and password CSV import with synthetic records. Tests
+// document the behavior they assert; they do not change production browser behavior.
+
 #import "platform/macos/browser_importer.h"
 #import <Foundation/Foundation.h>
 #include <cassert>
 #include <iostream>
 
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
   @autoreleasepool {
     using namespace slate;
@@ -48,6 +53,7 @@ int main() {
 
     BookmarkList bList;
     size_t imported = BrowserImporter::ImportChromiumBookmarks(tmpFile.UTF8String, bList);
+    // Slate note: The synthetic bookmark tree must produce exactly three imported sites.
     assert(imported == 3);
     assert(bList.items().size() == 3);
     assert(bList.find_url("https://outlook.office.com") != nullptr);

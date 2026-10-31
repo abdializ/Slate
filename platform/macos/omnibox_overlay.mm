@@ -1,3 +1,6 @@
+// File purpose: Implements the address/search field card, inline completion, and its centered page
+// overlay.
+
 #import "omnibox_overlay.h"
 #import <QuartzCore/QuartzCore.h>
 
@@ -168,6 +171,8 @@ static NSArray<NSString*>* KnownDomains() {
 
 // MARK: - Autocompletion
 
+// Slate note: Offer a suffix for a known domain matching the typed prefix; this is completion, not a
+// network lookup.
 - (NSString*)findEndingFor:(NSString*)typed {
   if (typed.length < 2) return nil;
   NSString* lower = typed.lowercaseString;

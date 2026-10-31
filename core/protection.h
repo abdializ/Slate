@@ -1,3 +1,7 @@
+// File purpose: Defines temporary page observations used to decide whether unloading would be
+// unsafe. These observations are not session snapshots, and declaring a signal here does not mean
+// the current WebKit adapter detects it completely.
+
 #pragma once
 #include <chrono>
 #include <cstdint>
@@ -16,9 +20,13 @@ struct ProtectionSignals {
  bool download=false;
  bool dialog=false;
  std::chrono::steady_clock::time_point observed_at{};
+ // Slate note: A protection observation expires after 30 seconds; unknown or stale state blocks policy-
+ // driven discarding.
  bool fresh(std::chrono::steady_clock::time_point now) const {
   return observed && now>=observed_at && now-observed_at<std::chrono::seconds(30);
  }
+ // Slate note: Any uncertain, editing, media, capture, download, or dialog condition conservatively
+ // protects the tab.
  bool blocks_discard(std::chrono::steady_clock::time_point now) const {
   return !fresh(now) || loading || uncertain || form_controls || media_elements ||
    capture || media_permission_requested || download || dialog;

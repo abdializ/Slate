@@ -1,3 +1,6 @@
+// File purpose: Implements the native searchable password manager and authentication-gated
+// password actions.
+
 #import "platform/macos/passwords_panel.h"
 #import "platform/macos/browser_importer.h"
 #import "platform/macos/plate_components.h"
@@ -167,6 +170,8 @@
  self.expandedSite=[self.expandedSite isEqualToString:sender.identifier]?nil:sender.identifier;
  [self reloadItems];
 }
+// Slate note: Authenticate with macOS and reject late results when the panel/request state changed before
+// completion.
 - (void)authenticate:(NSString*)identifier reason:(NSString*)reason completion:(void (^)(NSString*))completion {
  if(!self.store || self.authentication) return;
  LAContext* context=[LAContext new]; NSError* error=nil;

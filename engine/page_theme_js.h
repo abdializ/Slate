@@ -1,7 +1,11 @@
+// File purpose: Contains the isolated main-frame script that reads page colors for Slate chrome.
+
 #pragma once
 
 // Runs only in the main frame's isolated WebKit content world. The page can
 // change its own styles, but cannot send arbitrary colors to the native bridge.
+// Slate note: report sends only a changed color. suspend removes observers/timers for hidden documents;
+// resume reconnects and refreshes when visible.
 inline constexpr char kPageThemeJs[] = R"JS((function() {
  if (window.__slateThemeObserver) return;
  window.__slateThemeObserver = true;

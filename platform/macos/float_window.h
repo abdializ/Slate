@@ -1,3 +1,6 @@
+// File purpose: Declares a custom floating-window video fallback that reuses an existing page
+// view.
+
 #pragma once
 #import <AppKit/AppKit.h>
 
@@ -36,6 +39,8 @@
 /// and the whole web view is lifted out of the window and into a small
 /// floating one. The video never stops, because it is the same page it
 /// always was — it has only changed windows.
+// Slate note: lift/drop move an existing view; the application remains responsible for returning it to its
+// original host.
 @interface SlateFloat : NSObject
 
 /// Asked to go away. The browser does the bookkeeping and calls back into

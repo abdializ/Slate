@@ -1,12 +1,24 @@
+// File purpose: Checks logical tab selection, live state, zoom, Keep loaded, and asynchronous
+// close bookkeeping. Tests document the behavior they assert; they do not change production
+// browser behavior.
+
 #include "core/tab_model.h"
 #include <cstdlib>
 #include <iostream>
 using namespace slate;
 void check(bool condition) { if(!condition) std::abort(); }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  TabModel model;
  for(int i=0;i<20;++i) model.add("https://example.com/"+std::to_string(i));
  check(model.tabs().size()==20 && model.selected()==20);
+ check(model.set_zoom(1,125) && model.set_zoom(2,90));
+ check(model.find(1)->zoom_percent==125 && model.find(2)->zoom_percent==90 && model.find(3)->zoom_percent==100);
+ check(!model.set_zoom(999,125));
+ model.set_zoom(3,999); check(model.find(3)->zoom_percent==500);
+ model.set_zoom(3,-1); check(model.find(3)->zoom_percent==25);
+ model.set_zoom(3,100);
  model.select(1); model.opened(1);
  model.select(2); model.opened(2);
  model.select(3); model.opened(3);
@@ -24,6 +36,7 @@ int main() {
  check(!model.select(2) && !model.begin_close(2,CloseReason::Remove));
  model.cancel_close(2); check(model.select(2) && model.live(2));
  check(model.begin_close(2,CloseReason::Discard)); model.closed(2);
+ // Slate note: Discard completion removes the live page while retaining all logical tab records.
  check(model.tabs().size()==20 && !model.live(2) && model.find(2)->state==Lifecycle::Discarded);
  check(model.select(2)); model.opened(2); check(model.live(2));
  TabModel restored(model.tabs());

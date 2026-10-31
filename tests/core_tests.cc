@@ -1,8 +1,14 @@
+// File purpose: Checks resource-policy priority, pressure/idle transitions, and the absence of
+// policy side effects. Tests document the behavior they assert; they do not change production
+// browser behavior.
+
 #include "core/resource_controller.h"
 #include <cstdlib>
 #include <iostream>
 using namespace slate;
 void check(bool condition) { if (!condition) std::abort(); }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  auto now = std::chrono::steady_clock::now();
  std::vector<Tab> tabs{{1,"https://example.com","",Lifecycle::Active,true,false,now},
@@ -22,6 +28,8 @@ int main() {
  tabs[2].last_used=now-std::chrono::minutes(16);
  changes=controller.evaluate(tabs,{Pressure::Normal,0,true},now);
  check(changes[1].target==Lifecycle::Discarded);
+ // Slate note: Evaluating a policy must leave the original tab unchanged; callers decide whether to apply
+ // recommendations.
  check(tabs[2].state==Lifecycle::Warm); // Policy is side-effect free.
  tabs[1].selected=true; tabs[1].state=Lifecycle::Protected;
  changes=controller.evaluate(tabs,{Pressure::Critical,0,true},now);

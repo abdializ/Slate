@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# File purpose: Checks native full-screen controls, hit targets, and exiting full screen.
+
 """Check persistent full-screen window controls in an isolated macOS app.
 
 Requires SLATE_ENABLE_VERIFY=ON. Runs real full-screen transitions, verifies
@@ -14,6 +16,8 @@ import tempfile
 import uuid
 
 
+# Slate note: Use a temporary verification app/profile to exercise real full-screen transitions without
+# changing the normal browsing session.
 def verify(app, log_path=None):
     with tempfile.TemporaryDirectory(prefix='slate-fullscreen-') as scratch:
         root = Path(scratch)

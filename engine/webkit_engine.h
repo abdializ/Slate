@@ -1,3 +1,6 @@
+// File purpose: Declares the bridge between the C++ BrowserEngine interface and native WKWebView
+// pages.
+
 #pragma once
 #include "core/browser_engine.h"
 #include "core/protection.h"
@@ -7,6 +10,8 @@
 namespace slate {
 
 // native_view is an NSView*. Construction and every call require the UI thread.
+// Slate note: Opaque pointers keep native types out of the C++ API; the caller must pass the expected
+// native objects on the UI thread.
 std::unique_ptr<BrowserEngine> make_webkit_engine(void* native_view, EngineEvents events,
                                                 const std::string& url, ShieldController* shields=nullptr,
                                                 bool incognito=false, void* website_data_store=nullptr,

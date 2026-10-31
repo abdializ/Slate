@@ -1,5 +1,8 @@
 # Tab workspace benchmark
 
+> **File notes:** Explains the controlled tab benchmark, recorded results, attribution, reproduction, and limitations.
+
+
 Slate's intended advantage is resource-conscious tab lifecycle. This benchmark checks two separate questions: the cost of keeping 24 pages loaded, and the cost of restoring 24 saved Slate tabs while loading only the selected page. It also checks continuity and synchronous activation when switching between loaded split and single-tab workspaces.
 
 ## Results — 2026-10-05

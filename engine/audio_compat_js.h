@@ -1,7 +1,13 @@
+// File purpose: Contains an older audio compatibility script that rewrites AAC/M4A sources to a
+// custom WAV scheme.
+
 #pragma once
 // Rewrites AAC/M4A <audio> onto a WAV custom-scheme URL. Chromium will not
 // request <source type="audio/mp4">, and a .m4a URL is treated as AAC. The
 // browser process transcodes with AudioToolbox and returns WAV bytes.
+// Slate note: The constant holds JavaScript source. Its observer prepares relevant audio/source elements
+// instead of rescanning on every unrelated mutation. This helper is not injected by the
+// current WebKit engine.
 inline constexpr char kAudioCompatJs[] = R"JS((function(){
  if(window.__slateAudioCompat) return;
  window.__slateAudioCompat=1;

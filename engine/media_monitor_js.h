@@ -1,8 +1,13 @@
+// File purpose: Contains event-driven audio/video, user-intent, frame, and picture-in-picture
+// observation.
+
 #pragma once
 
 namespace slate {
 
 // Event-driven media state. A page calling play() is not evidence of user intent.
+// Slate note: Trusted gestures distinguish user-started playback from autoplay. report publishes media
+// state; mutation checks are coalesced and page-cache events reset/re-publish observations.
 inline constexpr char kMediaMonitorJs[] = R"JS(
 (function () {
   'use strict';

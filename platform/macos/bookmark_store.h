@@ -1,3 +1,6 @@
+// File purpose: Declares bookmark/folder trees, local persistence, and bridges to the C++ bookmark
+// list.
+
 #pragma once
 #include "core/library.h"
 #include <memory>
@@ -7,6 +10,7 @@
 #import <Cocoa/Cocoa.h>
 
 /// A single bookmark node in the tree: either a site (with url) or a folder (with children).
+// Slate note: A node is either a website with a URL or a folder with children.
 @interface SlateBookmark : NSObject <NSCopying>
 @property (nonatomic, copy) NSString* identifier;
 @property (nonatomic, copy) NSString* title;

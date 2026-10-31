@@ -1,5 +1,8 @@
 # Native Picture-in-Picture (PiP) Architecture in Slate
 
+> **File notes:** Describes intended picture-in-picture behavior and its engine/native integration.
+
+
 Slate implements production-grade, native Picture-in-Picture (PiP) support for macOS, engineered to match the seamless, high-performance behavior of Safari.
 
 ---

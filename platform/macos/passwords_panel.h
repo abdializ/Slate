@@ -1,6 +1,11 @@
+// File purpose: Declares the native searchable password manager and authentication-gated password
+// actions.
+
 #import <Cocoa/Cocoa.h>
 #include "core/credential_store.h"
 
+// Slate note: The panel borrows a C++ credential store and requests persistence through its supplied save
+// callback.
 @interface SlatePasswordsPanel : NSPanel <NSTableViewDataSource, NSTableViewDelegate>
 
 + (instancetype)sharedPanel;

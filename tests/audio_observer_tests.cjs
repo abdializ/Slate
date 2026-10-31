@@ -1,3 +1,7 @@
+// File purpose: Checks that the older audio-rewrite observer handles relevant mutations without
+// repeated full-page scans. Tests document the behavior they assert; they do not change production
+// browser behavior.
+
 // Run with node tests/audio_observer_tests.cjs. No browser or network required.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,6 +24,8 @@ function audio(src) {
     load() { this.loads++; }
   };
 }
+// Slate note: The harness executes extracted JavaScript with mock browser objects; these assertions are
+// component checks, not proof of live-site compatibility.
 vm.runInNewContext(script, {document, window: {}, URL,
   HTMLMediaElement: function Media() {},
   MutationObserver: class { constructor(callback) { observer = callback; } observe() {} }
@@ -30,6 +36,7 @@ for (let i=0; i<100; i++) observer([{target:unrelated, addedNodes:[unrelated]}])
 assert.equal(fullScans, 1, 'Unrelated mutations must not scan the whole document');
 const inserted = audio('clip.m4a');
 observer([{target:unrelated, addedNodes:[inserted]}]);
+// Slate note: One newly inserted audio source should be prepared once, without repeatedly reloading it.
 assert.equal(inserted.loads, 1);
 assert.match(inserted.getAttribute('src'), /^slate-audio:/);
 observer([{target:unrelated, addedNodes:[inserted]}]);

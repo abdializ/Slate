@@ -1,5 +1,8 @@
 # Resource overhead improvements — October 6, 2026
 
+> **File notes:** Records resource-overhead improvements, enforced budgets, and October 6 validation.
+
+
 Implemented in the downloaded Slate-main source. The production app remains a native AppKit/WebKit browser and restores saved tab metadata lazily.
 
 ## Bounded favicon pipeline

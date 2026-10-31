@@ -1,3 +1,6 @@
+// File purpose: Implements bounded, cancellable icon requests, thumbnail decoding, and an in-
+// memory cache.
+
 #import "favicon_loader.h"
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
@@ -31,6 +34,8 @@ static constexpr NSUInteger kMaxQueuedIcons = 128;
 - (void)cancel { [self.owner cancelRequest:self]; }
 @end
 
+// Slate note: Reject oversized input/dimensions and decode only a small thumbnail rather than retaining a
+// full-size source image.
 static NSData* SmallIcon(NSData* data) {
  if (!data.length || data.length > kMaxIconBytes) return nil;
  CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data,

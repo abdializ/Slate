@@ -1,5 +1,8 @@
 # Security Architecture & Posture
 
+> **File notes:** Describes security boundaries, storage, browser/page bridges, and validation.
+
+
 Slate is a lightweight, personal macOS browser built with Apple WebKit (`WKWebView`), AppKit, and native Swift/Objective-C++.
 
 The security architecture is built directly on top of Apple's system WebKit process isolation and macOS App Sandbox without heavyweight third-party engines or cloud dependencies.

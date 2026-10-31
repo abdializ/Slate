@@ -1,3 +1,6 @@
+// File purpose: Declares content-blocking settings, per-site pauses, request classification, and
+// block counters.
+
 #pragma once
 #include "filtering/network_engine.h"
 #include <memory>
@@ -12,6 +15,8 @@ struct ShieldPageStats {
  uint64_t blocked=0;
  std::string last_rule;
 };
+// Slate note: This C++ policy wraps the filter matcher; WebKit network blocking has a separate native
+// adapter.
 class ShieldController {
  public:
   static ShieldController from_list_files(const std::vector<std::string>& paths);

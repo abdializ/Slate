@@ -62,3 +62,5 @@
 ||sharethrough.com^
 ||applovin.com^
 ||revcontent.com^
+! Disney's separate ad delivery host; keep playback and license hosts allowed.
+||ads.digital.disneyadvertising.com^

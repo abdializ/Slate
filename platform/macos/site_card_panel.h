@@ -1,3 +1,6 @@
+// File purpose: Declares the address-site card with connection/certificate information and page
+// actions.
+
 #pragma once
 #import <Cocoa/Cocoa.h>
 #import <Security/Security.h>
@@ -6,6 +9,7 @@
 
 /// The site card: floating non-activating panel shown under the address / active tab
 /// displaying connection privacy, security certificate details, copy address, print, and zoom.
+// Slate note: The panel receives URL, trust, secure-content, and zoom information from the selected page.
 @interface SlateSiteCardPanel : NSPanel
 
 + (instancetype)sharedPanel;

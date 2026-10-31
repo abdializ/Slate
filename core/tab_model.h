@@ -1,3 +1,7 @@
+// File purpose: Declares logical tab identity, selection, groups, pinning, zoom, and close
+// bookkeeping. Pinning controls placement. Keep loaded controls unloading. Neither is a serialized
+// running-page snapshot.
+
 #pragma once
 #include "resource_controller.h"
 #include <map>
@@ -5,6 +9,8 @@
 namespace slate {
 enum class CloseReason { Discard, Remove, Shutdown };
 // UI-thread logical state only. No native views, engine objects or CEF headers.
+// Slate note: The model stores metadata and live/closing IDs; the native application owns the actual page
+// views.
 class TabModel {
  public:
  explicit TabModel(std::vector<Tab> restored = {}, std::vector<TabGroup> groups = {});
@@ -20,6 +26,7 @@ class TabModel {
  void protect(TabId id, bool value);
  void set_pip_active(TabId id, bool active);
  void pin(TabId id, bool value);
+ bool set_zoom(TabId id, int percent);
  std::string add_group(std::string title);
  bool rename_group(const std::string& id, std::string title);
  bool remove_group(const std::string& id);

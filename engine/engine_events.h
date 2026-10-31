@@ -1,3 +1,7 @@
+// File purpose: Defines callbacks through which the WebKit engine reports page events to native
+// browser UI. std::function stores a callable supplied by the application. This keeps the engine
+// independent of the concrete app delegate.
+
 #pragma once
 #include "core/protection.h"
 #include "core/shields.h"
@@ -8,6 +12,7 @@
 
 namespace slate {
 
+// Slate note: Navigation, media, credential, and close events flow back through this callback bundle.
 struct EngineEvents {
   std::function<void(ProtectionSignals)> protection_changed;
   std::function<void(std::string)> address_changed;
@@ -20,6 +25,8 @@ struct EngineEvents {
   std::function<void(int width, int height, std::string quality, bool hdr)> media_quality_changed;
   std::function<void(bool)> pip_changed; // native picture-in-picture active state changed
   std::function<void(bool, double)> loading_changed; // loading, progress 0..1
+  // Slate note: Closing has separate readiness, cancellation, and completion events so native state can
+  // follow the asynchronous engine handshake.
   std::function<void()> close_ready;
   std::function<void()> close_cancelled;
   // Synchronously return a tab-owned WKWebView using WebKit's supplied configuration.

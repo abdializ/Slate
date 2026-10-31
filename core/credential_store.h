@@ -1,3 +1,6 @@
+// File purpose: Declares the in-memory password collection, exact-origin lookup, updates, and
+// search. Persistent storage is handled separately by platform/macos/credential_persistence.mm.
+
 #pragma once
 #include <string>
 #include <vector>
@@ -6,6 +9,7 @@
 
 namespace slate {
 
+// Slate note: Each record carries the website origin and account name as well as its password.
 struct Credential {
   std::string id;
   std::string origin;     // e.g. "https://github.com" or "github.com"

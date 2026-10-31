@@ -1,8 +1,11 @@
+// File purpose: Declares address-bar parsing into a URL, a Google search, or an invalid input.
+
 #pragma once
 #include <string>
 #include <string_view>
 namespace slate {
 enum class InputKind { Url, Search, Invalid };
+// Slate note: The UI receives both the classification and the final destination URL.
 struct NavigationDecision {
  InputKind kind = InputKind::Invalid;
  std::string url;

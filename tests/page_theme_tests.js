@@ -1,3 +1,6 @@
+// File purpose: Checks that hidden-page theme observers and timers stop doing work. Tests document
+// the behavior they assert; they do not change production browser behavior.
+
 const assert=require('node:assert/strict');
 const fs=require('node:fs'); const vm=require('node:vm'); const path=require('node:path');
 const script=fs.readFileSync(path.join(__dirname,'../engine/page_theme_js.h'),'utf8').split('R"JS(')[1].split(')JS"')[0];
@@ -5,6 +8,8 @@ let time=0, next=1, reads=0, mutations, connected=false;
 const timers=new Map(), events=new Map(), messages=[];
 function add(name,fn) { if(!events.has(name)) events.set(name,[]); events.get(name).push(fn); }
 function fire(name) { for(const fn of events.get(name)||[]) fn(); }
+// Slate note: The harness executes extracted JavaScript with mock browser objects; these assertions are
+// component checks, not proof of live-site compatibility.
 function advance(ms) {
  const end=time+ms;
  while(true) {
@@ -30,6 +35,8 @@ assert.equal(connected,false); assert.equal(timers.size,0);
 const before=reads;
 for(let i=0;i<1000;i++) mutations();
 fire('resize'); advance(60000);
+// Slate note: After hiding the page, simulated mutations/time must cause no additional layout or color
+// reads.
 assert.equal(reads,before,'hidden tabs perform no theme layout/color reads');
 assert.equal(timers.size,0,'hidden tabs own no theme timers');
 document.hidden=false; fire('visibilitychange'); assert.ok(connected);

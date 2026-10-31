@@ -1,3 +1,6 @@
+// File purpose: Implements a custom floating-window video fallback that reuses an existing page
+// view.
+
 #import "float_window.h"
 #import <WebKit/WebKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -876,6 +879,8 @@ static BOOL sFlicks = NO;
  [NSUserDefaults.standardUserDefaults setObject:NSStringFromRect(frame) forKey:@"float.frame"];
 }
 
+// Slate note: Remember position and remove observers, timers, and the lifted view when the fallback window
+// closes.
 - (void)drop {
  if (!_panel) return;
  [SlateFloat setRemembered:_panel.frame];

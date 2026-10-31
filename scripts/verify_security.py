@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# File purpose: Probes signed entitlements, script-bridge isolation, autofill, downloads, and
+# selected process metrics.
+
 import os
 import sys
 import time
@@ -54,6 +57,8 @@ def get_process_cpu(pid):
     except Exception:
         return 0.0
 
+# Slate note: This legacy helper currently finds WebKit processes broadly; its results are not a validated
+# Slate-only whole-browser benchmark.
 def find_slate_subprocesses(parent_pid):
     # Find com.apple.WebKit.WebContent and com.apple.WebKit.Networking related to Slate
     pids = []

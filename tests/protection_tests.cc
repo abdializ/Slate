@@ -1,8 +1,14 @@
+// File purpose: Checks stale/unknown observations, media/editing blockers, and protection state
+// after navigation or restore. Tests document the behavior they assert; they do not change
+// production browser behavior.
+
 #include "core/tab_model.h"
 #include <cstdlib>
 #include <iostream>
 using namespace slate;
 void check(bool value) { if(!value) std::abort(); }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() {
  const auto now=std::chrono::steady_clock::now();
  Tab tab{1,"https://example.com","Example",Lifecycle::Warm};
@@ -17,6 +23,7 @@ int main() {
  clean.uncertain=false; clean.observed_at=now;
  tab.protection=clean;
  check(target({Pressure::Critical,0,true})==Lifecycle::Discarded);
+ // Slate note: Unknown system pressure is a protection condition, not permission to destroy a page.
  check(target({})==Lifecycle::Protected); // Unknown system pressure cannot discard.
  for(bool ProtectionSignals::*flag : {&ProtectionSignals::loading,&ProtectionSignals::uncertain,
   &ProtectionSignals::form_controls,&ProtectionSignals::media_elements,&ProtectionSignals::capture,

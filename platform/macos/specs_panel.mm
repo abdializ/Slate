@@ -1,3 +1,5 @@
+// File purpose: Implements a native panel presenting browser capability/resource comparison cards.
+
 #import "platform/macos/specs_panel.h"
 
 @interface SlateBarView : NSView
@@ -31,6 +33,8 @@
 @interface SlateSpecCard : NSView
 @end
 
+// Slate note: Build a comparison card from supplied row values; the bars display those inputs rather than
+// measuring browser processes.
 @implementation SlateSpecCard
 
 - (instancetype)initWithIcon:(NSString*)symbolName

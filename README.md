@@ -1,5 +1,8 @@
 # Slate
 
+> **File notes:** Introduces Slate, its product goal, build/test steps, supported behavior, and measurement limits.
+
+
 **A native Mac browser built around the cost of keeping tabs open.**
 
 Slate is for people who keep a large browsing workspace and move between a few active pages. Its central goal is to reduce the resources that workspace needs while keeping active work responsive and under the user's control.
@@ -58,6 +61,13 @@ open build/platform/macos/Slate.app
 ```
 
 No Chromium SDK is required. The signing script uses a local Apple Development identity when available and an ad-hoc signature otherwise. Certificates and provisioning profiles are not included.
+
+## Updates
+
+Slate 0.2.0 adds **Slate → Check for Updates…** and automatic update controls in
+**Settings → About**. Updates install inside the app; routine results appear in
+Settings without an OK popup. The signed release feed must be published to
+activate delivery. See [release setup and verification](docs/UPDATES.md).
 
 ## Tests
 

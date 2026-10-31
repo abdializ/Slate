@@ -1,4 +1,6 @@
 #!/bin/bash
+# File purpose: Stages and signs an app bundle with a development identity or an ad-hoc fallback.
+
 # Sign Slate with a stable Apple Development identity so Chromium Keychain
 # items survive relaunches. Does not disable the Chromium sandbox or use a
 # mock keychain.
@@ -10,6 +12,9 @@
 set -euo pipefail
 export COPYFILE_DISABLE=1
 APP="${1:?usage: codesign.sh Slate.app}"
+# Slate note: Use an explicitly configured identity or look for a local development identity; later
+# fallback uses an ad-hoc signature. Actual signing mode determines which entitlements are
+# attached.
 IDENTITY="${SLATE_CODESIGN_IDENTITY:-}"
 if [[ -z "$IDENTITY" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1 || true)"
@@ -57,6 +62,19 @@ for helper in "$STAGE/Slate.app/Contents/Frameworks"/Slate\ Helper*.app; do
     sign "dev.slate.browser.${name// /_}" "$helper"
   fi
 done
+# Match Sparkle's nested helpers to the host signing identity for Library Validation.
+# Ad-hoc local builds retain Sparkle's upstream signed framework and helpers.
+SPARKLE_FRAMEWORK="$STAGE/Slate.app/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE_FRAMEWORK" && "$IDENTITY" != "-" ]]; then
+  for nested in "$SPARKLE_FRAMEWORK"/Versions/B/XPCServices/*.xpc \
+                "$SPARKLE_FRAMEWORK"/Versions/B/Autoupdate \
+                "$SPARKLE_FRAMEWORK"/Versions/B/Updater.app \
+                "$SPARKLE_FRAMEWORK"; do
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp=none \
+      --preserve-metadata=identifier,entitlements "$nested"
+  done
+fi
+
 ENTITLEMENTS="${SLATE_ENTITLEMENTS:-$(cd "$(dirname "$0")/.." && pwd)/platform/macos/Slate.entitlements}"
 if [[ -f "$ENTITLEMENTS" && "$IDENTITY" != "-" ]]; then
   codesign --force --sign "$IDENTITY" --identifier "dev.slate.browser" \

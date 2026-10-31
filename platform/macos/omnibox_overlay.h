@@ -1,3 +1,6 @@
+// File purpose: Declares the address/search field card, inline completion, and its centered page
+// overlay.
+
 #pragma once
 #import <AppKit/AppKit.h>
 
@@ -8,6 +11,8 @@ static const CGFloat kFieldWidth = 560.0;
 static const CGFloat kFieldHeight = 52.0;
 static const CGFloat kCornerRadius = 26.0;
 
+// Slate note: The field reports queries and submissions to the browser; navigation decisions live outside
+// this view.
 @protocol SlateOmniboxDelegate <NSObject>
 - (void)showSuggestionsForCard:(nonnull SlateOmniboxCard*)card query:(nonnull NSString*)query;
 - (void)submitOmniboxCard:(nonnull SlateOmniboxCard*)card;

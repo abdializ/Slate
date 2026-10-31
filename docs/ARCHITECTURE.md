@@ -1,5 +1,8 @@
 # Slate Architecture
 
+> **File notes:** Describes module boundaries and native browser/media architecture.
+
+
 Target: Apple Silicon macOS (Universal / arm64), macOS 13.0+.
 
 Slate is a high-performance, security-hardened, and lightweight macOS browser designed around native WebKit and modern AppKit chrome.
@@ -37,7 +40,7 @@ Slate is a high-performance, security-hardened, and lightweight macOS browser de
 
 ## 2. Directory Layout & Organization
 
-The repository is organized cleanly by responsibility:
+The repository is organized  by responsibility:
 
 - **`core/`**: Platform-independent C++ browser logic:
   - `tab_model.{h,cc}`: Logical tab hierarchy, lifecycle states, tab groups, pins.

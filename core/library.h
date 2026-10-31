@@ -1,3 +1,5 @@
+// File purpose: Declares the small C++ bookmark list and its validation rules.
+
 #pragma once
 #include <string>
 #include <vector>
@@ -7,6 +9,7 @@ struct Bookmark {
  std::string title;
  std::string url;
 };
+// Slate note: This flat list is the C++ model; the native bookmark store separately supports folders.
 class BookmarkList {
  public:
  explicit BookmarkList(std::vector<Bookmark> restored={});

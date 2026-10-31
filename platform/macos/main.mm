@@ -1,4 +1,10 @@
+// File purpose: Starts Slate and coordinates native browser windows, tabs, split layouts, Spaces,
+// navigation, media, and persistence. Objective-C++ lets this file manipulate C++ TabModel state
+// and AppKit/WebKit objects together. The logical model and the runtimes collection have different
+// ownership: metadata versus live engines/views.
+
 #import "platform/macos/favicon_loader.h"
+#import "platform/macos/interaction_feedback.h"
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
@@ -16,6 +22,7 @@
 #import "platform/macos/plate_components.h"
 #include "platform/macos/active_browser_tab_shape.h"
 #include "platform/macos/split_workspace.h"
+#include "platform/macos/split_drag_intent.h"
 #include "memory_monitor.h"
 #include "core/credential_store.h"
 #include "platform/macos/credential_persistence.h"
@@ -32,6 +39,8 @@
 #import "platform/macos/form_relay.h"
 #import "platform/macos/omnibox_overlay.h"
 #import "platform/macos/find_bar.h"
+#import "platform/macos/tab_switcher.h"
+#import "platform/macos/app_updater.h"
 #include "engine/floating_video_js.h"
 #import <SecurityInterface/SFCertificatePanel.h>
 #include <map>
@@ -65,12 +74,6 @@ constexpr CGFloat kPlateGap=0;
 constexpr CGFloat kPlateRadius=14;
 constexpr CGFloat kBookmarksBarHeight=30;
 const int kZoomStops[]={25,33,50,67,75,80,90,100,110,125,150,175,200,250,300,400,500};
-int ClampZoomPercent(int percent) {
- const int last=kZoomStops[(int)(sizeof(kZoomStops)/sizeof(kZoomStops[0]))-1];
- if(percent<kZoomStops[0]) return kZoomStops[0];
- if(percent>last) return last;
- return percent;
-}
 int NextZoomPercent(int current, int delta) {
  const int count=(int)(sizeof(kZoomStops)/sizeof(kZoomStops[0]));
  if(delta>0) {
@@ -132,7 +135,7 @@ struct SideRow {
  TabId tab=0;
  std::string group;
 };
-struct UiPrefs { BOOL vertical=NO; BOOL collapsed=NO; CGFloat sidebarWidth=kSidebarOpenWidth; NSString* accent=@"rose"; NSString* accentHex=@""; NSString* accentHex2=@""; int zoomPercent=100; BOOL showBookmarksBar=YES; CGFloat graniteIntensity=0.0; int themeMode=0; BOOL pages120Hz=NO; int tabStyle=1; TabId splitLeft=0; TabId splitRight=0; double splitRatio=0.5; BOOL splitRightActive=NO; std::vector<slate::SplitPair> splitGroups; };
+struct UiPrefs { BOOL vertical=NO; BOOL collapsed=NO; CGFloat sidebarWidth=kSidebarOpenWidth; NSString* accent=@"rose"; NSString* accentHex=@""; NSString* accentHex2=@""; BOOL showBookmarksBar=YES; CGFloat graniteIntensity=0.0; int themeMode=0; BOOL pages120Hz=NO; int tabStyle=1; TabId splitLeft=0; TabId splitRight=0; double splitRatio=0.5; BOOL splitRightActive=NO; std::vector<slate::SplitPair> splitGroups; };
 NSColor* ColorSRGB(CGFloat r, CGFloat g, CGFloat b) {
  return [NSColor colorWithSRGBRed:r green:g blue:b alpha:1];
 }
@@ -286,7 +289,6 @@ UiPrefs LoadUiPrefs() {
  if([dict[@"accent"] isKindOfClass:NSString.class] && [dict[@"accent"] length]) prefs.accent=dict[@"accent"];
  if([dict[@"accent_hex"] isKindOfClass:NSString.class]) prefs.accentHex=dict[@"accent_hex"];
  if([dict[@"accent_hex2"] isKindOfClass:NSString.class]) prefs.accentHex2=dict[@"accent_hex2"];
- if([dict[@"page_zoom"] isKindOfClass:NSNumber.class]) prefs.zoomPercent=ClampZoomPercent([dict[@"page_zoom"] intValue]);
  if([dict[@"show_bookmarks_bar"] isKindOfClass:NSNumber.class]) prefs.showBookmarksBar=[dict[@"show_bookmarks_bar"] boolValue];
  if([dict[@"granite_intensity"] isKindOfClass:NSNumber.class]) prefs.graniteIntensity=[dict[@"granite_intensity"] doubleValue];
  if([dict[@"theme_mode"] isKindOfClass:NSNumber.class]) prefs.themeMode=[dict[@"theme_mode"] intValue];
@@ -434,6 +436,7 @@ struct RuntimeTab {
  bool pip_returning=false;
  bool loading=false;
  double progress=1;
+ double page_screens=0;
  bool hide_scheduled=false;
  std::string theme_hex;
  bool has_sign_in=false;
@@ -467,8 +470,9 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 
 @class SlateThemePanel;
 @class SlateDetachedTabWindow;
-@interface SlateDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSMenuDelegate,SlateBookmarksOwner,SlateOmniboxDelegate> {
+@interface SlateDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSMenuDelegate,SlateBookmarksOwner,SlateOmniboxDelegate,SlateTabSwitcherOwner> {
  slate::WorkspaceLayout workspace;
+ slate::SplitDragIntent splitIntent;
 }
 @property(strong) NSMutableArray<NSURL*>* earlyURLs;
 - (void)openExternalURL:(NSURL*)url;
@@ -487,6 +491,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) NSString* pendingUsername;
 @property(strong) NSString* pendingPassword;
 @property(strong) NSWindow* window;
+@property(weak) NSWindow* actionWindow;
 @property(strong) NSMutableDictionary<NSNumber*,SlateDetachedTabWindow*>* detachedTabs;
 @property(strong) NSView* titlebar;
 @property(strong) NSView* toolbar;
@@ -585,7 +590,11 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property TabId splitDragBaseTab;
 @property TabId splitDragCandidateTab;
 @property(strong) NSTimer* splitDragTimer;
+@property(strong) id splitEscapeMonitor;
+@property BOOL splitDragCancelled;
+@property TabId splitPreviewTarget;
 @property NSInteger splitDropSide;
+@property TabId splitHoveredTab;
 @property TabId displayedSplitLeft;
 @property TabId displayedSplitRight;
 @property BOOL splitInstalling;
@@ -597,6 +606,8 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property BOOL verticalTabs;
 @property BOOL tabsCollapsed;
 @property int zoomPercent;
+@property(strong) SlateZoomIndicator* zoomIndicator;
+@property TabId zoomIndicatorTab;
 @property BOOL quitting;
 @property BOOL sessionWritable;
 @property BOOL updatingList;
@@ -636,6 +647,11 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(weak) WKWebView* floatingWebView;
 @property(strong) SlateOmniboxOverlay* omniboxOverlay;
 @property(strong) SlateFindBar* findBar;
+@property(strong) SlateTabSwitcher* tabSwitcher;
+@property BOOL switcherCommitting;
+- (void)startTabSwitcher:(NSEvent*)event;
+- (void)rememberSwitcherTab:(TabId)identifier;
+- (TabId)switcherRepresentative:(TabId)identifier;
 - (const slate::Tab*)selectedTab;
 - (IBAction)toggleFloatingVideo:(id)sender;
 - (void)liftTab:(TabId)identifier;
@@ -800,7 +816,9 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)syncPageGeometry;
 - (void)setTrafficLightsHidden:(BOOL)hidden;
 - (void)layoutTrafficLights;
+- (TabId)activeBrowserTab;
 - (void)applyPageZoom;
+- (void)downloadStarted:(NSNotification*)notification;
 - (void)zoomIn:(id)sender;
 - (void)zoomOut:(id)sender;
 - (void)resetZoom:(id)sender;
@@ -883,15 +901,27 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)newIncognitoTab:(id)sender;
 - (void)showStealthInfo:(id)sender;
 - (void)openNewWindowWithUrl:(NSString*)url;
-- (WKWebView*)openPopupTabWithConfiguration:(WKWebViewConfiguration*)configuration url:(NSString*)url incognito:(BOOL)incognito;
+- (WKWebView*)openPopupTabWithConfiguration:(WKWebViewConfiguration*)configuration url:(NSString*)url incognito:(BOOL)incognito sourceTab:(TabId)sourceTab;
 - (void)tearOffTab:(TabId)tabId atScreenPoint:(NSPoint)screenPoint;
 - (BOOL)reattachTab:(TabId)tabId atScreenPoint:(NSPoint)screenPoint;
+- (BOOL)dropTab:(TabId)tabId atScreenPoint:(NSPoint)point;
+- (BOOL)moveTab:(TabId)tabId toWindow:(SlateDetachedTabWindow*)target before:(TabId)before;
+- (void)ensureDetachedRuntime:(TabId)identifier;
+- (TabId)addTabInWindow:(SlateDetachedTabWindow*)window url:(const std::string&)url incognito:(BOOL)incognito;
+- (SlateDetachedTabWindow*)activeDetachedWindow;
+- (void)repairMainSelectionAfterMoving:(TabId)identifier survivor:(TabId)survivor;
 - (void)reattachAllDetachedTabs;
 - (SlateDetachedTabWindow*)detachedTabForWindow:(NSWindow*)window;
 - (BOOL)handleDetachedKeyEvent:(NSEvent*)event;
+- (void)observeDetachedPageEvent:(NSEvent*)event;
+- (BOOL)routeDetachedTabEvent:(NSEvent*)event;
 - (void)navigateDetachedTab:(TabId)tabId toURL:(const std::string&)url;
 - (void)dragMoveTab:(TabId)tabId toPoint:(NSPoint)localPoint;
+- (NSPoint)splitDragPointer;
+- (void)stopSplitDragTracking;
+- (BOOL)extractSplitTab:(TabId)identifier before:(TabId)before;
 - (TabId)splitTargetTabAtWindowPoint:(NSPoint)windowPoint excluding:(TabId)source side:(slate::SplitSide*)side;
+- (BOOL)updateTabSplitIntent:(TabId)source target:(TabId)target side:(slate::SplitSide)side atWindowPoint:(NSPoint)point;
 - (CGFloat)availableTabStripWidth;
 - (void)layoutTabPillsWithAvailableWidth:(CGFloat)availW;
 @end
@@ -1113,7 +1143,8 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
 - (void)mouseExited:(NSEvent*)event {
  self.layer.backgroundColor=NSColor.clearColor.CGColor;
 }
-- (void)mouseDown:(NSEvent*)event {
+- (void)mouseDown:(NSEvent*)event { [self closeTab:nil]; }
+- (void)closeTab:(id)sender {
  SlateDelegate* delegate=[self.pill.target isKindOfClass:SlateDelegate.class] ? (SlateDelegate*)self.pill.target : nil;
  if(delegate && self.pill.tabId) {
   if (([NSApp currentEvent].modifierFlags & NSEventModifierFlagOption) != 0) {
@@ -1258,17 +1289,37 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
  const TabId baseTab=model.selected();
  BOOL isDragging = NO;
  BOOL isTearOffCandidate = NO;
+ NSPoint lastDragPoint=startLocInScreen;
+ delegate.splitDragCancelled=NO;
+ [delegate hideSplitDrag];
 
  while (YES) {
-  NSEvent* nextEvent = [dragWindow nextEventMatchingMask:NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp
-                                                untilDate:[NSDate distantFuture]
+  NSEvent* nextEvent = [dragWindow nextEventMatchingMask:NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp | NSEventMaskKeyDown
+                                                untilDate:isDragging ? [NSDate dateWithTimeIntervalSinceNow:1.0/30.0] : [NSDate distantFuture]
                                                    inMode:NSEventTrackingRunLoopMode
                                                   dequeue:YES];
-  if (!nextEvent) break;
+  if (!nextEvent) {
+   if(isDragging) {
+    const NSPoint local=[dragWindow convertPointFromScreen:lastDragPoint];
+    slate::SplitSide side=slate::SplitSide::Right;
+    const TabId target=[delegate splitTargetTabAtWindowPoint:local excluding:self.tabId side:&side];
+    if(target) [delegate updateTabSplitIntent:self.tabId target:target side:side atWindowPoint:local];
+    else [delegate updateSplitDragAtScreenPoint:lastDragPoint tab:self.tabId base:baseTab];
+   }
+   continue;
+  }
+#if defined(SLATE_ENABLE_VERIFY)
+  if([NSProcessInfo.processInfo.environment[@"SLATE_AUTOMATED_INPUT_ONLY"] boolValue] && nextEvent.timestamp>0) continue;
+#endif
+  if(nextEvent.type==NSEventTypeKeyDown) {
+   if(nextEvent.keyCode==53) { [NSCursor.arrowCursor set]; self.alphaValue=1; break; }
+   continue;
+  }
 
   if (nextEvent.type == NSEventTypeLeftMouseDragged) {
    NSPoint curLocInWindow = nextEvent.locationInWindow;
    NSPoint curLocInScreen = [dragWindow convertPointToScreen:curLocInWindow];
+   lastDragPoint=curLocInScreen;
    CGFloat dx = curLocInScreen.x - startLocInScreen.x;
    CGFloat dy = curLocInScreen.y - startLocInScreen.y;
    CGFloat dist = hypot(dx, dy);
@@ -1286,22 +1337,24 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
 
     NSRect contentScreenRect=[dragWindow convertRectToScreen:[delegate.content convertRect:delegate.content.bounds toView:nil]];
     const BOOL overContent=NSPointInRect(curLocInScreen,contentScreenRect);
-    isTearOffCandidate = (outsideTabBar || outsideWindow) && !overContent;
+    isTearOffCandidate = outsideTabBar || outsideWindow;
     if(overContent) {
      [NSCursor.arrowCursor set];
      self.alphaValue=0.75;
      [delegate updateSplitDragAtScreenPoint:curLocInScreen tab:self.tabId base:baseTab];
     } else if (isTearOffCandidate) {
      [delegate hideSplitDrag];
-     [NSCursor.disappearingItemCursor set];
+     [NSCursor.closedHandCursor set];
      self.alphaValue = 0.5;
     } else {
-     [delegate hideSplitDrag];
      [NSCursor.arrowCursor set];
      self.alphaValue = 1.0;
-     // The middle of another tab is a split drop zone. Its outer edges keep
-     // the existing reorder gesture, so the two actions remain distinct.
-     if(![delegate splitTargetTabAtWindowPoint:curLocInWindow excluding:self.tabId side:nullptr]) {
+     // The strip only reorders; page-edge previews belong to the existing drag.
+     slate::SplitSide side=slate::SplitSide::Right;
+     const TabId target=[delegate splitTargetTabAtWindowPoint:curLocInWindow excluding:self.tabId side:&side];
+     if(target) [delegate updateTabSplitIntent:self.tabId target:target side:side atWindowPoint:curLocInWindow];
+     else { [delegate hideSplitDrag];
+
       NSPoint localInCluster = [delegate.tabCluster convertPoint:curLocInWindow fromView:nil];
       [delegate dragMoveTab:self.tabId toPoint:localInCluster];
      }
@@ -1311,16 +1364,21 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
    [NSCursor.arrowCursor set];
    self.alphaValue = 1.0;
    NSPoint endLocInScreen=[dragWindow convertPointToScreen:nextEvent.locationInWindow];
-   BOOL didSplit=isDragging && [delegate finishSplitDragAtScreenPoint:endLocInScreen tab:self.tabId base:baseTab];
+   const BOOL didTransfer=isDragging && [delegate dropTab:self.tabId atScreenPoint:endLocInScreen];
+   BOOL didSplit=didTransfer;
    if(isDragging && !didSplit) {
     slate::SplitSide side=slate::SplitSide::Right;
     const TabId target=[delegate splitTargetTabAtWindowPoint:nextEvent.locationInWindow excluding:self.tabId side:&side];
-    if(target) didSplit=[delegate isSplitPlaceholderTab:target]
-     ? [delegate replaceEmptySplitTab:target withTab:self.tabId]
-     : [delegate openSplitWithTab:self.tabId side:side base:target];
+    if(target) {
+     if([delegate updateTabSplitIntent:self.tabId target:target side:side atWindowPoint:nextEvent.locationInWindow])
+      didSplit=[delegate isSplitPlaceholderTab:target] ? [delegate replaceEmptySplitTab:target withTab:self.tabId]
+       : [delegate openSplitWithTab:self.tabId side:side base:target];
+     else [delegate dragMoveTab:self.tabId toPoint:[delegate.tabCluster convertPoint:nextEvent.locationInWindow fromView:nil]];
+    } else didSplit=[delegate finishSplitDragAtScreenPoint:endLocInScreen tab:self.tabId base:baseTab];
    }
-   NSRect contentScreenRect=[dragWindow convertRectToScreen:[delegate.content convertRect:delegate.content.bounds toView:nil]];
-   if(isDragging && !didSplit && isTearOffCandidate && !NSPointInRect(endLocInScreen,contentScreenRect))
+   const NSRect releaseBar=[dragWindow convertRectToScreen:[delegate.tabCluster convertRect:delegate.tabCluster.bounds toView:nil]];
+   const BOOL releasedOutsideBar=!NSPointInRect(endLocInScreen,NSInsetRect(releaseBar,-20,-12));
+   if(isDragging && !didSplit && releasedOutsideBar)
     [delegate tearOffTab:self.tabId atScreenPoint:endLocInScreen];
    else if(!isDragging) [delegate handleTabClick:self.tabId doubleClick:NO];
    break;
@@ -1539,6 +1597,8 @@ static NSColor* TabGroupColorForId(const std::string& groupId, const std::string
  if(self.closeButton) return;
  self.closeButton=[[SlateTabCloseButton alloc] initWithFrame:NSMakeRect(0,0,16,16)];
  self.closeButton.pill=self;
+ self.closeButton.target=self.closeButton;
+ self.closeButton.action=@selector(closeTab:);
  self.closeButton.bordered=NO;
  self.closeButton.bezelStyle=NSBezelStyleInline;
  self.closeButton.imagePosition=NSImageOnly;
@@ -4700,9 +4760,27 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 @implementation SlateApplication
 - (BOOL)isHandlingSendEvent { return self.handlingSendEvent; }
 - (void)sendEvent:(NSEvent*)event {
+#if defined(SLATE_ENABLE_VERIFY)
+ // Deterministic isolated regressions dispatch their own timestamp-zero events.
+ // Physical input must not change a synthetic profile mid-check.
+ static const BOOL automated=[NSProcessInfo.processInfo.environment[@"SLATE_AUTOMATED_INPUT_ONLY"] boolValue];
+ const NSEventMask input=NSEventMaskLeftMouseDown|NSEventMaskLeftMouseUp|NSEventMaskLeftMouseDragged|NSEventMaskRightMouseDown|NSEventMaskRightMouseUp|NSEventMaskRightMouseDragged|NSEventMaskKeyDown|NSEventMaskKeyUp|NSEventMaskFlagsChanged;
+ if(automated && event.timestamp>0 && (NSEventMaskFromType(event.type)&input)) return;
+#endif
  SlateDelegate* delegate=(SlateDelegate*)self.delegate;
+ NSWindow* previousActionWindow=delegate.actionWindow;
+ delegate.actionWindow=event.window ?: previousActionWindow;
+ @try {
+ if([delegate.tabSwitcher handleEvent:event]) return;
+ if(event.type==NSEventTypeKeyDown && event.keyCode==48 &&
+    (event.modifierFlags&NSEventModifierFlagControl) &&
+    !(event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagOption))) {
+  [delegate startTabSwitcher:event]; return;
+ }
  if([delegate detachedTabForWindow:event.window]) {
   if(event.type==NSEventTypeKeyDown && [delegate handleDetachedKeyEvent:event]) return;
+  if((event.type==NSEventTypeLeftMouseDown || event.type==NSEventTypeRightMouseDown) && [delegate routeDetachedTabEvent:event]) return;
+  [delegate observeDetachedPageEvent:event];
   [super sendEvent:event];
   return;
  }
@@ -4721,16 +4799,6 @@ static SlateThemePanel* s_sharedThemePanel = nil;
     [delegate goForward:nil];
     return;
    }
-  }
-
-  // Next & Previous Tab: Control + Tab and Control + Shift + Tab
-  if((flags & NSEventModifierFlagControl) && event.keyCode == 48) { // 48 = Tab
-   if(flags & NSEventModifierFlagShift) {
-    [delegate selectPreviousTab:nil];
-   } else {
-    [delegate selectNextTab:nil];
-   }
-   return;
   }
 
   // Escape to dismiss find bar
@@ -4770,6 +4838,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  [delegate observePageEvent:event];
  [super sendEvent:event];
+ } @finally { delegate.actionWindow=previousActionWindow; }
 }
 - (void)terminate:(id)sender { [(SlateDelegate*)self.delegate requestClose]; }
 @end
@@ -4788,7 +4857,12 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 @property(strong) NSView* pageContainer;
 @property(strong) SlateHomeScroll* homeView;
 @property(strong) SlateHomeBoard* homeBoard;
-@property(strong) SlateDetachedTabPill* tabPill;
+@property(strong) NSMutableArray<NSNumber*>* tabIds;
+@property(strong) NSMutableDictionary<NSNumber*,SlateDetachedTabPill*>* tabPills;
+@property(strong) NSScrollView* tabScroll;
+@property(strong) NSView* tabCanvas;
+@property(strong) NSButton* addButton;
+@property BOOL closingWindow;
 @property(strong) SlateOmnibox* omnibox;
 @property(strong) SlateAddressField* address;
 @property(strong) SlateNavButton* backButton;
@@ -4802,17 +4876,45 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)refresh;
 - (void)showNewTabPage;
 - (void)dismissWithoutClosingTab;
+- (void)selectTab:(TabId)identifier;
+- (void)removeTab:(TabId)identifier;
+- (void)layoutTabs;
+- (TabId)insertionBeforeAtScreenPoint:(NSPoint)point excluding:(TabId)identifier;
+- (void)newTab:(id)sender;
+- (void)focusAddress;
 @end
 @implementation SlateDetachedTabPill
 - (BOOL)mouseDownCanMoveWindow { return NO; }
 - (void)mouseDown:(NSEvent*)event {
  SlateDetachedTabWindow* controller=self.controller;
- if(!controller) return;
- const NSPoint start=[controller.window convertPointToScreen:event.locationInWindow];
- [controller.window performWindowDragWithEvent:event];
- const NSPoint end=NSEvent.mouseLocation;
- if(hypot(end.x-start.x,end.y-start.y)>6)
-  [controller.owner reattachTab:controller.tabId atScreenPoint:end];
+ if(!controller || controller.closingWindow) return;
+ const TabId identifier=self.tabId;
+ NSWindow* sourceWindow=controller.window;
+ const NSPoint start=[sourceWindow convertPointToScreen:event.locationInWindow];
+ [controller selectTab:identifier];
+ BOOL dragging=NO;
+ while(YES) {
+  NSEvent* next=[sourceWindow nextEventMatchingMask:NSEventMaskLeftMouseDragged|NSEventMaskLeftMouseUp|NSEventMaskKeyDown
+   untilDate:NSDate.distantFuture inMode:NSEventTrackingRunLoopMode dequeue:YES];
+  if(!next) break;
+#if defined(SLATE_ENABLE_VERIFY)
+  if([NSProcessInfo.processInfo.environment[@"SLATE_AUTOMATED_INPUT_ONLY"] boolValue] && next.timestamp>0) continue;
+#endif
+  if(next.type==NSEventTypeKeyDown) { if(next.keyCode==53) { break; } continue; }
+  NSPoint point=[sourceWindow convertPointToScreen:next.locationInWindow];
+  if(next.type==NSEventTypeLeftMouseDragged) {
+   if(!dragging && hypot(point.x-start.x,point.y-start.y)>6) dragging=YES;
+   if(dragging) { self.alphaValue=0.6; [NSCursor.closedHandCursor set]; }
+  } else {
+   if(dragging && ![controller.owner dropTab:identifier atScreenPoint:point]) {
+    NSRect bar=[sourceWindow convertRectToScreen:[controller.tabScroll convertRect:controller.tabScroll.bounds toView:nil]];
+    if(!NSPointInRect(point,NSInsetRect(bar,-8,-8))) [controller.owner tearOffTab:identifier atScreenPoint:point];
+   }
+   break;
+  }
+ }
+ self.alphaValue=1;
+ [NSCursor.arrowCursor set];
 }
 @end
 @implementation SlateDetachedTabWindow
@@ -4841,6 +4943,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  return button;
 }
 - (void)layoutChrome {
+ [self layoutTabs];
  const CGFloat width=NSWidth(self.toolbar.bounds);
  const CGFloat omniboxWidth=MIN(1100,MAX(180,MIN(width*0.64,width-330)));
  self.omnibox.frame=NSMakeRect((width-omniboxWidth)/2,7,omniboxWidth,kOmniboxHeight);
@@ -4858,7 +4961,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(!(self=[super init])) return nil;
  self.owner=owner;
  self.tabId=tabId;
- const NSSize size=NSMakeSize(1000,700);
+ self.tabIds=[NSMutableArray arrayWithObject:@(tabId)];
+ self.tabPills=[NSMutableDictionary dictionary];
+ const NSSize size=NSMakeSize(MIN(1200,MAX(800,NSWidth(owner.window.frame)*0.85)),MIN(800,MAX(600,NSHeight(owner.window.frame)*0.85)));
  NSScreen* screen=owner.window.screen ?: NSScreen.mainScreen;
  const NSRect visible=screen.visibleFrame;
  const CGFloat x=MIN(MAX(NSMinX(visible),point.x-220),MAX(NSMinX(visible),NSMaxX(visible)-size.width));
@@ -4873,7 +4978,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.window.titlebarSeparatorStyle=NSTitlebarSeparatorStyleNone;
  self.window.tabbingMode=NSWindowTabbingModeDisallowed;
  self.window.releasedWhenClosed=NO;
- self.window.minSize=NSMakeSize(600,400);
+ self.window.minSize=owner.window.minSize;
+ self.window.collectionBehavior=NSWindowCollectionBehaviorFullScreenPrimary|NSWindowCollectionBehaviorFullScreenAllowsTiling;
  self.window.delegate=self;
  NSView* root=self.window.contentView;
  root.wantsLayer=YES;
@@ -4895,15 +5001,17 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.pageContainer.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
  self.pageContainer.wantsLayer=YES;
  [root addSubview:self.pageContainer];
- self.tabPill=[[SlateDetachedTabPill alloc] initWithFrame:NSMakeRect(100,0,180,kTabHeight)];
- self.tabPill.controller=self;
- self.tabPill.tabId=tabId;
- self.tabPill.target=owner;
- self.tabPill.bordered=NO;
- self.tabPill.wantsLayer=YES;
- self.tabPill.toolTip=@"Drag this tab into another Slate tab bar";
- self.tabPill.accessibilityLabel=@"Detached browser tab";
- [self.titlebar addSubview:self.tabPill];
+ self.tabScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect];
+ self.tabScroll.drawsBackground=NO;
+ self.tabScroll.borderType=NSNoBorder;
+ self.tabScroll.horizontalScrollElasticity=NSScrollElasticityNone;
+ self.tabCanvas=[[NSView alloc] initWithFrame:NSZeroRect];
+ self.tabScroll.documentView=self.tabCanvas;
+ [self.titlebar addSubview:self.tabScroll];
+ self.addButton=[NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"plus" accessibilityDescription:@"New tab"] target:self action:@selector(newTab:)];
+ self.addButton.bordered=NO; self.addButton.toolTip=@"New tab (⌘T)";
+ self.addButton.accessibilityLabel=@"New tab";
+ [self.tabCanvas addSubview:self.addButton];
  self.backButton=[self navigationButton:@"chevron.left" description:@"Back"
                                      frame:NSMakeRect(46,10,30,30) action:@selector(goBack:)];
  self.forwardButton=[self navigationButton:@"chevron.right" description:@"Forward"
@@ -4944,10 +5052,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)refresh {
  const auto* tab=model.find(self.tabId);
  if(!tab) return;
+ self.window.title=[@"Slate — " stringByAppendingString:TabLabel(*tab)];
  [self layoutChrome];
- self.tabPill.image=[self.owner iconForTab:*tab];
- [self.tabPill applySelected:YES filled:YES hovered:NO title:TabLabel(*tab) incognito:tab->incognito];
- self.tabPill.frame=NSMakeRect(100,0,TabFillWidth(TabLabel(*tab)),kTabHeight);
+ self.omnibox.hidden=tab->url=="about:blank";
  if(self.address.currentEditor==nil) self.address.stringValue=tab->url=="about:blank" ? @"" : Text(tab->url);
  self.backButton.enabled=runtimes.contains(self.tabId) && runtimes.at(self.tabId).back;
  self.forwardButton.enabled=runtimes.contains(self.tabId) && runtimes.at(self.tabId).forward;
@@ -4989,6 +5096,96 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  for(NSView* view in self.bookmarksBar.subviews)
   if([view isKindOfClass:NSButton.class]) ((NSButton*)view).contentTintColor=ink;
 }
+- (void)layoutTabs {
+ if(!self.tabScroll || !self.window) return;
+ const CGFloat available=MAX(120,NSWidth(self.titlebar.bounds)-104);
+ self.tabScroll.frame=NSMakeRect(92,0,available,kTitlebarHeight);
+ const CGFloat gap=self.owner.tabStyle==1 ? 3 : 8;
+ const CGFloat width=MIN(220,MAX(96,(available-36)/MAX((NSUInteger)1,self.tabIds.count)-gap));
+ CGFloat x=4;
+ for(NSNumber* key in [self.tabPills.allKeys copy]) if(![self.tabIds containsObject:key]) {
+  [self.tabPills[key] removeFromSuperview]; [self.tabPills removeObjectForKey:key];
+ }
+ for(NSNumber* key in self.tabIds) {
+  const auto* tab=model.find(key.unsignedLongLongValue); if(!tab) continue;
+  SlateDetachedTabPill* pill=self.tabPills[key];
+  if(!pill) {
+   pill=[[SlateDetachedTabPill alloc] initWithFrame:NSZeroRect];
+   pill.controller=self; pill.tabId=tab->id; pill.target=self.owner; pill.action=@selector(selectPill:); pill.bordered=NO; pill.wantsLayer=YES;
+   pill.accessibilityLabel=TabLabel(*tab);
+   self.tabPills[key]=pill; [self.tabCanvas addSubview:pill];
+  }
+  pill.image=[self.owner iconForTab:*tab];
+  pill.frame=NSMakeRect(x,0,width,kTabHeight);
+  [pill applySelected:tab->id==self.tabId filled:YES hovered:pill.hovered title:TabLabel(*tab) incognito:tab->incognito];
+  pill.toolTip=Text(tab->url); pill.accessibilityLabel=TabLabel(*tab);
+  x+=width+gap;
+ }
+ self.addButton.frame=NSMakeRect(x+3,6,26,26);
+ self.addButton.contentTintColor=self.owner.barInk ?: NSColor.labelColor;
+ self.tabCanvas.frame=NSMakeRect(0,0,MAX(available,x+35),kTitlebarHeight);
+}
+- (TabId)insertionBeforeAtScreenPoint:(NSPoint)point excluding:(TabId)identifier {
+ const NSPoint local=[self.tabCanvas convertPoint:[self.window convertPointFromScreen:point] fromView:nil];
+ for(NSNumber* key in self.tabIds) {
+  if(key.unsignedLongLongValue==identifier) continue;
+  if(local.x<NSMidX(self.tabPills[key].frame)) return key.unsignedLongLongValue;
+ }
+ return 0;
+}
+- (void)selectTab:(TabId)identifier {
+ if(self.closingWindow || ![self.tabIds containsObject:@(identifier)] || model.closing(identifier)) return;
+ if(self.tabId!=identifier) [self.owner rememberSwitcherTab:self.tabId];
+ [self.owner.zoomIndicator dismiss];
+ [SlateSiteCardPanel hide];
+ self.tabId=identifier;
+ const auto* tab=model.find(identifier); if(!tab) return;
+ if(tab->url!="about:blank") [self.owner ensureDetachedRuntime:identifier];
+ for(NSNumber* key in self.tabIds) if(auto it=runtimes.find(key.unsignedLongLongValue);it!=runtimes.end()) {
+  const BOOL selected=key.unsignedLongLongValue==identifier;
+  if(it->second.host.superview!=self.pageContainer) {
+   [it->second.host removeFromSuperview]; [self.pageContainer addSubview:it->second.host];
+  }
+  it->second.host.frame=WebFillRect(self.pageContainer);
+  it->second.host.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+  it->second.host.hidden=!selected; it->second.hide_scheduled=false;
+  if(it->second.engine) {
+   it->second.engine->set_occluded(!selected);
+   it->second.engine->host_geometry_changed();
+   if(selected) it->second.engine->focus(); else it->second.engine->blur();
+  }
+ }
+ if(tab->url=="about:blank") [self showNewTabPage];
+ self.homeView.hidden=tab->url!="about:blank";
+ [self refresh];
+ [self.tabCanvas scrollRectToVisible:self.tabPills[@(identifier)].frame];
+ [self.owner updateZoomMenu];
+ [self.owner scheduleSave];
+}
+- (void)removeTab:(TabId)identifier {
+ const NSUInteger index=[self.tabIds indexOfObject:@(identifier)];
+ if(index==NSNotFound) return;
+ if(auto it=runtimes.find(identifier);it!=runtimes.end()) [it->second.host removeFromSuperview];
+ [self.tabIds removeObjectAtIndex:index];
+ [self.tabPills[@(identifier)] removeFromSuperview]; [self.tabPills removeObjectForKey:@(identifier)];
+ if(!self.tabIds.count) { [self dismissWithoutClosingTab]; return; }
+ if(self.tabId==identifier && !self.closingWindow) {
+  for(NSUInteger offset=0;offset<self.tabIds.count;++offset) {
+   const TabId next=self.tabIds[(MIN(index,self.tabIds.count-1)+offset)%self.tabIds.count].unsignedLongLongValue;
+   if(!model.closing(next)) { [self selectTab:next]; break; }
+  }
+ } else [self refresh];
+}
+- (void)newTab:(id)sender {
+ if(self.closingWindow) return;
+ [self.owner addTabInWindow:self url:"about:blank" incognito:NO];
+ [self focusAddress];
+}
+- (void)focusAddress {
+ const auto* tab=model.find(self.tabId);
+ NSTextField* field=tab && tab->url=="about:blank" ? self.homeBoard.omniboxCard.field : self.address;
+ [self.window makeFirstResponder:field]; [field selectText:nil];
+}
 - (void)goBack:(id)sender { auto it=runtimes.find(self.tabId); if(it!=runtimes.end() && it->second.engine) it->second.engine->back(); }
 - (void)goForward:(id)sender { auto it=runtimes.find(self.tabId); if(it!=runtimes.end() && it->second.engine) it->second.engine->forward(); }
 - (void)reload:(id)sender { auto it=runtimes.find(self.tabId); if(it!=runtimes.end() && it->second.engine) it->second.engine->reload(); }
@@ -4999,7 +5196,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.owner navigateDetachedTab:self.tabId toURL:target.url];
  [self.window makeFirstResponder:self.pageContainer];
 }
-- (void)showMainTabs:(id)sender { [self.owner.window makeKeyAndOrderFront:nil]; }
+- (void)showMainTabs:(id)sender { [self.tabCanvas scrollRectToVisible:self.tabPills[@(self.tabId)].frame]; [self.window makeFirstResponder:self.tabPills[@(self.tabId)]]; }
 - (void)rebuildBookmarksBar {
  for(NSView* view in [self.bookmarksBar.subviews copy]) [view removeFromSuperview];
  CGFloat x=16;
@@ -5091,13 +5288,19 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  (void)sender;
  [[SlateDownloadsPanel sharedPanel] toggleForButton:self.downloadButton inWindow:self.window];
 }
-- (BOOL)windowShouldClose:(NSWindow*)sender { [self.owner closeTabWithId:self.tabId]; return NO; }
+- (BOOL)windowShouldClose:(NSWindow*)sender {
+ self.closingWindow=YES;
+ for(NSNumber* key in [self.tabIds copy]) [self.owner closeTabWithId:key.unsignedLongLongValue];
+ return NO;
+}
 - (void)windowDidResize:(NSNotification*)notification {
  [self layoutChrome];
  auto it=runtimes.find(self.tabId);
  if(it!=runtimes.end() && it->second.engine) it->second.engine->host_geometry_changed();
 }
 - (void)windowDidBecomeKey:(NSNotification*)notification {
+ [self.owner.zoomIndicator dismiss];
+ [self.owner updateZoomMenu];
  auto it=runtimes.find(self.tabId);
  if(it!=runtimes.end() && it->second.engine) { it->second.engine->set_occluded(NO); it->second.engine->focus(); }
 }
@@ -5112,6 +5315,103 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 @end
 
 @implementation SlateDelegate
+
+- (void)ensureTabSwitcher {
+ if(!self.tabSwitcher) {
+  self.tabSwitcher=[SlateTabSwitcher new]; self.tabSwitcher.owner=self;
+ }
+ [self.tabSwitcher useSpace:self.spacesManager.currentSpaceId ?: @"default"];
+}
+- (TabId)switcherRepresentative:(TabId)identifier {
+ if(self.detachedTabs[@(identifier)]) return identifier;
+ const auto pair=workspace.pair_for(identifier);
+ return pair ? pair->left : identifier;
+}
+- (void)rememberSwitcherTab:(TabId)identifier {
+ if(!identifier || self.splitInstalling || self.switcherCommitting || self.quitting) return;
+ [self ensureTabSwitcher];
+ NSMutableArray<NSNumber*>* alive=[NSMutableArray array];
+ for(const auto& tab:model.tabs()) if(!model.closing(tab.id)) [alive addObject:@([self switcherRepresentative:tab.id])];
+ [self.tabSwitcher leftTab:[self switcherRepresentative:identifier] alive:alive];
+}
+- (void)startTabSwitcher:(NSEvent*)event {
+ if(self.quitting) return;
+ [self ensureTabSwitcher];
+ NSMutableArray<NSNumber*>* cards=[NSMutableArray array];
+ for(TabId id:[self orderedIds]) {
+  if(model.closing(id)) continue;
+  NSNumber* key=@([self switcherRepresentative:id]);
+  if(![cards containsObject:key]) [cards addObject:key];
+ }
+ NSMutableArray<NSNumber*>* moons=[NSMutableArray array];
+ // Retain every tab in multi-tab detached windows; each remains reachable.
+ for(NSWindow* window in NSApp.orderedWindows) {
+  SlateDetachedTabWindow* detached=[self detachedTabForWindow:window];
+  if(!detached || detached.closingWindow) continue;
+  for(NSNumber* key in [@[ @(detached.tabId) ] arrayByAddingObjectsFromArray:detached.tabIds])
+   if(!model.closing(key.unsignedLongLongValue) && ![moons containsObject:key]) [moons addObject:key];
+ }
+ SlateDetachedTabWindow* detached=[self detachedTabForWindow:event.window];
+ TabId current=detached ? detached.tabId : [self switcherRepresentative:model.selected()];
+ [self dismissOmniboxOverlay]; [self hideSuggestions];
+ [self.tabSwitcher beginInWindow:event.window ?: self.window cards:cards moons:moons current:current fromMoon:detached!=nil backwards:(event.modifierFlags&NSEventModifierFlagShift)!=0];
+}
+- (SlateTabPreview*)switcherTab:(TabId)identifier {
+ const auto* tab=model.find(identifier);
+ if(!tab || model.closing(identifier)) return nil;
+ SlateTabPreview* result=[SlateTabPreview new];
+ result.identifier=identifier; result.address=Text(tab->url);
+ result.title=TabLabel(*tab); result.icon=[self iconForTab:*tab];
+ result.muted=[self tabIsMuted:identifier]; result.moon=self.detachedTabs[@(identifier)]!=nil;
+ if(auto it=runtimes.find(identifier);it!=runtimes.end()) result.screens=it->second.page_screens;
+ if(!result.moon) if(const auto pair=workspace.pair_for(identifier); pair && pair->left==identifier) {
+  const auto* other=model.find(pair->right);
+  if(other && !model.closing(other->id)) {
+   result.partner=other->id;
+   result.title=[result.title stringByAppendingFormat:@" · %@",TabLabel(*other)];
+   result.muted=result.muted || [self tabIsMuted:other->id];
+  }
+ }
+ return result;
+}
+- (void)switcherPreview:(TabId)identifier completion:(void(^)(NSImage*))completion {
+ // webViewForTab only inspects an existing runtime; never build or wake one here.
+ WKWebView* web=[self webViewForTab:identifier];
+ if(!web || NSWidth(web.bounds)<1 || NSHeight(web.bounds)<1) { completion(nil); return; }
+ WKSnapshotConfiguration* config=[WKSnapshotConfiguration new]; config.snapshotWidth=@180;
+ if(self.detachedTabs[@(identifier)]) {
+  NSString* address=web.URL.absoluteString;
+  [web evaluateJavaScript:@"Math.max(1, document.documentElement.scrollHeight / Math.max(1, innerHeight))" completionHandler:^(id value,NSError* error) {
+   if(!error && [value respondsToSelector:@selector(doubleValue)] && [web.URL.absoluteString isEqual:address])
+    if(auto it=runtimes.find(identifier);it!=runtimes.end()) it->second.page_screens=[value doubleValue];
+   [web takeSnapshotWithConfiguration:config completionHandler:^(NSImage* image,NSError* error) { completion(error ? nil : image); }];
+  }];
+ } else [web takeSnapshotWithConfiguration:config completionHandler:^(NSImage* image,NSError* error) { completion(error ? nil : image); }];
+}
+- (void)switcherPick:(TabId)identifier {
+ [self rememberSwitcherTab:[self activeBrowserTab]];
+ if(!self.detachedTabs[@(identifier)]) if(const auto pair=workspace.pair_for(identifier))
+  identifier=pair->active==slate::SplitSide::Left ? pair->left : pair->right;
+ self.switcherCommitting=YES;
+ [self activateTab:identifier];
+ self.switcherCommitting=NO;
+ if(!self.detachedTabs[@(identifier)]) [self.window makeKeyAndOrderFront:nil];
+}
+- (void)switcherAction:(unichar)action tab:(TabId)identifier {
+ if(!model.find(identifier)) return;
+ if(action=='w') { [self closeTabWithId:identifier]; return; }
+ if(action=='m') {
+  [self toggleTabMute:identifier];
+  if(const auto pair=workspace.pair_for(identifier)) {
+   TabId partner=identifier==pair->left ? pair->right : pair->left;
+   if([self tabIsMuted:partner]!=[self tabIsMuted:identifier]) [self toggleTabMute:partner];
+  }
+ }
+ if(action=='r') {
+  if(auto it=runtimes.find(identifier);it!=runtimes.end() && it->second.engine) it->second.engine->reload();
+ }
+ if(action=='o' && self.detachedTabs[@(identifier)]) [self moveTab:identifier toWindow:nil before:0];
+}
 - (instancetype)init {
  if(self = [super init]) {
   self.spacesManager = [SlateSpacesManager sharedManager];
@@ -5250,7 +5550,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  UiPrefs prefs=LoadUiPrefs();
  self.verticalTabs=prefs.vertical;
  self.tabsCollapsed=prefs.collapsed;
- self.zoomPercent=prefs.zoomPercent;
+ self.zoomPercent=100; // Legacy global zoom no longer controls independent tabs.
  self.sidebarUserWidth=ClampSidebarWidth(prefs.sidebarWidth, 1200);
  self.accentId=prefs.accent.length ? prefs.accent : @"rose";
  self.accentHex=prefs.accentHex ?: @"";
@@ -5303,6 +5603,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   name:NSApplicationDidResignActiveNotification object:NSApp];
  [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(appDidBecomeActive:)
   name:NSApplicationDidBecomeActiveNotification object:NSApp];
+ [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(downloadStarted:)
+  name:SlateDownloadStartedNotification object:SlateDownloadManager.sharedManager];
  self.tabIcons=[NSMutableDictionary dictionary];
  self.titlebar=[[SlateDragRegion alloc] initWithFrame:NSZeroRect];
  self.titlebar.translatesAutoresizingMaskIntoConstraints=NO;
@@ -6564,7 +6866,6 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   @"tabs_collapsed":@(self.tabsCollapsed),
   @"sidebar_width":@(ClampSidebarWidth(self.sidebarUserWidth, 1200)),
   @"accent":self.accentId ?: @"rose",
-  @"page_zoom":@(self.zoomPercent),
   @"show_bookmarks_bar":@(self.showBookmarksBar),
   @"granite_intensity":@(self.graniteIntensity),
   @"theme_mode":@(self.themeMode),
@@ -6653,30 +6954,57 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(notification.object!=self.window || self.quitting) return;
  [self layoutTrafficLights];
 }
+- (TabId)activeBrowserTab {
+ SlateDetachedTabWindow* window=[self activeDetachedWindow];
+ return window ? window.tabId : model.selected();
+}
 - (void)applyPageZoom {
- const double level=ZoomLevelForPercent(self.zoomPercent);
- for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->set_zoom(level);
+ const TabId identifier=[self activeBrowserTab];
+ const auto* tab=model.find(identifier);
+ if(!tab) return;
+ self.zoomPercent=tab->zoom_percent;
+ NSView* host=nil;
+ if(auto it=runtimes.find(identifier);it!=runtimes.end()) {
+  if(it->second.engine) it->second.engine->set_zoom(ZoomLevelForPercent(tab->zoom_percent));
+  host=it->second.host;
+ }
+ if(!host && tab->url=="about:blank") host=self.homeView;
+ if(host && !host.hidden && host.window) {
+  if(!self.zoomIndicator) self.zoomIndicator=[[SlateZoomIndicator alloc] init];
+  self.zoomIndicatorTab=identifier;
+  [self.zoomIndicator showPercent:tab->zoom_percent inView:host target:self action:@selector(resetZoom:)];
+ }
  [self updateZoomMenu];
  [[SlateSiteCardPanel sharedPanel] updateZoomPercent:self.zoomPercent];
+ [self scheduleSave];
 }
 - (void)zoomIn:(id)sender {
- self.zoomPercent=NextZoomPercent(self.zoomPercent, 1);
- [self persistUiPrefs];
+ const TabId identifier=[self activeBrowserTab];
+ if(const auto* tab=model.find(identifier)) model.set_zoom(identifier,NextZoomPercent(tab->zoom_percent,1));
  [self applyPageZoom];
 }
 - (void)zoomOut:(id)sender {
- self.zoomPercent=NextZoomPercent(self.zoomPercent, -1);
- [self persistUiPrefs];
+ const TabId identifier=[self activeBrowserTab];
+ if(const auto* tab=model.find(identifier)) model.set_zoom(identifier,NextZoomPercent(tab->zoom_percent,-1));
  [self applyPageZoom];
 }
 - (void)resetZoom:(id)sender {
- self.zoomPercent=100;
- [self persistUiPrefs];
+ model.set_zoom([self activeBrowserTab],100);
  [self applyPageZoom];
 }
 - (void)updateZoomMenu {
- if(!self.zoomMenuItem) return;
+ if(const auto* tab=model.find([self activeBrowserTab])) self.zoomPercent=tab->zoom_percent;
  self.zoomMenuItem.title=[NSString stringWithFormat:@"Page Zoom (%d%%)", self.zoomPercent];
+}
+- (void)downloadStarted:(NSNotification*)notification {
+ SlateDownloadItem* item=notification.userInfo[@"item"];
+ NSWindow* window=item.sourceWebView.window ?: (NSApp.mainWindow ?: self.window);
+ if(!window.isVisible || window.isMiniaturized || self.quitting) return;
+ SlateDetachedTabWindow* detached=[self detachedTabForWindow:window];
+ NSView* anchor=detached ? detached.downloadButton : (self.downloadButton.hidden ? self.sidebarFoot.downloadsDoor : self.downloadButton);
+ NSView* source=item.sourceWebView;
+ if(!source || source.isHiddenOrHasHiddenAncestor || source.window!=window) source=detached ? detached.pageContainer : self.content;
+ [SlateDownloadArrival playInWindow:window fromView:source toIcon:anchor];
 }
 - (void)applyTabStyle {
  self.tabPills.spacing = (self.tabStyle == 1) ? 3.0 : 8.0;
@@ -6759,6 +7087,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(!self.quitting && identifier) [self beginClose:identifier reason:slate::CloseReason::Remove];
 }
 
+// Slate note: Manual unloading asks for confirmation because only tab metadata survives; page state can be
+// lost.
 - (void)unloadTabWithId:(TabId)identifier {
  if(self.quitting || !identifier || !model.live(identifier) || model.closing(identifier) || model.find(identifier)->protected_content) return;
  NSAlert* alert=[[NSAlert alloc] init]; alert.messageText=@"Unload this tab?";
@@ -6857,7 +7187,12 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  close.target = self; close.representedObject = @(identifier);
  return menu;
 }
+// Slate note: A Space switch parks metadata and closes outgoing engines. It does not preserve running
+// documents across Spaces.
 - (void)switchSpaceToId:(NSString*)newSpaceId {
+ [self stopSplitDragTracking]; [self hideSplitDrag];
+ [self.tabSwitcher cancel];
+ [self.zoomIndicator dismiss];
  [self reattachAllDetachedTabs];
  if(!newSpaceId.length) return;
  if(!self.spacesManager) return;
@@ -6889,6 +7224,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   d[@"pinned"] = @(t.pinned);
   d[@"protected"] = @(t.protected_content);
   d[@"selected"] = @(t.selected);
+  d[@"zoom"] = @(t.zoom_percent);
   if(!t.group_id.empty()) d[@"group"] = Text(t.group_id);
   [parked addObject:d];
  }
@@ -6918,6 +7254,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    if(tit.length) model.update(tid, {}, tit.UTF8String);
    if([d[@"pinned"] boolValue]) model.pin(tid, true);
    if([d[@"protected"] boolValue]) model.protect(tid, true);
+   if([d[@"zoom"] isKindOfClass:NSNumber.class]) model.set_zoom(tid,[d[@"zoom"] intValue]);
    if(d[@"group"]) model.set_tab_group(tid, [d[@"group"] UTF8String]);
    if([d[@"selected"] boolValue]) selectedId = tid;
   }
@@ -7613,6 +7950,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self scheduleRefresh];
  [self updatePipButtonState];
 }
+// Slate note: Only request automatic PiP for user-started playback; clear the pending state if WebKit
+// declines or times out.
 - (void)requestAutoPiPForTab:(TabId)identifier origin:(int)origin {
  auto it = runtimes.find(identifier);
  if(it == runtimes.end() || !it->second.engine || !it->second.video_playing ||
@@ -7701,6 +8040,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
 }
 - (IBAction)showSiteCard:(id)sender {
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [window showSiteInformation:sender]; return; }
  TabId targetId = 0;
  if([sender isKindOfClass:NSMenuItem.class] && [((NSMenuItem*)sender).representedObject isKindOfClass:NSNumber.class]) {
   targetId = (TabId)[((NSMenuItem*)sender).representedObject unsignedLongLongValue];
@@ -7921,17 +8261,16 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(!self.splitOverlay) return;
  const NSRect bounds=self.splitOverlay.bounds;
  const CGFloat width=NSWidth(bounds), height=NSHeight(bounds);
- const CGFloat margin=MIN(40,MAX(20,width*0.025));
- const CGFloat targetWidth=MIN(260,MAX(140,width*0.22));
- const CGFloat targetHeight=MIN(470,MAX(230,height*0.62));
- const CGFloat y=round((height-targetHeight)/2);
- self.splitLeftTarget.frame=NSMakeRect(margin,y,targetWidth,targetHeight);
- self.splitRightTarget.frame=NSMakeRect(width-margin-targetWidth,y,targetWidth,targetHeight);
+ const CGFloat margin=8;
+ const CGFloat targetWidth=MAX(0,(width-3*margin)/2);
+ const CGFloat targetHeight=MAX(0,height-2*margin);
+ self.splitLeftTarget.frame=NSMakeRect(margin,margin,targetWidth,targetHeight);
+ self.splitRightTarget.frame=NSMakeRect(width-margin-targetWidth,margin,targetWidth,targetHeight);
  for(NSView* target in @[self.splitLeftTarget,self.splitRightTarget]) {
   NSImageView* icon=(NSImageView*)SplitChild(target,@"split-icon");
   NSTextField* label=(NSTextField*)SplitChild(target,@"split-label");
   icon.frame=NSMakeRect(round((targetWidth-23)/2),round(targetHeight/2+4),23,23);
-  label.frame=NSMakeRect(8,round(targetHeight/2-28),targetWidth-16,20);
+  label.frame=NSMakeRect(8,round(targetHeight/2-28),MAX(0,targetWidth-16),20);
  }
  self.splitPreviewIcon.frame=NSMakeRect(14,15,20,20);
  self.splitPreviewTitle.frame=NSMakeRect(44,15,155,20);
@@ -8104,7 +8443,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  (void)notification;
 }
 - (void)windowDidBecomeKey:(NSNotification*)notification {
- (void)notification;
+ [self.zoomIndicator dismiss];
+ [self updateZoomMenu];
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)table {
  return (NSInteger)[self sidebarRows].size();
@@ -8134,13 +8474,6 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const TabId base=self.splitDragBaseTab ?: model.selected();
  [self updateSplitDragAtScreenPoint:screen tab:tab base:base];
  if(self.splitDropSide) return NSDragOperationMove;
- if(workspace.visible_for(model.selected()) && !workspace.member(tab)) {
-  const NSPoint local=[self.content convertPoint:info.draggingLocation fromView:nil];
-  if(NSPointInRect(local,self.content.bounds)) {
-   const TabId target=local.x<NSWidth(self.content.bounds)*workspace.clamped_ratio(NSWidth(self.content.bounds)) ? workspace.left : workspace.right;
-   if([self isSplitPlaceholderTab:target]) return NSDragOperationMove;
-  }
- }
  return NSDragOperationNone;
 }
 - (void)beginSidebarTabGesture:(TabId)identifier {
@@ -8160,7 +8493,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const auto rows=[self sidebarRows];
  const NSUInteger row=rowIndexes.firstIndex;
  if(row==NSNotFound || row>=rows.size() || rows[row].kind!=SideRow::Kind::Tab) return;
+ [self hideSplitDrag];
  self.splitSourceTab=rows[row].tab;
+ self.splitDragCancelled=NO;
  if(self.splitDragCandidateTab!=self.splitSourceTab ||
     self.splitDragBaseTab==self.splitSourceTab ||
     (self.splitDragBaseTab && !model.find(self.splitDragBaseTab)))
@@ -8171,12 +8506,28 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  // was visible when the gesture began so the drop targets overlay that page.
  if(self.splitDragBaseTab && self.splitDragBaseTab!=self.splitSourceTab)
   [self activateTab:self.splitDragBaseTab];
- [self.splitDragTimer invalidate];
+ [self stopSplitDragTracking];
  __weak SlateDelegate* weakSelf=self;
+ self.splitEscapeMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent*(NSEvent* event) {
+  SlateDelegate* owner=weakSelf;
+  if(!owner || !owner.splitSourceTab || !(NSEvent.pressedMouseButtons&1)) {
+   [owner stopSplitDragTracking];
+   if(owner.splitSourceTab) { owner.splitDragCancelled=YES; [owner hideSplitDrag]; }
+   return event;
+  }
+  if(event.keyCode!=53) return event;
+  [owner stopSplitDragTracking]; owner.splitDragCancelled=YES; [owner hideSplitDrag]; return nil;
+ }];
  self.splitDragTimer=[NSTimer timerWithTimeInterval:1.0/30.0 repeats:YES block:^(NSTimer* timer) {
   SlateDelegate* owner=weakSelf;
-  if(!owner || !owner.splitSourceTab) { [timer invalidate]; return; }
-  [owner updateSplitDragAtScreenPoint:NSEvent.mouseLocation tab:owner.splitSourceTab base:owner.splitDragBaseTab];
+  if(!owner || !owner.splitSourceTab || !model.find(owner.splitSourceTab)) { [timer invalidate]; [owner stopSplitDragTracking]; [owner hideSplitDrag]; return; }
+  const NSPoint screen=[owner splitDragPointer];
+  const NSPoint local=[owner.window convertPointFromScreen:screen];
+  const NSPoint listPoint=[owner.tabList convertPoint:local fromView:nil];
+  const TabId target=[owner sidebarTabAtRow:[owner.tabList rowAtPoint:listPoint]];
+  if(NSPointInRect(listPoint,owner.tabList.visibleRect) && target && target!=owner.splitSourceTab)
+   [owner updateTabSplitIntent:owner.splitSourceTab target:target side:slate::SplitSide::Right atWindowPoint:local];
+  else [owner updateSplitDragAtScreenPoint:screen tab:owner.splitSourceTab base:owner.splitDragBaseTab];
  }];
  [NSRunLoop.mainRunLoop addTimer:self.splitDragTimer forMode:NSRunLoopCommonModes];
  [NSRunLoop.mainRunLoop addTimer:self.splitDragTimer forMode:NSEventTrackingRunLoopMode];
@@ -8185,24 +8536,24 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const TabId source=[self sidebarDraggedTab:info];
  if(!source) return NSDragOperationNone;
  const auto rows=[self sidebarRows];
+ if(self.splitDragCancelled) return NSDragOperationNone;
  if(operation==NSTableViewDropOn) {
   if(row<0 || (size_t)row>=rows.size()) return NSDragOperationNone;
-  if(rows[row].kind==SideRow::Kind::Group) return NSDragOperationMove;
-  const TabId target=[self sidebarTabAtRow:row];
-  return target && target!=source && !workspace.member(source) &&
-   (workspace.open_action(source,target)==slate::SplitOpenAction::PairWithBase || [self isSplitPlaceholderTab:target])
-   ? NSDragOperationMove : NSDragOperationNone;
+  return NSDragOperationMove;
  }
+ [self hideSplitDrag];
  return NSDragOperationMove;
 }
 - (BOOL)tableView:(NSTableView *)tableView acceptDrop:(id<NSDraggingInfo>)info row:(NSInteger)row dropOperation:(NSTableViewDropOperation)dropOperation {
  const TabId draggedTabId=[self sidebarDraggedTab:info];
  if(!draggedTabId || row<0) return NO;
  const auto rows=[self sidebarRows];
+ if(self.splitDragCancelled) return NO;
  if(dropOperation==NSTableViewDropOn && (size_t)row<rows.size() && rows[row].kind==SideRow::Kind::Tab) {
   const TabId target=rows[row].tab;
-  return [self isSplitPlaceholderTab:target] ? [self replaceEmptySplitTab:target withTab:draggedTabId]
-   : [self openSplitWithTab:draggedTabId side:slate::SplitSide::Right base:target];
+  if(workspace.member(draggedTabId)) return [self extractSplitTab:draggedTabId before:target];
+  model.move_tab_before(draggedTabId,target);
+  [self hideSplitDrag]; [self refresh]; [self scheduleSave]; return YES;
  }
  std::string targetGroupId = "";
  TabId beforeTabId = 0;
@@ -8242,6 +8593,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   }
  }
 
+ if(workspace.member(draggedTabId)) {
+  if(beforeTabId && workspace.same_pair(draggedTabId,beforeTabId)) return NO;
+  workspace.remove(draggedTabId); self.displayedSplitLeft=0; self.displayedSplitRight=0;
+ }
  model.set_tab_group(draggedTabId, targetGroupId);
  model.move_tab_before(draggedTabId, beforeTabId);
  [self refresh];
@@ -8249,29 +8604,30 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  return YES;
 }
 - (void)tableView:(NSTableView *)tableView draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation {
- [self.splitDragTimer invalidate];
- self.splitDragTimer=nil;
+ [self stopSplitDragTracking];
  const TabId draggedTabId=self.splitSourceTab;
  self.splitSourceTab=0;
  self.splitDragCandidateTab=0;
- if(!draggedTabId || !model.find(draggedTabId)) {
+ if(self.splitDragCancelled || !draggedTabId || !model.find(draggedTabId)) {
+  self.splitDragCancelled=NO;
   self.splitDragBaseTab=0;
   [self hideSplitDrag];
   return;
  }
+ // A native drop receiver already applied an accepted reorder or split.
+ // Finishing it again can tear a newly created pair apart.
+ if(operation!=NSDragOperationNone) {
+  self.splitDragBaseTab=0; [self hideSplitDrag]; return;
+ }
  const TabId base=self.splitDragBaseTab ? self.splitDragBaseTab : model.selected();
- const BOOL didSplit=[self finishSplitDragAtScreenPoint:screenPoint tab:draggedTabId base:base];
+ const BOOL didSplit=[self dropTab:draggedTabId atScreenPoint:screenPoint] || [self finishSplitDragAtScreenPoint:screenPoint tab:draggedTabId base:base];
  self.splitDragBaseTab=0;
  if(didSplit) return;
- NSRect contentScreenRect=[self.window convertRectToScreen:[self.content convertRect:self.content.bounds toView:nil]];
- if(NSPointInRect(screenPoint,contentScreenRect)) return;
-
  NSRect sidebarScreenRect = [self.window convertRectToScreen:[self.sidebar convertRect:self.sidebar.bounds toView:nil]];
  const BOOL outsideSidebar = !NSPointInRect(screenPoint, NSInsetRect(sidebarScreenRect, -10, -10));
 
- if (operation == NSDragOperationNone || outsideSidebar) {
-  [self tearOffTab:draggedTabId atScreenPoint:screenPoint];
- }
+ [self hideSplitDrag];
+ if(outsideSidebar) [self tearOffTab:draggedTabId atScreenPoint:screenPoint];
 }
 - (CGFloat)tableView:(NSTableView*)table heightOfRow:(NSInteger)row {
  const auto rows=[self sidebarRows];
@@ -8555,7 +8911,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.bookmarkButton.contentTintColor=saved ? [NSColor colorWithCalibratedRed:0.96 green:0.72 blue:0.18 alpha:1.0] : (self.barInk ?: NSColor.labelColor);
 }
 - (void)toggleBookmark:(id)sender {
- const auto* tab=model.find(model.selected());
+ const auto* tab=model.find([self activeBrowserTab]);
  if(!tab || tab->url.rfind("http",0)!=0) { NSBeep(); return; }
  NSString* url = Text(tab->url);
  SlateBookmarks* store = [SlateBookmarks sharedStore];
@@ -8686,6 +9042,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [SlateBookmarkMenu populateMenu:self.bookmarksMenu withBookmarks:[SlateBookmarks sharedStore] owner:self];
 }
 - (void)onBookmarksChangedNotification:(NSNotification*)note {
+ for(SlateDetachedTabWindow* window in [NSSet setWithArray:self.detachedTabs.allValues]) [window rebuildBookmarksBar];
  [self updateBookmarkChrome];
  [self rebuildBookmarksBar];
  [self rebuildBookmarksMenu];
@@ -8701,6 +9058,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if([url hasPrefix:@"info:"]) {
   [self showStealthInfo:nil];
   return;
+ }
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) {
+  [self navigateDetachedTab:window.tabId toURL:slate::resolve_address_bar(url.UTF8String).url]; return;
  }
  self.address.stringValue=url;
  self.addressDirty=YES;
@@ -9121,7 +9481,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  for(const auto& group:model.groups()) {
   std::vector<TabId> groupTabs;
   for(const auto& tab:model.tabs()) {
-   if(!placed.contains(tab.id) && tab.group_id==group.id &&
+   if(!self.detachedTabs[@(tab.id)] && !placed.contains(tab.id) && tab.group_id==group.id &&
       !(workspace.member(tab.id) && !tab.pinned)) {
     groupTabs.push_back(tab.id);
    }
@@ -9219,7 +9579,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  });
 }
 - (void)refresh {
- for(SlateDetachedTabWindow* detached in self.detachedTabs.allValues) [detached refresh];
+ for(SlateDetachedTabWindow* detached in [NSSet setWithArray:self.detachedTabs.allValues]) [detached refresh];
  self.sideRowsGen++;
  NSMutableString* structure=[NSMutableString string];
  NSMutableString* paint=[NSMutableString string];
@@ -9343,6 +9703,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(self.hideTabsMenuItem)
   self.hideTabsMenuItem.title=self.tabsCollapsed ? @"Show Tabs" : @"Hide Tabs";
 }
+// Slate note: Show existing hosts for the selected tab or split pair; view reuse preserves state when
+// switching loaded pages.
 - (void)presentWorkspacePages {
  const TabId id=model.selected();
  const BOOL tabChanged=self.displayedTab!=id;
@@ -9462,7 +9824,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  for(auto& [identifier,item]:runtimes) {
   if(!item.engine) continue;
   if(SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)]) {
-   const BOOL visible=detached.window.visible && !detached.window.miniaturized &&
+   const BOOL visible=identifier==detached.tabId && detached.window.visible && !detached.window.miniaturized &&
     (detached.window.occlusionState&NSWindowOcclusionStateVisible)!=0;
    item.engine->set_occluded(!visible);
    continue;
@@ -9490,6 +9852,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self returnAutoPiPForVisibleWorkspace];
  [self syncBrowserOcclusion];
 }
+// Slate note: Memory pressure trims bounded app-owned caches. Automatic page destruction remains
+// disconnected.
 - (void)memoryChanged:(slate::MemorySample)sample {
  const BOOL pressureChanged=sample.pressure!=memorySample.pressure || sample.pressure_known!=memorySample.pressure_known;
  memorySample=sample;
@@ -9513,6 +9877,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(saveSession) object:nil];
  [self performSelector:@selector(saveSession) withObject:nil afterDelay:0.3];
 }
+// Slate note: Persist metadata for regular tabs and Spaces, excluding private tabs; running page contents
+// are not serialized.
 - (void)saveSession {
  if(!self.sessionWritable || !session) return;
  try { session->save(model.tabs(), model.groups()); }
@@ -9533,6 +9899,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    d[@"pinned"] = @(t.pinned);
    d[@"protected"] = @(t.protected_content);
    d[@"selected"] = @(t.selected);
+  d[@"zoom"] = @(t.zoom_percent);
    if(!t.group_id.empty()) d[@"group"] = Text(t.group_id);
    [currentParked addObject:d];
   }
@@ -9664,88 +10031,105 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)finishSplitResize { [self scheduleSave]; }
 - (void)hideSplitDrag {
+ splitIntent.reset();
+ if(self.splitHoveredTab) {
+  SlateTabPill* pill=[self pillViewForTabId:self.splitHoveredTab];
+  if(pill) [pill applySelected:pill.selectedTab filled:pill.expanded hovered:pill.hovered title:pill.title incognito:pill.incognitoTab];
+  self.splitHoveredTab=0;
+ }
  self.splitDraggedTab=0;
  self.splitDropSide=0;
+ self.splitPreviewTarget=0;
  self.splitOverlay.hidden=YES;
  self.splitOverlay.alphaValue=1;
 }
+- (BOOL)updateTabSplitIntent:(TabId)source target:(TabId)target side:(slate::SplitSide)side atWindowPoint:(NSPoint)point {
+ // Strip targets never arm a split. Releasing a pair half there separates it.
+ [self hideSplitDrag]; return NO;
+}
+- (NSPoint)splitDragPointer {
+ NSEvent* event=NSApp.currentEvent;
+ if(event.window==self.window && (event.type==NSEventTypeLeftMouseDragged || event.type==NSEventTypeLeftMouseUp))
+  return [self.window convertPointToScreen:event.locationInWindow];
+ return NSEvent.mouseLocation;
+}
+- (void)stopSplitDragTracking {
+ [self.splitDragTimer invalidate]; self.splitDragTimer=nil;
+ if(self.splitEscapeMonitor) [NSEvent removeMonitor:self.splitEscapeMonitor];
+ self.splitEscapeMonitor=nil;
+}
 - (void)updateSplitDragAtScreenPoint:(NSPoint)screenPoint tab:(TabId)identifier base:(TabId)base {
- if(!identifier || !model.find(identifier) || workspace.member(identifier) ||
-    workspace.open_action(identifier,base)!=slate::SplitOpenAction::PairWithBase ||
-    !model.find(base) || model.closing(base) || !self.window || !self.content) {
-  [self hideSplitDrag]; return;
- }
- NSPoint windowPoint=[self.window convertPointFromScreen:screenPoint];
- NSPoint point=[self.content convertPoint:windowPoint fromView:nil];
- if(!NSPointInRect(point,self.content.bounds)) { [self hideSplitDrag]; return; }
- [self syncPageGeometry];
- const BOOL becameVisible=self.splitOverlay.hidden;
- if(becameVisible) {
-  self.splitOverlay.hidden=NO;
-  self.splitOverlay.alphaValue=0;
-  const BOOL reduceMotion=NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
-  if(reduceMotion) self.splitOverlay.alphaValue=1;
-  else [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
-   context.duration=0.17;
-   self.splitOverlay.animator.alphaValue=1;
-  } completionHandler:nil];
- }
- if(self.splitDraggedTab!=identifier || becameVisible) {
-  self.splitDraggedTab=identifier;
-  const auto* tab=model.find(identifier);
-  self.splitPreviewTitle.stringValue=tab ? TabLabel(*tab) : @"Tab";
-  self.splitPreviewIcon.image=tab ? [self iconForTab:*tab] : nil;
- }
- self.splitDragBaseTab=base;
- // The preview panels are visual guides; either half of the page is a valid
- // drop target so a release just outside a panel does not discard the split.
- NSInteger side=point.x<NSMidX(self.content.bounds) ? 1 : 2;
- if(side!=self.splitDropSide) {
-  self.splitDropSide=side;
-  NSColor* accent=ChromeAccent(self.accentId,self.accentHex,[self isDarkAppearance]);
-  NSColor* rgb=[accent colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: accent;
-  CGFloat hue=0,saturation=0,brightness=0,alpha=0;
-  [rgb getHue:&hue saturation:&saturation brightness:&brightness alpha:&alpha];
-  NSColor* activeInk=[NSColor colorWithHue:hue saturation:MAX(0.42,saturation)
-   brightness:[self isDarkAppearance] ? 0.88 : 0.52 alpha:1];
-  for(NSInteger i=0;i<2;++i) {
-   NSView* target=i==0 ? self.splitLeftTarget : self.splitRightTarget;
-   const BOOL hot=side==i+1;
-   target.layer.borderColor=(hot ? [activeInk colorWithAlphaComponent:0.88] : [NSColor.separatorColor colorWithAlphaComponent:0.28]).CGColor;
-   target.layer.borderWidth=hot ? 2 : 1;
-   NSColor* ink=hot ? activeInk : NSColor.secondaryLabelColor;
-   ((NSImageView*)SplitChild(target,@"split-icon")).contentTintColor=ink;
-   ((NSTextField*)SplitChild(target,@"split-label")).textColor=ink;
+ if(self.splitDragCancelled || !identifier || !model.find(identifier) || model.closing(identifier) || workspace.member(identifier) ||
+    !self.window || !self.content) { [self hideSplitDrag]; return; }
+ for(NSWindow* window in NSApp.orderedWindows) {
+  if(window.visible && !window.miniaturized && NSPointInRect(screenPoint,window.frame) &&
+     (window==self.window || [self detachedTabForWindow:window])) {
+   if(window!=self.window) { [self hideSplitDrag]; return; }
+   break;
   }
  }
- const CGFloat previewW=210, previewH=50;
- const NSRect hotTarget=side==1 ? self.splitLeftTarget.frame : self.splitRightTarget.frame;
- const CGFloat previewX=side ? NSMidX(hotTarget)-previewW/2 : point.x+16;
- const CGFloat previewY=side ? NSMidY(hotTarget)+38 : point.y-previewH-16;
- self.splitPreview.frame=NSMakeRect(MIN(MAX(8,previewX),MAX(8,NSWidth(self.content.bounds)-previewW-8)),
-  MIN(MAX(8,previewY),MAX(8,NSHeight(self.content.bounds)-previewH-8)),previewW,previewH);
+ const NSPoint windowPoint=[self.window convertPointFromScreen:screenPoint];
+ const NSPoint point=[self.content convertPoint:windowPoint fromView:nil];
+ if(!NSPointInRect(point,self.content.bounds)) { [self hideSplitDrag]; return; }
+ TabId target=base;
+ NSInteger candidate=0;
+ int zone=1;
+ NSRect page=self.content.bounds;
+ if(workspace.visible_for(model.selected())) {
+  CGFloat divider=NSWidth(page)*workspace.clamped_ratio(NSWidth(page));
+  target=point.x<divider ? workspace.left : workspace.right;
+  if(![self isSplitPlaceholderTab:target]) { [self hideSplitDrag]; return; }
+  page=target==workspace.left ? NSMakeRect(0,0,divider,NSHeight(page)) : NSMakeRect(divider,0,NSWidth(page)-divider,NSHeight(page));
+  const int shown=self.splitPreviewTarget==target ? (self.splitDropSide ? (point.x<NSMidX(page) ? 1 : 2) : 0) : 0;
+  if(slate::SplitDragIntent::edge_side(NSWidth(page),point.x-NSMinX(page),shown)) candidate=target==workspace.left ? 1 : 2;
+  zone=3;
+ } else if(model.find(base) && !model.closing(base) && workspace.open_action(identifier,base)==slate::SplitOpenAction::PairWithBase) {
+  const int shown=self.splitDraggedTab==identifier && self.splitPreviewTarget==target ? (int)self.splitDropSide : 0;
+  candidate=slate::SplitDragIntent::edge_side(NSWidth(page),point.x,shown);
+ } else { [self hideSplitDrag]; return; }
+ if(!candidate) { [self hideSplitDrag]; return; }
+ const BOOL armed=splitIntent.update(identifier,target,zone,(int)candidate,point.x,point.y,CACurrentMediaTime());
+ if(!armed) {
+  self.splitOverlay.hidden=YES; self.splitDropSide=0; self.splitPreviewTarget=0; return;
+ }
+ const BOOL changed=self.splitOverlay.hidden || self.splitDropSide!=candidate || self.splitPreviewTarget!=target;
+ self.splitDraggedTab=identifier; self.splitPreviewTarget=target;
+ self.splitDragBaseTab=base; self.splitDropSide=candidate;
+ self.splitOverlay.hidden=NO; self.splitOverlay.alphaValue=1;
+ self.splitLeftTarget.hidden=candidate!=1; self.splitRightTarget.hidden=candidate!=2;
+ const auto* tab=model.find(identifier);
+ self.splitPreviewTitle.stringValue=tab ? TabLabel(*tab) : @"Tab";
+ self.splitPreviewIcon.image=tab ? [self iconForTab:*tab] : nil;
+ NSColor* accent=ChromeAccent(self.accentId,self.accentHex,[self isDarkAppearance]);
+ NSView* panel=candidate==1 ? self.splitLeftTarget : self.splitRightTarget;
+ panel.layer.backgroundColor=[accent colorWithAlphaComponent:0.16].CGColor;
+ panel.layer.borderWidth=2; panel.layer.borderColor=[accent colorWithAlphaComponent:0.7].CGColor;
+ ((NSImageView*)SplitChild(panel,@"split-icon")).contentTintColor=accent;
+ NSTextField* label=(NSTextField*)SplitChild(panel,@"split-label");
+ label.stringValue=@"Release to split"; label.textColor=NSColor.labelColor;
+ self.splitPreview.frame=NSMakeRect(NSMidX(panel.frame)-105,NSMidY(panel.frame)+48,210,50);
+ if(changed) [NSHapticFeedbackManager.defaultPerformer performFeedbackPattern:NSHapticFeedbackPatternAlignment performanceTime:NSHapticFeedbackPerformanceTimeNow];
 }
 - (BOOL)finishSplitDragAtScreenPoint:(NSPoint)screenPoint tab:(TabId)identifier base:(TabId)base {
- // An explicit empty pane in an existing split can accept an existing tab.
- // Replace only that placeholder; populated pairs are never changed by drag.
- if(workspace.visible_for(model.selected()) && !workspace.member(identifier) && self.window && self.content) {
-  const NSPoint windowPoint=[self.window convertPointFromScreen:screenPoint];
-  const NSPoint point=[self.content convertPoint:windowPoint fromView:nil];
-  if(NSPointInRect(point,self.content.bounds)) {
-   const TabId hovered=point.x<NSWidth(self.content.bounds)*workspace.clamped_ratio(NSWidth(self.content.bounds))
-    ? workspace.left : workspace.right;
-   if([self replaceEmptySplitTab:hovered withTab:identifier]) { [self hideSplitDrag]; return YES; }
-  }
- }
+ // A release can validate an already shown preview; it cannot create one.
+ const BOOL shown=!self.splitOverlay.hidden && self.splitDraggedTab==identifier && self.splitDropSide!=0;
+ const NSInteger previousSide=self.splitDropSide;
+ const TabId previousTarget=self.splitPreviewTarget;
  [self updateSplitDragAtScreenPoint:screenPoint tab:identifier base:base];
  const NSInteger side=self.splitDropSide;
+ const TabId target=self.splitPreviewTarget;
+ const BOOL valid=shown && side==previousSide && target==previousTarget;
  [self hideSplitDrag];
- if(!side) return NO;
- return [self openSplitWithTab:identifier side:side==1 ? slate::SplitSide::Left : slate::SplitSide::Right base:base];
+ if(!valid || !side) return NO;
+ if(workspace.visible_for(model.selected())) return [self replaceEmptySplitTab:target withTab:identifier];
+ return [self openSplitWithTab:identifier side:side==1 ? slate::SplitSide::Left : slate::SplitSide::Right base:target];
 }
+// Slate note: Selecting an unloaded tab creates its runtime on demand; selecting an already loaded tab
+// reuses it.
 - (void)activateTab:(TabId)identifier {
  if(self.quitting) { [self scheduleRefresh]; return; }
  if(SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)]) {
+  [detached selectTab:identifier];
   [detached.window makeKeyAndOrderFront:nil];
   [NSApp activateIgnoringOtherApps:YES];
   return;
@@ -9778,9 +10162,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self exitNativePiPForTab:identifier];
  }
  const TabId previous=model.selected();
+ if(previous!=identifier && !self.splitInstalling) [self rememberSwitcherTab:previous];
  if(!model.select(identifier)) { [self scheduleRefresh]; return; }
  if(!self.splitInstalling) workspace.select(identifier);
  if(previous!=identifier) {
+  [self.zoomIndicator dismiss];
   [SlateSiteCardPanel hide];
   [self updatePipButtonState];
   if(self.findBar && self.findBar.isVisible) {
@@ -9788,6 +10174,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   }
  }
  const auto* incoming=model.find(identifier);
+ [self updateZoomMenu];
  if(incoming && incoming->url=="about:blank") {
   if(!self.splitInstalling) [self presentWorkspacePages];
   [self scheduleRefresh]; [self scheduleSave];
@@ -9940,12 +10327,15 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf finishClose:identifier]; });
   };
   events.close_cancelled=[weakSelf,identifier]() {
-   model.cancel_close(identifier); weakSelf.quitting=NO; [weakSelf refresh];
+   model.cancel_close(identifier); weakSelf.quitting=NO;
+   SlateDetachedTabWindow* window=weakSelf.detachedTabs[@(identifier)];
+   if(window) { window.closingWindow=NO; [window selectTab:identifier]; }
+   [weakSelf refresh];
   };
   events.create_popup_tab=[weakSelf,identifier](void* configuration,std::string url) -> void* {
    const auto* source=model.find(identifier);
    WKWebView* popup=[weakSelf openPopupTabWithConfiguration:(__bridge WKWebViewConfiguration*)configuration
-                                                     url:Text(url) incognito:source && source->incognito];
+                                                     url:Text(url) incognito:(source && source->incognito) sourceTab:identifier];
    return (__bridge void*)popup;
   };
   events.popup_close_requested=[weakSelf,identifier]() {
@@ -9957,7 +10347,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    const auto* tab=model.find(identifier);
    alert.informativeText=[NSString stringWithFormat:@"%@ reports unsaved changes. Leaving may discard them.",tab ? Text(tab->title) : @"This tab"];
    [alert addButtonWithTitle:@"Stay"]; [alert addButtonWithTitle:@"Leave"];
-   [alert beginSheetModalForWindow:weakSelf.window completionHandler:^(NSModalResponse response) {
+   NSWindow* window=weakSelf.detachedTabs[@(identifier)].window ?: weakSelf.window;
+   [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
     completion(response==NSAlertSecondButtonReturn);
    }];
   };
@@ -10041,7 +10432,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(!self.splitInstalling) [self presentWorkspacePages];
  [self scheduleRefresh]; [self scheduleSave];
  if(auto it=runtimes.find(identifier);it!=runtimes.end() && it->second.engine) {
-  it->second.engine->set_zoom(ZoomLevelForPercent(self.zoomPercent));
+  if(const auto* tab=model.find(identifier)) it->second.engine->set_zoom(ZoomLevelForPercent(tab->zoom_percent));
   it->second.engine->focus(); it->second.engine->inspect_protection(); it->second.engine->host_geometry_changed();
  }
  const auto rows=[self sidebarRows];
@@ -10050,8 +10441,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)newTab:(id)sender {
  if(self.quitting) return;
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [window newTab:sender]; return; }
  fprintf(stderr,"SLATE_NEW_TAB sender=%s\n", sender ? NSStringFromClass([sender class]).UTF8String : "nil");
  try {
+  [self rememberSwitcherTab:model.selected()];
   const auto identifier=model.add("about:blank");
   self.bubbleTabId=identifier;
   [self activateTab:identifier];
@@ -10061,7 +10454,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)newIncognitoTab:(id)sender {
  if(self.quitting) return;
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [self addTabInWindow:window url:"about:blank" incognito:YES]; [window focusAddress]; return; }
  try {
+  [self rememberSwitcherTab:model.selected()];
   const auto identifier=model.add("about:blank", true);
   self.bubbleTabId=identifier;
   [self activateTab:identifier];
@@ -10069,14 +10464,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  catch(const std::exception&) { NSBeep(); }
 }
-- (WKWebView*)openPopupTabWithConfiguration:(WKWebViewConfiguration*)configuration url:(NSString*)url incognito:(BOOL)incognito {
+- (WKWebView*)openPopupTabWithConfiguration:(WKWebViewConfiguration*)configuration url:(NSString*)url incognito:(BOOL)incognito sourceTab:(TabId)sourceTab {
  if(self.quitting || !configuration) return nil;
  try {
   const std::string initial=(!url.length || [url isEqualToString:@"about:blank"]) ? "about:blank#popup" : url.UTF8String;
+  SlateDetachedTabWindow* destination=self.detachedTabs[@(sourceTab)];
+  const TabId mainSelection=model.selected();
+  if(!destination) [self rememberSwitcherTab:mainSelection];
   const TabId identifier=model.add(initial,incognito);
+  if(destination) { model.select(mainSelection); self.detachedTabs[@(identifier)]=destination; [destination.tabIds addObject:@(identifier)]; }
   self.pendingPopupTab=identifier;
   self.pendingPopupConfiguration=configuration;
-  [self activateTab:identifier];
+  if(destination) [destination selectTab:identifier]; else [self activateTab:identifier];
   self.pendingPopupConfiguration=nil;
   self.pendingPopupTab=0;
   [self refresh];
@@ -10092,7 +10491,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)openUrl:(NSString*)url incognito:(BOOL)incognito {
  if(self.quitting || !url.length) return;
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [self addTabInWindow:window url:std::string(url.UTF8String) incognito:incognito]; return; }
  try {
+  [self rememberSwitcherTab:model.selected()];
   const auto identifier=model.add(url.UTF8String, incognito);
   [self activateTab:identifier];
  }
@@ -10281,6 +10682,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  model.pin(tab->id,!tab->pinned);
  [self refresh]; [self scheduleSave];
 }
+// Slate note: Record the pending close reason before asking the engine to close; the completion path
+// updates model/runtime ownership.
 - (void)performClose:(TabId)identifier reason:(slate::CloseReason)reason {
  if(reason == slate::CloseReason::Remove) {
   const auto* tab = model.find(identifier);
@@ -10310,6 +10713,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self refresh];
 }
 - (void)beginClose:(TabId)identifier reason:(slate::CloseReason)reason {
+ if(reason==slate::CloseReason::Remove) [self.tabSwitcher removeTab:[self switcherRepresentative:identifier]];
  auto it = runtimes.find(identifier);
  if(it != runtimes.end() && it->second.pip_active) {
   WKWebView* webView = [self webViewForTab:identifier];
@@ -10336,12 +10740,16 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self unloadTabWithId:model.selected()];
 }
 - (void)closeTab:(id)sender {
- if(!self.quitting) [self beginClose:model.selected() reason:slate::CloseReason::Remove];
+ if(!self.quitting) [self beginClose:[self activeBrowserTab] reason:slate::CloseReason::Remove];
 }
+// Slate note: Remove page-owned runtime objects after close completion, retaining or deleting tab metadata
+// according to the close reason.
 - (void)finishClose:(TabId)identifier {
- if(SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)]) {
+ SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)];
+ const auto closeReason=model.close_reason(identifier);
+ if(detached && closeReason!=slate::CloseReason::Discard) {
   [self.detachedTabs removeObjectForKey:@(identifier)];
-  [detached dismissWithoutClosingTab];
+  [detached removeTab:identifier];
   self.tabListSignature=nil;
   self.tabStripIdentity=nil;
  }
@@ -10366,6 +10774,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  if(self.quitting) { [self closeNextForQuit]; return; }
  if(model.tabs().empty()) model.add("about:blank");
+ if(detached) { [detached refresh]; [self refresh]; [self scheduleSave]; return; }
+ if(reason==slate::CloseReason::Remove && self.detachedTabs[@(model.selected())])
+  [self repairMainSelectionAfterMoving:model.selected() survivor:0];
  if(splitSurvivor && closingVisibleSplit && model.find(splitSurvivor)) [self activateTab:splitSurvivor];
  else if(reason==slate::CloseReason::Remove) [self activateTab:model.selected()];
  [self refresh]; [self scheduleSave];
@@ -10385,6 +10796,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)requestClose {
  if(self.quitting) return;
+ [self stopSplitDragTracking]; [self hideSplitDrag];
+ [self.tabSwitcher cancel];
  [self reattachAllDetachedTabs];
  if(self.mouseMovedMonitor) {
   [NSEvent removeMonitor:self.mouseMovedMonitor];
@@ -10421,7 +10834,22 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self handleIncomingURL:url];
  }
 }
+// Slate note: Connect application startup to window/session initialization; optional verification handling
+// is build-gated.
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+ __weak SlateDelegate* weakSelf=self;
+ [SlateAppUpdater sharedUpdater].beforeInstall=^{ [weakSelf saveSession]; [weakSelf persistUiPrefs]; };
+ [SlateAppUpdater sharedUpdater].whenChecking=^{
+#if defined(SLATE_ENABLE_VERIFY)
+  if([NSProcessInfo.processInfo.environment[@"SLATE_HEADLESS_UPDATE_TEST"] boolValue]) return;
+#endif
+  [[SlateSettingsPanel sharedPanel] showForSlateDelegate:weakSelf selectedPage:@"about"];
+ };
+#if defined(SLATE_ENABLE_VERIFY)
+ // Other native regressions do not contact production update servers or touch update defaults.
+ if(!NSProcessInfo.processInfo.environment[@"SLATE_COMMAND_FILE"] || NSProcessInfo.processInfo.environment[@"SLATE_TEST_UPDATE_FEED"])
+#endif
+ [[SlateAppUpdater sharedUpdater] start];
 #if defined(SLATE_ENABLE_VERIFY)
  [self startVerifyCommands];
 #endif
@@ -10972,7 +11400,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self openUrl:lastUrl];
  }
  
- slate::TabId newId = model.selected();
+ slate::TabId newId = [self activeBrowserTab];
  if (groupId.length > 0) {
   model.set_tab_group(newId, groupId.UTF8String);
  }
@@ -10990,6 +11418,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self refresh]; [self scheduleSave];
 }
 - (void)selectNextTab:(id)sender {
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) {
+  const NSUInteger count=window.tabIds.count; if(!count) return;
+  const NSUInteger index=[window.tabIds indexOfObject:@(window.tabId)];
+  [window selectTab:window.tabIds[(index+count+(1))%count].unsignedLongLongValue]; return;
+ }
  const auto tabs = [self orderedIds];
  if(tabs.size() <= 1) return;
  TabId cur = model.selected();
@@ -11001,6 +11434,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self activateTab:tabs[nextIdx]];
 }
 - (void)selectPreviousTab:(id)sender {
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) {
+  const NSUInteger count=window.tabIds.count; if(!count) return;
+  const NSUInteger index=[window.tabIds indexOfObject:@(window.tabId)];
+  [window selectTab:window.tabIds[(index+count+(-1))%count].unsignedLongLongValue]; return;
+ }
  const auto tabs = [self orderedIds];
  if(tabs.size() <= 1) return;
  TabId cur = model.selected();
@@ -11012,15 +11450,17 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self activateTab:tabs[prevIdx]];
 }
 - (void)selectLastTab:(id)sender {
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [window selectTab:window.tabIds.lastObject.unsignedLongLongValue]; return; }
  const auto tabs = [self orderedIds];
  if(tabs.empty()) return;
  [self activateTab:tabs.back()];
 }
 - (void)closeAllTabs:(id)sender {
  if(self.quitting) return;
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [window.window performClose:nil]; return; }
  std::vector<TabId> toClose;
  for(const auto& t : model.tabs()) {
-  if(!model.closing(t.id)) toClose.push_back(t.id);
+  if(!self.detachedTabs[@(t.id)] && !model.closing(t.id)) toClose.push_back(t.id);
  }
  for(auto id : toClose) {
   [self beginClose:id reason:slate::CloseReason::Remove];
@@ -11040,14 +11480,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
 }
 - (void)copyCurrentUrl:(id)sender {
- const auto* tab = model.find(model.selected());
+ const auto* tab = model.find([self activeBrowserTab]);
  if(!tab || tab->url.empty() || tab->url == "about:blank") return;
  NSPasteboard* pb = [NSPasteboard generalPasteboard];
  [pb clearContents];
  [pb setString:Text(tab->url) forType:NSPasteboardTypeString];
 }
 - (void)copyCurrentUrlAsMarkdown:(id)sender {
- const auto* tab = model.find(model.selected());
+ const auto* tab = model.find([self activeBrowserTab]);
  if(!tab || tab->url.empty() || tab->url == "about:blank") return;
  NSString* title = tab->title.empty() ? Text(tab->url) : Text(tab->title);
  NSString* md = [NSString stringWithFormat:@"[%@](%@)", title, Text(tab->url)];
@@ -11056,26 +11496,26 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [pb setString:md forType:NSPasteboardTypeString];
 }
 - (void)printPage:(id)sender {
- WKWebView* webView = [self currentWebView];
+ WKWebView* webView = [self webViewForTab:[self activeBrowserTab]];
  if(webView) {
   NSPrintInfo* printInfo = [NSPrintInfo sharedPrintInfo];
   NSPrintOperation* printOp = [webView printOperationWithPrintInfo:printInfo];
   printOp.showsPrintPanel = YES;
   printOp.showsProgressPanel = YES;
   if(self.window) {
-   [printOp runOperationModalForWindow:self.window delegate:nil didRunSelector:nil contextInfo:nil];
+   [printOp runOperationModalForWindow:(NSApp.mainWindow ?: self.window) delegate:nil didRunSelector:nil contextInfo:nil];
   } else {
    [printOp runOperation];
   }
   return;
  }
- auto it = runtimes.find(model.selected());
+ auto it = runtimes.find([self activeBrowserTab]);
  if(it != runtimes.end() && it->second.engine) {
   it->second.engine->execute_script("window.print();");
  }
 }
 - (void)sharePage:(id)sender {
- const auto* tab = model.find(model.selected());
+ const auto* tab = model.find([self activeBrowserTab]);
  if(!tab || tab->url.empty() || tab->url == "about:blank") return;
  NSURL* url = [NSURL URLWithString:Text(tab->url)];
  if(!url) return;
@@ -11105,7 +11545,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 
 - (IBAction)findInPage:(id)sender {
- WKWebView* webView = [self currentWebView];
+ WKWebView* webView = [self webViewForTab:[self activeBrowserTab]];
  if(!webView) return;
 
  SlateFindBar* bar = [self ensureFindBar];
@@ -11115,7 +11555,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSString* sel = (NSString*)result;
   NSString* query = (sel && [sel isKindOfClass:[NSString class]] && sel.length > 0) ? sel : nil;
   dispatch_async(dispatch_get_main_queue(), ^{
-   [bar showInView:self.content initialQuery:query];
+   SlateDetachedTabWindow* window=[self activeDetachedWindow];
+   [bar showInView:window ? window.pageContainer : self.content initialQuery:query];
   });
  }];
 }
@@ -11137,7 +11578,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 
 - (IBAction)useSelectionForFind:(id)sender {
- WKWebView* webView = [self currentWebView];
+ WKWebView* webView = [self webViewForTab:[self activeBrowserTab]];
  if(!webView) return;
  SlateFindBar* bar = [self ensureFindBar];
  bar.targetWebView = webView;
@@ -11155,152 +11596,244 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }];
 }
 - (void)viewSource:(id)sender {
- const auto* tab = model.find(model.selected());
+ const auto* tab = model.find([self activeBrowserTab]);
  if(!tab || tab->url.empty() || tab->url == "about:blank") return;
  NSString* vsUrl = [NSString stringWithFormat:@"view-source:%@", Text(tab->url)];
  [self openUrl:vsUrl];
 }
 - (void)inspectElement:(id)sender {
- auto it = runtimes.find(model.selected());
+ auto it = runtimes.find([self activeBrowserTab]);
  if(it != runtimes.end() && it->second.engine) {
   it->second.engine->execute_script("console.log('[Slate] Developer inspection requested');");
  }
 }
+- (SlateDetachedTabWindow*)activeDetachedWindow {
+ NSWindow* window=self.actionWindow ?: NSApp.keyWindow;
+ if(window==self.window) return nil;
+ return [self detachedTabForWindow:window] ?: [self detachedTabForWindow:NSApp.mainWindow];
+}
 - (void)openNewWindowWithUrl:(NSString*)url {
  if(self.quitting) return;
  try {
+  const TabId mainSelection=model.selected();
   const TabId identifier=model.add((url.length ? url : @"about:blank").UTF8String);
+  if(mainSelection) model.select(mainSelection);
   [self tearOffTab:identifier atScreenPoint:NSMakePoint(NSMidX(self.window.frame),NSMidY(self.window.frame))];
  } catch(const std::exception&) { NSBeep(); }
 }
-
-- (void)tearOffTab:(TabId)tabId atScreenPoint:(NSPoint)screenPoint {
- const auto* tab = model.find(tabId);
- if(!tab || self.quitting || model.closing(tabId)) return;
- if(SlateDetachedTabWindow* existing=self.detachedTabs[@(tabId)]) {
-  [existing.window makeKeyAndOrderFront:nil];
-  return;
- }
- const TabId previouslySelected=model.selected();
- if(tab->url!="about:blank" && !runtimes.contains(tabId)) [self activateTab:tabId];
- const TabId splitSurvivor=workspace.remove(tabId);
- SlateDetachedTabWindow* detached=[[SlateDetachedTabWindow alloc] initWithOwner:self tab:tabId atScreenPoint:screenPoint];
- self.detachedTabs[@(tabId)]=detached;
- auto runtime=runtimes.find(tabId);
- if(runtime!=runtimes.end() && runtime->second.host) {
-  [runtime->second.host removeFromSuperview];
-  [detached.pageContainer addSubview:runtime->second.host];
-  runtime->second.host.frame=detached.pageContainer.bounds;
-  runtime->second.host.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
-  runtime->second.host.hidden=NO;
-  runtime->second.hide_scheduled=false;
-  if(runtime->second.engine) {
-   runtime->second.engine->set_occluded(NO);
-   runtime->second.engine->host_geometry_changed();
-  }
- } else {
-  [detached showNewTabPage];
- }
- if(model.selected()==tabId) {
-  TabId replacement=0;
-  if(splitSurvivor && !self.detachedTabs[@(splitSurvivor)]) replacement=splitSurvivor;
-  else if(previouslySelected!=tabId && model.find(previouslySelected) && !self.detachedTabs[@(previouslySelected)])
-   replacement=previouslySelected;
-  if(!replacement) for(const auto& candidate:model.tabs()) if(candidate.id!=tabId && !self.detachedTabs[@(candidate.id)]) {
-   replacement=candidate.id; break;
-  }
-  if(!replacement) replacement=model.add("about:blank");
-  [self activateTab:replacement];
- }
- self.tabListSignature=nil;
- self.tabStripIdentity=nil;
- [self refresh];
- [self scheduleSave];
+- (TabId)addTabInWindow:(SlateDetachedTabWindow*)window url:(const std::string&)url incognito:(BOOL)incognito {
+ if(self.quitting || window.closingWindow || !window.window) return 0;
+ try {
+  const TabId mainSelection=model.selected();
+  const TabId identifier=model.add(url,incognito);
+  if(mainSelection) model.select(mainSelection);
+  self.detachedTabs[@(identifier)]=window;
+  [window.tabIds addObject:@(identifier)];
+  [window selectTab:identifier];
+  [self refresh]; [self scheduleSave];
+  return identifier;
+ } catch(const std::exception&) { NSBeep(); return 0; }
 }
-
+- (void)ensureDetachedRuntime:(TabId)identifier {
+ if(runtimes.contains(identifier) || model.closing(identifier)) return;
+ SlateDetachedTabWindow* controller=self.detachedTabs[@(identifier)];
+ const auto* tab=model.find(identifier);
+ if(!controller || !tab || tab->url=="about:blank") return;
+ const TabId mainSelection=model.selected();
+ const BOOL installing=self.splitInstalling;
+ [self.detachedTabs removeObjectForKey:@(identifier)];
+ self.splitInstalling=YES;
+ [self activateTab:identifier];
+ self.splitInstalling=installing;
+ self.detachedTabs[@(identifier)]=controller;
+ if(mainSelection && model.find(mainSelection)) model.select(mainSelection);
+ if(auto it=runtimes.find(identifier);it!=runtimes.end()) {
+  [it->second.host removeFromSuperview];
+  [controller.pageContainer addSubview:it->second.host];
+  it->second.host.frame=WebFillRect(controller.pageContainer);
+ }
+ [self presentWorkspacePages];
+}
+- (void)repairMainSelectionAfterMoving:(TabId)identifier survivor:(TabId)survivor {
+ if(model.selected()!=identifier) { [self presentWorkspacePages]; return; }
+ TabId replacement=0;
+ if(survivor && !self.detachedTabs[@(survivor)]) replacement=survivor;
+ if(!replacement) for(const auto& candidate:model.tabs())
+  if(candidate.id!=identifier && !self.detachedTabs[@(candidate.id)] && !model.closing(candidate.id)) { replacement=candidate.id; break; }
+ if(!replacement) replacement=model.add("about:blank");
+ [self activateTab:replacement];
+}
+- (BOOL)moveTab:(TabId)identifier toWindow:(SlateDetachedTabWindow*)target before:(TabId)before {
+ if(self.quitting || !model.find(identifier) || model.closing(identifier) || target.closingWindow) return NO;
+ SlateDetachedTabWindow* source=self.detachedTabs[@(identifier)];
+ if(source==target) {
+  if(!target) return NO;
+  [target.tabIds removeObject:@(identifier)];
+  NSUInteger index=before ? [target.tabIds indexOfObject:@(before)] : NSNotFound;
+  [target.tabIds insertObject:@(identifier) atIndex:index==NSNotFound ? target.tabIds.count : index];
+  [target selectTab:identifier]; [self scheduleSave]; return YES;
+ }
+ const TabId survivor=workspace.remove(identifier);
+ [self.zoomIndicator dismiss];
+ [self.detachedTabs removeObjectForKey:@(identifier)];
+ if(auto it=runtimes.find(identifier);it!=runtimes.end()) [it->second.host removeFromSuperview];
+ if(source) [source removeTab:identifier];
+ if(target) {
+  [target.tabIds removeObject:@(identifier)];
+  NSUInteger index=before ? [target.tabIds indexOfObject:@(before)] : NSNotFound;
+  [target.tabIds insertObject:@(identifier) atIndex:index==NSNotFound ? target.tabIds.count : index];
+  self.detachedTabs[@(identifier)]=target;
+  [self repairMainSelectionAfterMoving:identifier survivor:survivor];
+  [target selectTab:identifier];
+  [target.window makeKeyAndOrderFront:nil];
+ } else {
+  if(auto it=runtimes.find(identifier);it!=runtimes.end()) {
+   [self.content addSubview:it->second.host positioned:NSWindowBelow relativeTo:self.homeView];
+   it->second.host.frame=WebFillRect(self.content); it->second.host.hidden=NO;
+  }
+  if(before && before!=identifier) model.move_tab_before(identifier,before);
+  else model.move_tab_before(identifier,0);
+  [self.window makeKeyAndOrderFront:nil];
+  [self activateTab:identifier];
+ }
+ self.tabListSignature=nil; self.tabStripIdentity=nil;
+ [self refresh]; [self scheduleSave];
+ return YES;
+}
+- (BOOL)extractSplitTab:(TabId)identifier before:(TabId)before {
+ const auto pair=workspace.pair_for(identifier);
+ if(!pair || (before && pair->contains(before))) return NO;
+ workspace.remove(identifier);
+ model.move_tab_before(identifier,before);
+ self.displayedSplitLeft=0; self.displayedSplitRight=0;
+ [self hideSplitDrag]; [self activateTab:identifier];
+ [self refresh]; [self scheduleSave]; return YES;
+}
+- (BOOL)dropTab:(TabId)identifier atScreenPoint:(NSPoint)point {
+ if(!model.find(identifier) || self.quitting || model.closing(identifier)) return NO;
+ SlateDetachedTabWindow* source=self.detachedTabs[@(identifier)];
+ for(NSWindow* window in NSApp.orderedWindows) {
+  SlateDetachedTabWindow* target=[self detachedTabForWindow:window];
+  if(window!=self.window && !target) continue;
+  if(!window.visible || window.miniaturized || !NSPointInRect(point,window.frame)) continue;
+  // Only the front browser window under the pointer may accept a drop.
+  NSView* bar=target ? target.tabScroll : (self.verticalTabs ? self.sidebar : self.tabCluster);
+  const NSRect frame=[window convertRectToScreen:[bar convertRect:bar.bounds toView:nil]];
+  if(bar.hiddenOrHasHiddenAncestor || !NSPointInRect(point,NSInsetRect(frame,-8,-8))) return NO;
+  if(target) return [self moveTab:identifier toWindow:target before:[target insertionBeforeAtScreenPoint:point excluding:identifier]];
+  TabId before=0, stripMarker=0;
+  if(!source && workspace.member(identifier)) {
+   const auto pair=workspace.pair_for(identifier);
+   for(NSView* view in self.tabPills.arrangedSubviews) {
+    if(![view isKindOfClass:SlateTabPill.class]) continue;
+    NSRect actual=[window convertRectToScreen:[view convertRect:view.bounds toView:nil]];
+    if(!view.hiddenOrHasHiddenAncestor && NSPointInRect(point,actual)) {
+     stripMarker=((SlateTabPill*)view).tabId;
+     if(pair->contains(stripMarker)) return NO;
+    }
+   }
+  }
+  if(self.verticalTabs) {
+   const NSPoint local=[self.tabList convertPoint:[window convertPointFromScreen:point] fromView:nil];
+   const NSInteger row=[self.tabList rowAtPoint:local];
+   before=[self sidebarTabAtRow:row];
+  } else for(NSView* view in self.tabPills.arrangedSubviews) {
+   if(![view isKindOfClass:SlateTabPill.class]) continue;
+   const NSRect tabFrame=[window convertRectToScreen:[view convertRect:view.bounds toView:nil]];
+   if(point.x<NSMidX(tabFrame)) { before=((SlateTabPill*)view).tabId; break; }
+  }
+  if(stripMarker) before=stripMarker;
+  if(!source) return [self extractSplitTab:identifier before:before];
+  return [self moveTab:identifier toWindow:nil before:before];
+ }
+ return NO;
+}
+- (void)tearOffTab:(TabId)identifier atScreenPoint:(NSPoint)point {
+ if(!model.find(identifier) || self.quitting || model.closing(identifier)) return;
+ SlateDetachedTabWindow* source=self.detachedTabs[@(identifier)];
+ if(source && source.tabIds.count==1) {
+  [source.window setFrameTopLeftPoint:NSMakePoint(point.x-120,point.y+22)];
+  [source.window makeKeyAndOrderFront:nil]; return;
+ }
+ SlateDetachedTabWindow* target=[[SlateDetachedTabWindow alloc] initWithOwner:self tab:identifier atScreenPoint:point];
+ if(![self moveTab:identifier toWindow:target before:0]) [target dismissWithoutClosingTab];
+}
 - (SlateDetachedTabWindow*)detachedTabForWindow:(NSWindow*)window {
  if(!window) return nil;
  for(SlateDetachedTabWindow* detached in self.detachedTabs.allValues)
   if(detached.window==window) return detached;
  return nil;
 }
+- (BOOL)routeDetachedTabEvent:(NSEvent*)event {
+ SlateDetachedTabWindow* window=[self detachedTabForWindow:event.window];
+ if(!window || window.closingWindow) return NO;
+ const NSPoint viewport=[window.tabScroll convertPoint:event.locationInWindow fromView:nil];
+ if(!NSPointInRect(viewport,window.tabScroll.bounds)) return NO;
+ const NSPoint point=[window.tabCanvas convertPoint:event.locationInWindow fromView:nil];
+ for(NSNumber* key in window.tabIds) {
+  SlateDetachedTabPill* pill=window.tabPills[key];
+  if(!NSPointInRect(point,pill.frame)) continue;
+  if(event.type==NSEventTypeRightMouseDown) [pill rightMouseDown:event];
+  else {
+   NSPoint close=[pill.closeButton convertPoint:event.locationInWindow fromView:nil];
+   if(!pill.closeButton.hidden && NSPointInRect(close,pill.closeButton.bounds)) [pill.closeButton mouseDown:event];
+   else [pill mouseDown:event];
+  }
+  return YES;
+ }
+ if(event.type==NSEventTypeLeftMouseDown && NSPointInRect(point,window.addButton.frame)) {
+  [window.addButton performClick:nil]; return YES;
+ }
+ return NO;
+}
+- (void)observeDetachedPageEvent:(NSEvent*)event {
+ SlateDetachedTabWindow* window=[self detachedTabForWindow:event.window];
+ if(!window || !model.live(window.tabId)) return;
+ BOOL interacts=NO;
+ if(event.type==NSEventTypeLeftMouseDown || event.type==NSEventTypeRightMouseDown)
+  interacts=NSPointInRect([window.pageContainer convertPoint:event.locationInWindow fromView:nil],window.pageContainer.bounds);
+ else if(event.type==NSEventTypeKeyDown && !(event.modifierFlags&(NSEventModifierFlagCommand|NSEventModifierFlagControl))) {
+  id responder=event.window.firstResponder;
+  interacts=[responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:window.pageContainer];
+ }
+ if(interacts) model.note_interaction(window.tabId);
+}
 - (BOOL)handleDetachedKeyEvent:(NSEvent*)event {
  SlateDetachedTabWindow* detached=[self detachedTabForWindow:event.window];
  if(!detached) return NO;
  const NSEventModifierFlags flags=event.modifierFlags&NSEventModifierFlagDeviceIndependentFlagsMask;
+ if((flags&NSEventModifierFlagControl) && event.keyCode==48) { [self startTabSwitcher:event]; return YES; }
  if(!(flags&NSEventModifierFlagCommand) || (flags&(NSEventModifierFlagOption|NSEventModifierFlagControl))) return NO;
- if(event.keyCode==13) { [detached.window performClose:nil]; return YES; } // ⌘W
- if(event.keyCode==37) { [detached.window makeFirstResponder:detached.address]; [detached.address selectText:nil]; return YES; } // ⌘L
- if(event.keyCode==15) { [detached reload:nil]; return YES; } // ⌘R
- if(event.keyCode==123) { [detached goBack:nil]; return YES; }
- if(event.keyCode==124) { [detached goForward:nil]; return YES; }
+ if(event.keyCode==13) { // ⌘W closes a tab; ⌘⇧W closes the window's tabs.
+  if(flags&NSEventModifierFlagShift) [detached.window performClose:nil];
+  else [self closeTabWithId:detached.tabId];
+  return YES;
+ }
+ if(event.keyCode==17 && !(flags&NSEventModifierFlagShift)) { [detached newTab:nil]; return YES; }
+ if(event.keyCode==37) { [detached focusAddress]; return YES; }
+ if(event.keyCode==15 && !(flags&NSEventModifierFlagShift)) { [detached reload:nil]; return YES; }
+ id responder=event.window.firstResponder;
+ const BOOL editing=[responder isKindOfClass:NSTextView.class] || [responder isKindOfClass:NSTextField.class];
+ if(!editing && event.keyCode==123) { [detached goBack:nil]; return YES; }
+ if(!editing && event.keyCode==124) { [detached goForward:nil]; return YES; }
+ const BOOL basicEdit=event.keyCode==0 || event.keyCode==6 || event.keyCode==7 || event.keyCode==8 || event.keyCode==9;
+ if(!editing || !basicEdit) return [NSApp.mainMenu performKeyEquivalent:event];
  return NO;
 }
-- (void)navigateDetachedTab:(TabId)tabId toURL:(const std::string&)url {
- SlateDetachedTabWindow* detached=self.detachedTabs[@(tabId)];
- if(!detached || url.empty()) return;
- auto it=runtimes.find(tabId);
- if(it!=runtimes.end() && it->second.engine) {
-  it->second.engine->navigate(url);
-  return;
+- (void)navigateDetachedTab:(TabId)identifier toURL:(const std::string&)url {
+ SlateDetachedTabWindow* window=self.detachedTabs[@(identifier)];
+ if(!window || url.empty()) return;
+ if(auto it=runtimes.find(identifier);it!=runtimes.end() && it->second.engine) {
+  it->second.engine->navigate(url); return;
  }
- // A detached New Tab has no WebKit view yet. Initialize its existing tab
- // through the normal engine path, then move that same view into this window.
- const TabId mainSelection=model.selected();
- model.update(tabId,url,{});
- [self.detachedTabs removeObjectForKey:@(tabId)];
- [self activateTab:tabId];
- it=runtimes.find(tabId);
- if(it!=runtimes.end() && it->second.host) {
-  [it->second.host removeFromSuperview];
-  for(NSView* view in [detached.pageContainer.subviews copy]) [view removeFromSuperview];
-  detached.homeView=nil;
-  detached.homeBoard=nil;
-  [detached.pageContainer addSubview:it->second.host];
-  it->second.host.frame=detached.pageContainer.bounds;
-  it->second.host.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
-  it->second.host.hidden=NO;
-  if(it->second.engine) it->second.engine->host_geometry_changed();
- }
- self.detachedTabs[@(tabId)]=detached;
- if(mainSelection && model.find(mainSelection)) [self activateTab:mainSelection];
- [detached refresh];
- [self refresh];
- [self scheduleSave];
+ model.update(identifier,url,{});
+ [window selectTab:identifier];
+ [self refresh]; [self scheduleSave];
 }
-- (BOOL)reattachTab:(TabId)tabId atScreenPoint:(NSPoint)screenPoint {
- SlateDetachedTabWindow* detached=self.detachedTabs[@(tabId)];
- if(!detached || !model.find(tabId) || self.quitting) return NO;
- TabId before=0;
- if(!NSEqualPoints(screenPoint,NSZeroPoint)) {
-  if(!self.window.visible || self.window.miniaturized) return NO;
-  NSView* dropView=self.verticalTabs ? self.sidebar : self.tabCluster;
-  const NSRect dropFrame=[self.window convertRectToScreen:[dropView convertRect:dropView.bounds toView:nil]];
-  if(!NSPointInRect(screenPoint,NSInsetRect(dropFrame,-12,-18))) return NO;
-  if(!self.verticalTabs) for(NSView* view in self.tabPills.arrangedSubviews) {
-   if(![view isKindOfClass:SlateTabPill.class]) continue;
-   const NSRect frame=[self.window convertRectToScreen:[view convertRect:view.bounds toView:nil]];
-   if(NSPointInRect(screenPoint,frame)) { before=((SlateTabPill*)view).tabId; break; }
-  }
- }
- auto runtime=runtimes.find(tabId);
- if(runtime!=runtimes.end() && runtime->second.host) {
-  [runtime->second.host removeFromSuperview];
-  [self.content addSubview:runtime->second.host positioned:NSWindowBelow relativeTo:self.homeView];
-  runtime->second.host.frame=WebFillRect(self.content);
-  runtime->second.host.hidden=NO;
-  if(runtime->second.engine) runtime->second.engine->host_geometry_changed();
- }
- [self.detachedTabs removeObjectForKey:@(tabId)];
- [detached dismissWithoutClosingTab];
- if(before && before!=tabId) model.move_tab_before(tabId,before);
- if(!self.window.visible || self.window.miniaturized) [self.window makeKeyAndOrderFront:nil];
- self.tabListSignature=nil;
- self.tabStripIdentity=nil;
- [self activateTab:tabId];
- [self refresh];
- [self scheduleSave];
- return YES;
+- (BOOL)reattachTab:(TabId)identifier atScreenPoint:(NSPoint)point {
+ if(!self.detachedTabs[@(identifier)]) return NO;
+ if(!NSEqualPoints(point,NSZeroPoint)) return [self dropTab:identifier atScreenPoint:point];
+ return [self moveTab:identifier toWindow:nil before:0];
 }
 - (void)reattachAllDetachedTabs {
  for(NSNumber* identifier in [self.detachedTabs.allKeys copy])
@@ -11315,28 +11848,12 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  return nil;
 }
-
 - (TabId)splitTargetTabAtWindowPoint:(NSPoint)windowPoint excluding:(TabId)source side:(slate::SplitSide*)side {
- if(!source || !self.tabPills) return 0;
- const NSPoint point=[self.tabPills convertPoint:windowPoint fromView:nil];
- for(NSView* view in self.tabPills.arrangedSubviews) {
-  if(![view isKindOfClass:SlateTabPill.class]) continue;
-  SlateTabPill* pill=(SlateTabPill*)view;
-  const auto* target=model.find(pill.tabId);
-  const BOOL available=workspace.open_action(source,pill.tabId)==slate::SplitOpenAction::PairWithBase ||
-   (target && target->url=="about:blank" && workspace.member(pill.tabId) && !workspace.member(source));
-  if(pill.tabId==source || !available)
-   continue;
-  const NSRect center=NSInsetRect(pill.frame,NSWidth(pill.frame)*0.15,-3);
-  if(!NSPointInRect(point,center)) continue;
-  if(side) *side=point.x<NSMidX(pill.frame) ? slate::SplitSide::Left : slate::SplitSide::Right;
-  return pill.tabId;
- }
  return 0;
 }
 
 - (void)dragMoveTab:(TabId)tabId toPoint:(NSPoint)localPoint {
- if (!tabId) return;
+ if (!tabId || workspace.member(tabId)) return;
  for (NSView* view in self.tabPills.arrangedSubviews) {
   if (![view isKindOfClass:SlateTabPill.class]) continue;
   SlateTabPill* pill = (SlateTabPill*)view;
@@ -11378,6 +11895,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 // Cmd+1–9: switch to the N-th visible tab in the sidebar (Cmd+9: switch to last tab)
 - (void)selectTabAtIndex:(NSMenuItem*)sender {
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) {
+  const NSInteger index=sender.tag==9 ? window.tabIds.count-1 : sender.tag-1;
+  if(index>=0 && index<(NSInteger)window.tabIds.count) [window selectTab:window.tabIds[index].unsignedLongLongValue];
+  return;
+ }
  if(sender.tag == 9) {
   [self selectLastTab:nil];
   return;
@@ -11407,52 +11929,53 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (BOOL)validateMenuItem:(NSMenuItem*)item {
  if(item.action==@selector(setAccent:) || item.action==@selector(chooseCustomAccent:)) return YES;
- auto it=runtimes.find(model.selected());
+ auto it=runtimes.find([self activeBrowserTab]);
  const BOOL live=it!=runtimes.end() && it->second.engine && !model.closing(it->first);
  if(item.action==@selector(goBack:)) return live && it->second.back;
  if(item.action==@selector(goForward:)) return live && it->second.forward;
  if(item.action==@selector(reload:)) return live;
  if(item.action==@selector(hardReload:)) return live;
  if(item.action==@selector(reopenClosedTab:)) return self.recentlyClosedTabs.count > 0;
- if(item.action==@selector(selectNextTab:) || item.action==@selector(selectPreviousTab:)) return model.tabs().size() > 1;
+ if(item.action==@selector(selectNextTab:) || item.action==@selector(selectPreviousTab:)) { SlateDetachedTabWindow* window=[self activeDetachedWindow]; return window ? window.tabIds.count>1 : [self orderedIds].size()>1; }
  if(item.action==@selector(copyCurrentUrl:) || item.action==@selector(copyCurrentUrlAsMarkdown:)) {
-  const auto* tab=model.find(model.selected());
+  const auto* tab=model.find([self activeBrowserTab]);
   return tab && !tab->url.empty() && tab->url!="about:blank";
  }
  if(item.action==@selector(toggleBookmark:)) {
-  const auto* tab=model.find(model.selected());
+  const auto* tab=model.find([self activeBrowserTab]);
   return tab && tab->url.rfind("http",0)==0;
  }
- if(item.action==@selector(newTabGroup:)) return model.find(model.selected())!=nullptr;
+ if(item.action==@selector(newTabGroup:)) return model.find([self activeBrowserTab])!=nullptr;
  return YES;
 }
 - (void)goBack:(id)sender {
- auto it=runtimes.find(model.selected());
+ auto it=runtimes.find([self activeBrowserTab]);
  if(it==runtimes.end() || !it->second.engine || model.closing(it->first) || !it->second.back) return;
  [self.backButton playMotion];
  it->second.engine->back();
 }
 - (void)goForward:(id)sender {
- auto it=runtimes.find(model.selected());
+ auto it=runtimes.find([self activeBrowserTab]);
  if(it==runtimes.end() || !it->second.engine || model.closing(it->first) || !it->second.forward) return;
  [self.forwardButton playMotion];
  it->second.engine->forward();
 }
 - (void)reload:(id)sender {
- auto it=runtimes.find(model.selected());
+ auto it=runtimes.find([self activeBrowserTab]);
  if(it==runtimes.end() || !it->second.engine || model.closing(it->first)) return;
  if(it->second.loading) { it->second.engine->stop(); return; }
  [self.reloadButton playMotion];
  it->second.engine->reload();
 }
 - (void)hardReload:(id)sender {
- auto it=runtimes.find(model.selected());
+ auto it=runtimes.find([self activeBrowserTab]);
  if(it==runtimes.end() || !it->second.engine || model.closing(it->first)) return;
  if(it->second.loading) { it->second.engine->stop(); return; }
  [self.reloadButton playMotion];
  it->second.engine->reload_ignore_cache();
 }
 - (void)focusAddress:(id)sender {
+ if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [window focusAddress]; return; }
  const auto* tab=model.find(model.selected());
  NSTextField* homeField=[self homeSearchField];
  // On the new tab page, always focus the center Omnibox directly
@@ -11476,7 +11999,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.omniboxOverlay showOver:self.stage initialText:shown];
 }
 - (const slate::Tab*)selectedTab {
- return model.find(model.selected());
+ return model.find([self activeBrowserTab]);
 }
 - (void)dismissOmniboxOverlay {
  if(self.omniboxOverlay && self.omniboxOverlay.isShowing) {
@@ -11740,6 +12263,89 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
 }
 - (void)runVerifyCommand:(NSString*)line {
+ if([line isEqual:@"updaterinstall"]) { [[SlateAppUpdater sharedUpdater] installPendingTestUpdate]; return; }
+ if([line isEqual:@"updatercheck"]) {
+  NSMenu* menu=NSApp.mainMenu.itemArray.firstObject.submenu;
+  NSMenuItem* item=[menu itemWithTitle:@"Check for Updates…"];
+  [item.target performSelector:item.action withObject:item afterDelay:0]; return;
+ }
+ if([line hasPrefix:@"updaterprefs "]) {
+  NSArray* fields=[line componentsSeparatedByString:@" "]; if(fields.count!=3) return;
+  [[SlateSettingsPanel sharedPanel] prepareUpdaterVerification:self];
+  const auto checkbox=[&](NSString* title) -> NSButton* {
+   NSMutableArray<NSView*>* pending=[NSMutableArray arrayWithObject:[SlateSettingsPanel sharedPanel].contentView];
+   while(pending.count) {
+    NSView* view=pending.lastObject; [pending removeLastObject];
+    if([view isKindOfClass:NSButton.class] && [((NSButton*)view).title isEqual:title]) return (NSButton*)view;
+    [pending addObjectsFromArray:view.subviews];
+   }
+   return nil;
+  };
+  NSButton* automatic=checkbox(@"Automatically check for updates");
+  if((automatic.state==NSControlStateValueOn)!=[fields[1] boolValue]) [automatic performClick:nil];
+  NSButton* downloads=checkbox(@"Automatically download updates");
+  if(downloads.enabled && (downloads.state==NSControlStateValueOn)!=[fields[2] boolValue]) [downloads performClick:nil];
+  return;
+ }
+ if([line hasPrefix:@"checkupdater "]) {
+  NSArray* fields=[line componentsSeparatedByString:@" "]; if(fields.count!=4) return;
+  SlateAppUpdater* updater=[SlateAppUpdater sharedUpdater];
+  NSMenuItem* item=[NSApp.mainMenu.itemArray.firstObject.submenu itemWithTitle:@"Check for Updates…"];
+  int failures=!updater.started || ![updater.verificationResult isEqual:fields[1]] ||
+   updater.automaticallyChecksForUpdates!=[fields[2] boolValue] || updater.automaticallyDownloadsUpdates!=[fields[3] boolValue] ||
+   item.target!=updater || item.action!=@selector(checkForUpdates:);
+  fprintf(stderr,"SLATE_UPDATER_CHECK result=%s automatic=%d downloads=%d failures=%d\n",updater.verificationResult.UTF8String,(int)updater.automaticallyChecksForUpdates,(int)updater.automaticallyDownloadsUpdates,failures);
+  return;
+ }
+ if([line hasPrefix:@"switcher "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=3) return;
+  NSWindow* window=[parts[1] isEqual:@"main"] ? self.window : self.detachedTabs[@([parts[1] longLongValue])].window;
+  NSString* action=parts[2];
+  if(!self.tabSwitcher.active) [window makeKeyAndOrderFront:nil];
+  unsigned short code=48; NSString* chars=@"\t"; NSEventModifierFlags flags=NSEventModifierFlagControl; NSEventType type=NSEventTypeKeyDown;
+  if([action isEqual:@"back"]) flags|=NSEventModifierFlagShift;
+  else if([action isEqual:@"release"]) { type=NSEventTypeFlagsChanged; code=59; flags=0; chars=@""; }
+  else if([action isEqual:@"escape"]) code=53;
+  else if([action isEqual:@"left"]) code=123;
+  else if([action isEqual:@"right"]) code=124;
+  else if([action isEqual:@"down"]) code=125;
+  else if([action isEqual:@"up"]) code=126;
+  else if([action isEqual:@"mute"]) { code=46; chars=@"m"; }
+  else if([action isEqual:@"close"]) { code=13; chars=@"w"; }
+  else if([action isEqual:@"reload"]) { code=15; chars=@"r"; }
+  else if([action isEqual:@"keep"]) { code=31; chars=@"o"; }
+  NSEvent* event=[NSEvent keyEventWithType:type location:NSZeroPoint modifierFlags:flags timestamp:0 windowNumber:window.windowNumber context:nil characters:chars charactersIgnoringModifiers:chars isARepeat:NO keyCode:code];
+  [NSApp sendEvent:event]; return;
+ }
+ if([line hasPrefix:@"checkswitcher "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=5) return;
+  int failures=(self.tabSwitcher.active!=[parts[1] boolValue])+(self.tabSwitcher.visible!=[parts[2] boolValue])+(self.tabSwitcher.selected!=[parts[3] longLongValue])+(model.selected()!=[parts[4] longLongValue]);
+  fprintf(stderr,"SLATE_SWITCHER_CHECK active=%d visible=%d selected=%llu main=%llu loaded=%zu failures=%d\n",(int)self.tabSwitcher.active,(int)self.tabSwitcher.visible,(unsigned long long)self.tabSwitcher.selected,(unsigned long long)model.selected(),runtimes.size(),failures);
+  return;
+ }
+ if([line hasPrefix:@"switcherpointer "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=4) return;
+  NSWindow* window=[parts[1] isEqual:@"main"] ? self.window : self.detachedTabs[@([parts[1] longLongValue])].window;
+  NSString* action=parts[2]; TabId identifier=[parts[3] longLongValue];
+  NSView* overlay=window.contentView.subviews.lastObject;
+  NSPoint point=NSMakePoint(2,2);
+  if(identifier) for(NSView* view in overlay.subviews) {
+   if(![view isKindOfClass:NSButton.class]) continue;
+   NSString* label=[@"Switch to " stringByAppendingString:[self switcherTab:identifier].title ?: @"tab"];
+   if([view.accessibilityLabel isEqual:label]) point=[view convertPoint:NSMakePoint(NSMidX(view.bounds),NSMidY(view.bounds)) toView:nil];
+  }
+  NSEventType type=[action isEqual:@"hover"] ? NSEventTypeMouseMoved : NSEventTypeLeftMouseDown;
+  NSEvent* event=[NSEvent mouseEventWithType:type location:point modifierFlags:NSEventModifierFlagControl timestamp:0 windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:type==NSEventTypeLeftMouseDown ? 1 : 0];
+  [NSApp sendEvent:event]; return;
+ }
+ if([line hasPrefix:@"switchershot "]) {
+  NSString* path=[line substringFromIndex:13];
+  NSView* view=self.window.contentView;
+  NSBitmapImageRep* bitmap=[view bitmapImageRepForCachingDisplayInRect:view.bounds];
+  [view cacheDisplayInRect:view.bounds toBitmapImageRep:bitmap];
+  [[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
+  return;
+ }
  fprintf(stderr,"SLATE_VERIFY command=%s\n",line.UTF8String);
  if([line isEqual:@"unload"]) { [self unloadTab:nil]; return; }
  if([line isEqual:@"confirm"]) {
@@ -11807,6 +12413,107 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    (unsigned long long)model.selected(),(int)split,failures,ms);
   return;
  }
+ if([line hasPrefix:@"verifylatestdrag "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=3) return;
+  TabId source=[parts[1] longLongValue],other=[parts[2] longLongValue],base=model.selected();
+  [self.window makeKeyAndOrderFront:nil]; [self syncPageGeometry]; [self hideSplitDrag];
+  self.splitDragCancelled=NO;
+  NSView* sourceHost=runtimes.contains(source) ? runtimes.at(source).host : nil;
+  NSView* baseHost=runtimes.contains(base) ? runtimes.at(base).host : nil;
+  CGFloat width=NSWidth(self.content.bounds),edge=slate::SplitDragIntent::edge_band(width);
+  const auto screen=[&](CGFloat x) { return [self.window convertPointToScreen:[self.content convertPoint:NSMakePoint(x,NSMidY(self.content.bounds)) toView:nil]]; };
+  int failures=0;
+  [self updateSplitDragAtScreenPoint:screen(width/2) tab:source base:base];
+  failures+=!self.splitOverlay.hidden;
+  [self updateSplitDragAtScreenPoint:screen(edge/2) tab:source base:base];
+  failures+=!self.splitOverlay.hidden;
+  [NSThread sleepForTimeInterval:slate::SplitDragIntent::still+0.02];
+  [self updateSplitDragAtScreenPoint:screen(edge/2) tab:source base:base];
+  failures+=self.splitOverlay.hidden || self.splitDropSide!=1;
+  NSString* shot=NSProcessInfo.processInfo.environment[@"SLATE_DRAG_PREVIEW_PATH"];
+  if(shot.length && !self.verticalTabs) {
+   NSView* view=self.window.contentView;
+   NSBitmapImageRep* bitmap=[view bitmapImageRepForCachingDisplayInRect:view.bounds];
+   [view cacheDisplayInRect:view.bounds toBitmapImageRep:bitmap];
+   [[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:shot atomically:YES];
+  }
+  [self updateSplitDragAtScreenPoint:screen(edge+19) tab:source base:base];
+  failures+=self.splitOverlay.hidden || self.splitDropSide!=1;
+  failures+=[self finishSplitDragAtScreenPoint:screen(edge+21) tab:source base:base];
+  failures+=!self.splitOverlay.hidden;
+  [self updateSplitDragAtScreenPoint:screen(edge/2) tab:source base:base];
+  [NSThread sleepForTimeInterval:slate::SplitDragIntent::still+0.02];
+  failures+=[self finishSplitDragAtScreenPoint:screen(edge/2) tab:source base:base]; // release alone cannot reveal
+  failures+=workspace.member(source);
+  [self updateSplitDragAtScreenPoint:screen(edge/2) tab:source base:base];
+  [NSThread sleepForTimeInterval:slate::SplitDragIntent::still+0.02];
+  [self updateSplitDragAtScreenPoint:screen(edge/2) tab:source base:base];
+  failures+=![self finishSplitDragAtScreenPoint:screen(edge/2) tab:source base:base];
+  failures+=!workspace.same_pair(source,base);
+  const auto stripPoint=[&](TabId id) {
+   if(self.verticalTabs) {
+    const auto rows=[self sidebarRows];
+    for(size_t i=0;i<rows.size();++i) if(rows[i].kind==SideRow::Kind::Tab && rows[i].tab==id) {
+     NSRect frame=[self.tabList rectOfRow:i];
+     return [self.window convertPointToScreen:[self.tabList convertPoint:NSMakePoint(NSMidX(frame),NSMidY(frame)) toView:nil]];
+    }
+   }
+   NSView* pill=[self pillViewForTabId:id];
+   return [self.window convertPointToScreen:[pill convertPoint:NSMakePoint(NSMidX(pill.bounds),NSMidY(pill.bounds)) toView:nil]];
+  };
+  failures+=[self dropTab:source atScreenPoint:stripPoint(base)];
+  failures+=!workspace.same_pair(source,base);
+  failures+=![self dropTab:source atScreenPoint:stripPoint(other)];
+  failures+=workspace.member(source) || workspace.member(base);
+  failures+=!sourceHost || runtimes.at(source).host!=sourceHost || runtimes.at(base).host!=baseHost;
+  [self activateTab:base];
+  [self hideSplitDrag]; [self stopSplitDragTracking];
+  failures+=self.splitEscapeMonitor!=nil || self.splitDragTimer!=nil;
+  fprintf(stderr,"SLATE_LATEST_DRAG failures=%d source=%llu base=%llu\n",failures,(unsigned long long)source,(unsigned long long)base);
+  return;
+ }
+ if([line hasPrefix:@"verifydragintent "]) {
+  NSArray<NSString*>* parts=[line componentsSeparatedByString:@" "];
+  if(parts.count!=3) return;
+  const TabId source=(TabId)[parts[1] longLongValue];
+  const TabId base=model.selected();
+  const NSString* mode=parts[2];
+  const BOOL hold=[mode hasPrefix:@"hold"];
+  [self hideSplitDrag]; [self.window makeKeyAndOrderFront:nil]; [self syncPageGeometry];
+  const NSRect leftFrame=self.splitLeftTarget.frame,rightFrame=self.splitRightTarget.frame;
+  const auto screen=[&](NSPoint point) { return [self.window convertPointToScreen:[self.content convertPoint:point toView:nil]]; };
+  const CGFloat edge=slate::SplitDragIntent::edge_band(NSWidth(self.content.bounds))/2;
+  const NSPoint left=screen(NSMakePoint(edge,NSMidY(self.content.bounds)));
+  const NSPoint right=screen(NSMakePoint(NSWidth(self.content.bounds)-edge,NSMidY(self.content.bounds)));
+  const NSPoint center=screen(NSMakePoint(NSMidX(self.content.bounds),NSMidY(self.content.bounds)));
+  const NSPoint outside=NSMakePoint(NSMaxX(self.window.frame)+80,NSMidY(self.window.frame));
+  NSPoint end=left;
+  if([mode isEqual:@"center"]) end=center;
+  if([mode isEqual:@"holdright"]) end=right;
+  [self updateSplitDragAtScreenPoint:end tab:source base:base];
+  const BOOL initiallyUnarmed=self.splitDropSide==0;
+  if(hold || [mode isEqual:@"leave"] || [mode isEqual:@"switch"] || [mode isEqual:@"reenter"]) {
+   [NSThread sleepForTimeInterval:slate::SplitDragIntent::hold_seconds+0.03];
+   [self updateSplitDragAtScreenPoint:end tab:source base:base];
+  }
+  if([mode isEqual:@"leave"]) end=outside;
+  if([mode isEqual:@"switch"]) end=right;
+  if([mode isEqual:@"reenter"]) {
+   [self updateSplitDragAtScreenPoint:center tab:source base:base]; end=left;
+  }
+  auto it=runtimes.find(source); NSView* originalHost=it!=runtimes.end() ? it->second.host : nil;
+  const BOOL split=[self finishSplitDragAtScreenPoint:end tab:source base:base];
+  if(!split) [self tearOffTab:source atScreenPoint:end];
+  const BOOL detached=self.detachedTabs[@(source)]!=nil;
+  const BOOL paired=workspace.same_pair(source,base);
+  const BOOL sameHost=originalHost && runtimes.find(source)!=runtimes.end() && runtimes.at(source).host==originalHost;
+  const BOOL valid=initiallyUnarmed && sameHost && (hold ? split && paired && !detached : !split && !paired && detached);
+  fprintf(stderr,"SLATE_DRAG_INTENT mode=%s split=%d detached=%d same_host=%d failures=%d\n",mode.UTF8String,(int)split,(int)detached,(int)sameHost,!valid);
+  if(split) [self exitSplitView:nil];
+  if(detached) [self moveTab:source toWindow:nil before:0];
+  [self activateTab:base];
+  return;
+ }
  if([line hasPrefix:@"verifysidebardrop "] || [line hasPrefix:@"verifypagedrop "]) {
   NSArray<NSString*>* parts=[line componentsSeparatedByString:@" "];
   if(parts.count!=3) return;
@@ -11833,19 +12540,26 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSDragOperation valid=NSDragOperationNone;
   if(pageDrop) {
    const BOOL left=[parts[2] isEqual:@"left"];
-   drag.draggingLocation=[self.content convertPoint:NSMakePoint(NSWidth(self.content.bounds)*(left ? 0.25 : 0.75),NSHeight(self.content.bounds)*0.5) toView:nil];
-   valid=[self.content draggingEntered:(id<NSDraggingInfo>)drag];
+   [self syncPageGeometry];
+   const NSRect targetFrame=left ? self.splitLeftTarget.frame : self.splitRightTarget.frame;
+   CGFloat edge=slate::SplitDragIntent::edge_band(NSWidth(self.content.bounds))/2;
+   drag.draggingLocation=[self.content convertPoint:NSMakePoint(left ? edge : NSWidth(self.content.bounds)-edge,NSMidY(self.content.bounds)) toView:nil];
+   [self.content draggingEntered:(id<NSDraggingInfo>)drag];
+   [NSThread sleepForTimeInterval:slate::SplitDragIntent::hold_seconds+0.02];
+   valid=[self.content draggingUpdated:(id<NSDraggingInfo>)drag];
    accepted=[self.content prepareForDragOperation:(id<NSDraggingInfo>)drag] && [self.content performDragOperation:(id<NSDraggingInfo>)drag];
   } else {
    const NSRect row=[self.tabList rectOfRow:targetRow];
    drag.draggingLocation=[self.tabList convertPoint:NSMakePoint(NSMidX(row),NSMidY(row)) toView:nil];
+   [self tableView:self.tabList validateDrop:(id<NSDraggingInfo>)drag proposedRow:targetRow proposedDropOperation:NSTableViewDropOn];
+   [NSThread sleepForTimeInterval:slate::SplitDragIntent::hold_seconds+0.02];
    valid=[self tableView:self.tabList validateDrop:(id<NSDraggingInfo>)drag proposedRow:targetRow proposedDropOperation:NSTableViewDropOn];
    accepted=[self tableView:self.tabList acceptDrop:(id<NSDraggingInfo>)drag row:targetRow dropOperation:NSTableViewDropOn];
   }
   [self tableView:self.tabList draggingSession:session endedAtPoint:[self.window convertPointToScreen:drag.draggingLocation] operation:accepted ? NSDragOperationMove : NSDragOperationNone];
   [drag.draggingPasteboard releaseGlobally];
   const BOOL paired=workspace.same_pair(source,target) && workspace.visible_for(model.selected());
-  fprintf(stderr,"SLATE_VERTICAL_DROP page=%d captured=%d accepted=%d paired=%d failures=%d\n",(int)pageDrop,(int)captured,(int)accepted,(int)paired,!(captured && accepted && paired && valid==NSDragOperationMove));
+  fprintf(stderr,"SLATE_VERTICAL_DROP page=%d captured=%d accepted=%d paired=%d failures=%d\n",(int)pageDrop,(int)captured,(int)accepted,(int)paired,!(captured && accepted && paired==pageDrop && valid==NSDragOperationMove));
   return;
  }
  if([line hasPrefix:@"nativepip "]) {
@@ -11958,7 +12672,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   TabId identifier=pieces.count>2 ? (TabId)[pieces[2] longLongValue] : model.selected();
   [self syncPageGeometry];
   NSRect target=right ? self.splitRightTarget.frame : self.splitLeftTarget.frame;
-  NSPoint windowPoint=[self.content convertPoint:NSMakePoint(NSMidX(target),NSMidY(target)) toView:nil];
+  CGFloat edge=slate::SplitDragIntent::edge_band(NSWidth(self.content.bounds))/2;
+  NSPoint windowPoint=[self.content convertPoint:NSMakePoint(right ? NSWidth(self.content.bounds)-edge : edge,NSMidY(self.content.bounds)) toView:nil];
   NSPoint screenPoint=[self.window convertPointToScreen:windowPoint];
   [self updateSplitDragAtScreenPoint:screenPoint tab:identifier base:model.selected()];
   return;
@@ -11990,6 +12705,178 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   }
   return;
  }
+ if([line hasPrefix:@"verifywindowkey "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "];
+  if(parts.count!=3) return;
+  SlateDetachedTabWindow* controller=[parts[1] isEqual:@"main"] ? nil : self.detachedTabs[@([parts[1] longLongValue])];
+  NSWindow* window=controller ? controller.window : self.window;
+  [window makeKeyAndOrderFront:nil];
+  NSString* shortcut=parts[2]; unsigned short code=0; NSString* chars=@"";
+  NSEventModifierFlags flags=NSEventModifierFlagCommand;
+  if([shortcut isEqual:@"t"]) { code=17; chars=@"t"; }
+  else if([shortcut isEqual:@"w"] || [shortcut isEqual:@"shiftw"]) { code=13; chars=@"w"; if([shortcut isEqual:@"shiftw"]) flags|=NSEventModifierFlagShift; }
+  else if([shortcut isEqual:@"n"]) { code=45; chars=@"n"; }
+  else if([shortcut isEqual:@"plus"]) { code=24; chars=@"="; }
+  else if([shortcut isEqual:@"minus"]) { code=27; chars=@"-"; }
+  else if([shortcut isEqual:@"zero"]) { code=29; chars=@"0"; }
+  else if([shortcut isEqual:@"next"] || [shortcut isEqual:@"prev"]) { code=48; chars=@"\t"; flags=NSEventModifierFlagControl; if([shortcut isEqual:@"prev"]) flags|=NSEventModifierFlagShift; }
+  else if([shortcut isEqual:@"1"]) { code=18; chars=@"1"; }
+  else if([shortcut isEqual:@"9"]) { code=25; chars=@"9"; }
+  else return;
+  NSEvent* key=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:flags timestamp:0 windowNumber:window.windowNumber context:nil characters:chars charactersIgnoringModifiers:chars isARepeat:NO keyCode:code];
+  [NSApp sendEvent:key];
+  if(flags&NSEventModifierFlagControl) {
+   NSEvent* release=[NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:window.windowNumber context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:59];
+   [NSApp sendEvent:release];
+  }
+  return;
+ }
+ if([line hasPrefix:@"verifymouseintent "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=3) return;
+  const TabId source=[parts[1] longLongValue],base=model.selected();
+  NSString* mode=parts[2];
+  const BOOL row=[mode hasPrefix:@"row"];
+  const BOOL hold=[mode hasSuffix:@"hold"];
+  const BOOL leave=[mode isEqual:@"leave"],back=[mode isEqual:@"return"],escape=[mode isEqual:@"escape"];
+  [self hideSplitDrag]; [self.window makeKeyAndOrderFront:nil]; [self.window.contentView layoutSubtreeIfNeeded]; [self syncPageGeometry];
+  SlateTabPill* pill=[self pillViewForTabId:source];
+  const NSPoint start=[pill convertPoint:NSMakePoint(NSMidX(pill.bounds),NSMidY(pill.bounds)) toView:nil];
+  const NSRect targetFrame=self.splitLeftTarget.frame;
+  NSPoint target=[self.content convertPoint:NSMakePoint(slate::SplitDragIntent::edge_band(NSWidth(self.content.bounds))/2,NSMidY(self.content.bounds)) toView:nil];
+  if(row) {
+   SlateTabPill* other=[self pillViewForTabId:base];
+   target=[other convertPoint:NSMakePoint(NSMidX(other.bounds),NSMidY(other.bounds)) toView:nil];
+  }
+  const NSPoint end=back ? start : leave ? [self.content convertPoint:NSMakePoint(NSMidX(self.content.bounds),NSMidY(self.content.bounds)) toView:nil] : target;
+  const auto mouse=[&](NSEventType type,NSPoint point) { return [NSEvent mouseEventWithType:type location:point modifierFlags:0 timestamp:0 windowNumber:self.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:type==NSEventTypeLeftMouseUp ? 0 : 1]; };
+  NSEvent* drag=mouse(NSEventTypeLeftMouseDragged,target);
+  NSEvent* up=mouse(NSEventTypeLeftMouseUp,end);
+  NSEvent* finishDrag=mouse(NSEventTypeLeftMouseDragged,end);
+  NSEvent* cancel=[NSEvent keyEventWithType:NSEventTypeKeyDown location:start modifierFlags:0 timestamp:0 windowNumber:self.window.windowNumber context:nil characters:@"\x1b" charactersIgnoringModifiers:@"\x1b" isARepeat:NO keyCode:53];
+  NSView* originalHost=runtimes.contains(source) ? runtimes.at(source).host : nil;
+  if(hold || leave || back || escape) {
+   dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.5*NSEC_PER_SEC)),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+    if(escape) [NSApp postEvent:cancel atStart:NO];
+    else { if(leave || back) [NSApp postEvent:finishDrag atStart:NO]; [NSApp postEvent:up atStart:NO]; }
+   });
+  } else [NSApp postEvent:up atStart:YES];
+  [NSApp postEvent:drag atStart:YES];
+  [NSApp sendEvent:mouse(NSEventTypeLeftMouseDown,start)];
+  const BOOL split=workspace.same_pair(source,base),detached=self.detachedTabs[@(source)]!=nil;
+  const BOOL sameHost=originalHost && runtimes.contains(source) && runtimes.at(source).host==originalHost;
+  const BOOL shouldDetach=!hold && !row && !back && !escape;
+  const BOOL valid=sameHost && split==(hold && !row) && detached==shouldDetach && self.splitOverlay.hidden;
+  fprintf(stderr,"SLATE_MOUSE_INTENT mode=%s split=%d detached=%d same_host=%d failures=%d\n",mode.UTF8String,(int)split,(int)detached,(int)sameHost,!valid);
+  if(split) [self exitSplitView:nil];
+  if(detached) [self moveTab:source toWindow:nil before:0];
+  [self activateTab:base];
+  return;
+ }
+ if([line hasPrefix:@"verifywindowdrag "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=3 || ![parts[2] isEqual:@"page"]) return;
+  const TabId id=[parts[1] longLongValue];
+  [self activateTab:id];
+  SlateDetachedTabWindow* controller=self.detachedTabs[@(id)];
+  NSWindow* window=controller ? controller.window : self.window;
+  [window makeKeyAndOrderFront:nil]; [window.contentView layoutSubtreeIfNeeded];
+  NSView* pill=controller ? controller.tabPills[@(id)] : [self pillViewForTabId:id];
+  NSView* page=controller ? controller.pageContainer : self.content;
+  NSPoint start=[pill convertPoint:NSMakePoint(NSMidX(pill.bounds),NSMidY(pill.bounds)) toView:nil];
+  NSPoint end=[page convertPoint:NSMakePoint(NSMidX(page.bounds),NSMidY(page.bounds)) toView:nil];
+  for(NSNumber* type in @[@(NSEventTypeLeftMouseUp),@(NSEventTypeLeftMouseDragged)]) {
+   NSEvent* next=[NSEvent mouseEventWithType:(NSEventType)type.integerValue location:end modifierFlags:0 timestamp:0 windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:type.integerValue==NSEventTypeLeftMouseUp ? 0 : 1];
+   [NSApp postEvent:next atStart:YES];
+  }
+  NSEvent* down=[NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:start modifierFlags:0 timestamp:0 windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+  [NSApp sendEvent:down]; return;
+ }
+ if([line hasPrefix:@"verifywindowclick "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=3) return;
+  SlateDetachedTabWindow* controller=self.detachedTabs[@([parts[1] longLongValue])];
+  SlateDetachedTabPill* pill=controller.tabPills[@([parts[2] longLongValue])];
+  [controller.window makeKeyAndOrderFront:nil];
+  [controller.tabCanvas scrollRectToVisible:pill.frame];
+  NSPoint point=[pill convertPoint:NSMakePoint(NSMidX(pill.bounds),NSMidY(pill.bounds)) toView:nil];
+  NSEvent* up=[NSEvent mouseEventWithType:NSEventTypeLeftMouseUp location:point modifierFlags:0 timestamp:0 windowNumber:controller.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:0];
+  [NSApp postEvent:up atStart:YES];
+  NSEvent* down=[NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:point modifierFlags:0 timestamp:0 windowNumber:controller.window.windowNumber context:nil eventNumber:0 clickCount:1 pressure:1];
+  [NSApp sendEvent:down]; return;
+ }
+ if([line hasPrefix:@"verifywindowplus "]) {
+  SlateDetachedTabWindow* window=self.detachedTabs[@([[line substringFromIndex:17] longLongValue])];
+  [window.window makeKeyAndOrderFront:nil]; [window.addButton performClick:nil]; return;
+ }
+ if([line hasPrefix:@"verifywindowclose "]) {
+  const TabId id=[[line substringFromIndex:18] longLongValue];
+  SlateDetachedTabWindow* window=self.detachedTabs[@(id)];
+  [window.tabPills[@(id)].closeButton performClick:nil]; return;
+ }
+ if([line hasPrefix:@"windowexec "]) {
+  const NSRange space=[line rangeOfString:@" " options:0 range:NSMakeRange(11,line.length-11)];
+  if(space.location!=NSNotFound) {
+   const TabId id=[[line substringWithRange:NSMakeRange(11,space.location-11)] longLongValue];
+   if(auto it=runtimes.find(id);it!=runtimes.end() && it->second.engine) it->second.engine->execute_script([line substringFromIndex:space.location+1].UTF8String);
+  }
+  return;
+ }
+ if([line hasPrefix:@"verifydrop "]) {
+  NSArray* parts=[line componentsSeparatedByString:@" "]; if(parts.count!=4) return;
+  const TabId identifier=[parts[1] longLongValue], before=[parts[3] longLongValue];
+  SlateDetachedTabWindow* controller=[parts[2] isEqual:@"main"] ? nil : self.detachedTabs[@([parts[2] longLongValue])];
+  NSWindow* window=controller ? controller.window : self.window;
+  [window makeKeyAndOrderFront:nil]; [window.contentView layoutSubtreeIfNeeded];
+  NSView* bar=controller ? controller.tabScroll : (self.verticalTabs ? self.sidebar : self.tabCluster);
+  NSRect rect=[window convertRectToScreen:[bar convertRect:bar.bounds toView:nil]];
+  NSPoint point=NSMakePoint(NSMaxX(rect)-12,NSMidY(rect));
+  if(before) {
+   NSView* pill=controller ? controller.tabPills[@(before)] : [self pillViewForTabId:before];
+   if(controller) [controller.tabCanvas scrollRectToVisible:pill.frame];
+   rect=[window convertRectToScreen:[pill convertRect:pill.bounds toView:nil]];
+   point=NSMakePoint(NSMidX(rect)-2,NSMidY(rect));
+  }
+  const BOOL moved=[self dropTab:identifier atScreenPoint:point];
+  fprintf(stderr,"SLATE_WINDOW_DROP tab=%llu moved=%d\n",(unsigned long long)identifier,moved);
+  return;
+ }
+ if([line hasPrefix:@"verifywindow "]) {
+  static NSMutableDictionary<NSNumber*,NSValue*>* originals=[NSMutableDictionary dictionary];
+  NSArray* fields=[line componentsSeparatedByString:@" "]; if(fields.count!=4) return;
+  const BOOL main=[fields[1] isEqual:@"main"];
+  SlateDetachedTabWindow* controller=main ? nil : self.detachedTabs[@([fields[1] longLongValue])];
+  const TabId active=[fields[2] longLongValue];
+  NSMutableArray* actual=[NSMutableArray array];
+  if(main) for(TabId id:[self orderedIds]) [actual addObject:[NSString stringWithFormat:@"%llu",(unsigned long long)id]];
+  else for(NSNumber* key in controller.tabIds) [actual addObject:key.stringValue];
+  int failures=![[actual componentsJoinedByString:@","] isEqual:fields[3]];
+  if((main ? model.selected() : controller.tabId)!=active) ++failures;
+  NSWindow* window=main ? self.window : controller.window;
+  if(!window || !window.visible) ++failures;
+  NSSet* controllers=[NSSet setWithArray:self.detachedTabs.allValues];
+  for(const auto& tab:model.tabs()) {
+   NSUInteger owners=0;
+   for(SlateDetachedTabWindow* candidate in controllers) if([candidate.tabIds containsObject:@(tab.id)]) ++owners;
+   if(owners!=(self.detachedTabs[@(tab.id)] ? 1 : 0)) ++failures;
+  }
+  for(NSString* text in actual) {
+   const TabId id=text.longLongValue;
+   if(auto it=runtimes.find(id);it!=runtimes.end()) {
+    WKWebView* page=[self webViewForTab:id];
+    if(!page || page.window!=window) ++failures;
+    if(originals[@(id)] && originals[@(id)].pointerValue!=(__bridge void*)page) ++failures;
+    if(page && !originals[@(id)]) originals[@(id)]=[NSValue valueWithPointer:(__bridge void*)page];
+    const BOOL expected=id==active || (main && workspace.visible_for(active) && workspace.contains(id));
+    if(it->second.host.hiddenOrHasHiddenAncestor==expected) ++failures;
+    if(expected) {
+     NSView* parent=it->second.host.superview;
+     NSPoint center=[parent convertPoint:NSMakePoint(NSMidX(it->second.host.bounds),NSMidY(it->second.host.bounds)) fromView:it->second.host];
+     NSView* hit=[parent hitTest:center];
+     if(![hit isDescendantOf:it->second.host]) ++failures;
+    }
+   }
+  }
+  fprintf(stderr,"SLATE_WINDOW_TABS anchor=%s active=%llu ids=%s failures=%d secondary_windows=%lu\n",[fields[1] UTF8String],(unsigned long long)active,[fields[3] UTF8String],failures,(unsigned long)controllers.count);
+  return;
+ }
  if([line hasPrefix:@"tearoff "]) {
   TabId tid = (TabId)[line substringFromIndex:8].longLongValue;
   [self tearOffTab:tid atScreenPoint:NSMakePoint(200, 200)];
@@ -12014,10 +12901,12 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   return;
  }
  if([line isEqual:@"checkdetached"]) {
+  fprintf(stderr,"SLATE_WINDOW_FRAME main=%s\n",NSStringFromRect(self.window.frame).UTF8String);
   fprintf(stderr,"SLATE_VERIFY detached_count=%lu pid=%d main_selected=%llu windows=%lu\n",
    (unsigned long)self.detachedTabs.count,getpid(),(unsigned long long)model.selected(),(unsigned long)NSApp.windows.count);
   for(NSNumber* key in self.detachedTabs) {
    SlateDetachedTabWindow* detached=self.detachedTabs[key];
+   fprintf(stderr,"SLATE_WINDOW_FRAME tab=%llu frame=%s\n",key.unsignedLongLongValue,NSStringFromRect(detached.window.frame).UTF8String);
    auto it=runtimes.find(key.unsignedLongLongValue);
    const auto* tab=model.find(key.unsignedLongLongValue);
    fprintf(stderr,"SLATE_VERIFY detached_tab=%llu host_window=%d live=%d host=%p url=%s\n",
@@ -12558,6 +13447,29 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if([line isEqual:@"about"]) { [self showAboutSlate:nil]; return; }
  if([line isEqual:@"sitecard"]) { [self showSiteCard:nil]; return; }
  if([line isEqual:@"sitecard deeper"]) { [[SlateSiteCardPanel sharedPanel] showDeeperViewAnimated:NO]; return; }
+ if([line hasPrefix:@"checkzoom "]) {
+  NSArray* fields=[line componentsSeparatedByString:@" "];
+  int failures=0;
+  for(NSUInteger i=1;i+1<fields.count;i+=2) {
+   const TabId tid=[fields[i] longLongValue]; const int expected=[fields[i+1] intValue];
+   const auto* tab=model.find(tid);
+   if(!tab || tab->zoom_percent!=expected) ++failures;
+   if(auto it=runtimes.find(tid);it!=runtimes.end()) {
+    WKWebView* view=nil;
+    for(NSView* child in it->second.host.subviews) if([child isKindOfClass:WKWebView.class]) view=(WKWebView*)child;
+    if(!view || std::abs(view.pageZoom-expected/100.0)>0.001) ++failures;
+   }
+  }
+  fprintf(stderr,"SLATE_ZOOM_CHECK failures=%d indicator=%d target=%llu percent=%d\n",failures,self.zoomIndicator.superview!=nil,(unsigned long long)self.zoomIndicatorTab,self.zoomIndicator.percent);
+  return;
+ }
+ if([line isEqual:@"checkfeedback"]) {
+  NSUInteger count=0;
+  for(NSWindow* window in NSApp.windows) for(NSView* view in window.contentView.subviews)
+   if([view isKindOfClass:SlateDownloadArrival.class]) { ++count; if([view hitTest:NSMakePoint(1,1)]) ++count; }
+  fprintf(stderr,"SLATE_FEEDBACK_CHECK arrivals=%lu zoom=%d\n",(unsigned long)count,self.zoomIndicator.superview!=nil);
+  return;
+ }
  if([line isEqual:@"zoomin"]) { [self zoomIn:nil]; return; }
  if([line isEqual:@"zoomout"]) { [self zoomOut:nil]; return; }
  if([line isEqual:@"resetzoom"]) { [self resetZoom:nil]; return; }
@@ -12627,6 +13539,8 @@ static void InstallMenus(SlateDelegate* delegate) {
  NSMenu* appMenu = [[NSMenu alloc] initWithTitle:@"Slate"];
  NSMenuItem* aboutItem = [appMenu addItemWithTitle:@"About Slate" action:@selector(showAboutSlate:) keyEquivalent:@""];
  aboutItem.target = delegate;
+ NSMenuItem* updateItem=[appMenu addItemWithTitle:@"Check for Updates…" action:@selector(checkForUpdates:) keyEquivalent:@""];
+ updateItem.target=[SlateAppUpdater sharedUpdater];
  [appMenu addItem:[NSMenuItem separatorItem]];
  NSMenuItem* prefsItem = [appMenu addItemWithTitle:@"Settings…" action:@selector(showSettings:) keyEquivalent:@","];
  prefsItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
@@ -12918,12 +13832,15 @@ static void InstallMenus(SlateDelegate* delegate) {
 
  NSApp.mainMenu = menu;
 }
+// Slate note: Create the native application/delegate and enter the AppKit event loop that drives browser
+// interactions.
 int main(int argc, char* argv[]) {
  NSMutableArray<NSURL*>* startupUrls = [NSMutableArray array];
  for (int i = 1; i < argc; ++i) {
   std::string arg = argv[i];
   if (arg == "--version" || arg == "-v" || arg == "-V" || arg == "version" || arg == "--build") {
-   printf("Slate 0.1.0 (build 20260925.1, WebKit arm64, macOS 12+)\n");
+   NSDictionary* info=NSBundle.mainBundle.infoDictionary;
+   printf("Slate %s (build %s, WebKit arm64, macOS 12+)\n",[info[@"CFBundleShortVersionString"] UTF8String],[info[@"CFBundleVersion"] UTF8String]);
    return 0;
   }
   if (arg == "--help" || arg == "-h") {
@@ -12952,7 +13869,12 @@ int main(int argc, char* argv[]) {
  @autoreleasepool {
   InstallCrashHandler();
   [SlateApplication sharedApplication];
+#if defined(SLATE_ENABLE_VERIFY)
+  const BOOL quiet=[NSProcessInfo.processInfo.environment[@"SLATE_HEADLESS_UPDATE_TEST"] boolValue];
+  [NSApp setActivationPolicy:quiet ? NSApplicationActivationPolicyProhibited : NSApplicationActivationPolicyRegular];
+#else
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+#endif
   SlateDelegate* delegate = [[SlateDelegate alloc] init];
   NSApp.delegate = delegate;
   if (startupUrls.count > 0) {
@@ -12967,6 +13889,9 @@ int main(int argc, char* argv[]) {
   }
   slate::WebKitShields::Shared().Initialize(ruleFiles);
 
+#if defined(SLATE_ENABLE_VERIFY)
+  if(!quiet)
+#endif
   [delegate createWindow];
   [NSApp finishLaunching];
 

@@ -1,4 +1,8 @@
 #!/bin/bash
+# File purpose: Configures a Release build, builds Slate, and runs the configured tests.
+
+# Slate note: Stop on failed commands or unset variables so a broken build cannot be reported as
+# successful.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"

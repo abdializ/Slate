@@ -1,13 +1,28 @@
+# File purpose: Configures C++20, the shared core, test executables, optional Node tests, and the
+# macOS target.
+
 cmake_minimum_required(VERSION 3.21)
-project(Slate VERSION 0.1.0 LANGUAGES CXX)
+project(Slate VERSION 0.2.0 LANGUAGES CXX)
+set(SLATE_BUILD_VERSION "20261031.2" CACHE STRING "Monotonically increasing Slate build version")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Slate note: Build reusable browser logic separately from the native shell.
 add_library(slate_core core/resource_controller.cc core/tab_model.cc core/navigation.cc
  core/shields.cc core/library.cc core/credential_store.cc filtering/network_engine.cc)
 target_include_directories(slate_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 enable_testing()
+add_executable(tab_switcher_tests tests/tab_switcher_tests.cc)
+target_include_directories(tab_switcher_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(tab_switcher_tests PRIVATE -UNDEBUG)
+add_test(NAME tab_switcher_gesture COMMAND tab_switcher_tests)
+add_executable(split_drag_intent_tests tests/split_drag_intent_tests.cc)
+target_include_directories(split_drag_intent_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(split_drag_intent_tests PRIVATE -UNDEBUG)
+add_test(NAME split_drag_intent COMMAND split_drag_intent_tests)
+# Slate note: JavaScript component tests are registered only when a Node executable is available.
 find_program(SLATE_NODE_EXECUTABLE node)
 if(SLATE_NODE_EXECUTABLE)
+ add_test(NAME disney_playback_safety COMMAND "${SLATE_NODE_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/disney_playback_tests.js")
  add_test(NAME image_download_menu COMMAND "${SLATE_NODE_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/image_download_menu_tests.js")
  add_test(NAME background_theme_budget COMMAND "${SLATE_NODE_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/page_theme_tests.js")
  add_test(NAME media_intent_and_pip COMMAND "${SLATE_NODE_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/media_monitor_tests.js")

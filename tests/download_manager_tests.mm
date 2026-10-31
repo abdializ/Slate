@@ -1,3 +1,7 @@
+// File purpose: Checks download publication, filename collisions, unsafe URLs, and quarantine with
+// local fixtures. Tests document the behavior they assert; they do not change production browser
+// behavior.
+
 #import "platform/macos/download_manager.h"
 #import <sys/xattr.h>
 #import <sys/stat.h>
@@ -13,12 +17,16 @@ static void Wait(SlateDownloadItem* item) {
   [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
  assert(item.state!=SlateDownloadStateFinishing);
 }
+// Slate note: Run the synthetic scenarios below; failed assertions/checks terminate the executable so
+// CTest can report a failure.
 int main() { @autoreleasepool {
  NSString* root=[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
  NSString* folder=[root stringByAppendingPathComponent:@"Downloads"];
  [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
  setenv("SLATE_DATA_DIR",root.UTF8String,1); setenv("SLATE_DOWNLOADS_DIR",folder.UTF8String,1);
  SlateDownloadManager* manager=SlateDownloadManager.sharedManager;
+ // Slate note: A download entry point must reject local-file URLs rather than expose local files through
+ // the network-download path.
  assert([manager startDownloadFromURL:[NSURL URLWithString:@"file:///etc/passwd"] suggestedFilename:nil]==nil);
  assert([manager startDownloadFromURL:[NSURL URLWithString:@"ftp://example.com/file"] suggestedFilename:nil]==nil);
  NSMutableArray* items=[manager valueForKey:@"_items"];

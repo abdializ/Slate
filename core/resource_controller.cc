@@ -1,5 +1,10 @@
+// File purpose: Implements tab lifecycle data and a pure policy that recommends state transitions.
+// The production memory-pressure handler does not apply automatic discard recommendations.
+// Automatic unloading is disabled. This is because of current manual unloading tools. 
+
 #include "resource_controller.h"
 namespace slate {
+// Slate note: Return proposed transitions without creating, destroying, or modifying any page engine.
 std::vector<Transition> ResourceController::evaluate(const std::vector<Tab>& tabs,
  MemorySample memory, std::chrono::steady_clock::time_point now) const {
  std::vector<Transition> result;

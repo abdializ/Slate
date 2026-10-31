@@ -1,3 +1,6 @@
+// File purpose: Implements bookmarks/history import from supported profiles and password import
+// from CSV.
+
 #import "platform/macos/browser_importer.h"
 #import <Foundation/Foundation.h>
 #include <sqlite3.h>
@@ -7,6 +10,8 @@ namespace slate {
 
 namespace {
 
+// Slate note: Walk nested bookmark JSON, accept HTTP(S) sites, and avoid adding URLs already present in
+// the destination.
 void ExtractBookmarksRecursive(id node, BookmarkList& list, size_t& count) {
   if (!node || ![node isKindOfClass:[NSDictionary class]]) return;
 
