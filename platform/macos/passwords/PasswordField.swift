@@ -443,7 +443,11 @@ private final class AutofillRowView: NSView {
         send({kind:'field',token,passwords:!!p.pass || loginLike,rect:{x:r.x,y:r.y,w:r.width,h:r.height}});
       }
       document.addEventListener('focusin',event=>focused(event.target),true);
-      window.__slatePasswordRefresh=()=>{if(active===document.activeElement)focused(active);};
+      document.addEventListener('click',event=>{if(event.target instanceof HTMLInputElement)focused(event.target);},true);
+      if(typeof requestAnimationFrame==='function'){
+        requestAnimationFrame(()=>{if(document.activeElement instanceof HTMLInputElement)focused(document.activeElement);});
+      }
+      window.__slatePasswordRefresh=()=>{if(active && active.isConnected)focused(active);};
       document.addEventListener('focusout',()=>{setTimeout(()=>{if(document.activeElement!==active){send({kind:'blur'});}},180);},true);
       window.addEventListener('pagehide',()=>{active=null;token=null;send({kind:'blur'});});
       document.addEventListener('keydown',e=>{if(e.key==='Escape')send({kind:'blur'});},true);
