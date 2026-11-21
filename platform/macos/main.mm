@@ -2241,6 +2241,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 15, 15)];
   self.spinner.style = NSProgressIndicatorStyleSpinning;
   self.spinner.controlSize = NSControlSizeSmall;
+  self.spinner.displayedWhenStopped = NO;
   self.spinner.hidden = YES;
   [self addSubview:self.spinner];
 
@@ -2359,14 +2360,11 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  self.splitBadge.contentTintColor=self.owner.accentMuted ?: NSColor.secondaryLabelColor;
 
 
- if(self.isLoading) {
-  if(!self.spinner.isDisplayedWhenStopped) {
-   self.spinner.displayedWhenStopped = YES;
-   [self.spinner startAnimation:nil];
-  }
- } else {
-  [self.spinner stopAnimation:nil];
- }
+ // Loading state is shown cleanly by the dimmed favicon, toolbar progress bar, and reload button.
+ // Keep the legacy sidebar pinwheel stopped and hidden so it never glitches next to tab titles.
+ self.spinner.displayedWhenStopped = NO;
+ [self.spinner stopAnimation:nil];
+ self.spinner.hidden = YES;
 
  [self updateLayoutForHover];
 }
@@ -2437,17 +2435,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   self.splitBadge.frame=NSMakeRect(rightOffset,round((rowH-15)/2.0),15,15);
   rightOffset-=18;
  }
- if(self.isLoading) {
-  if(self.hovering) {
-   self.spinner.hidden = YES;
-  } else {
-   self.spinner.hidden = NO;
-   self.spinner.frame = NSMakeRect(rightOffset, round((rowH - 15) / 2.0), 15, 15);
-   rightOffset -= 20;
-  }
- } else {
-  self.spinner.hidden = YES;
- }
+ self.spinner.hidden = YES;
 
  CGFloat trailingLimit = rightOffset - 4;
  const CGFloat labelX = indent + 15 + 8;
@@ -6093,14 +6081,16 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.omnibox setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
  self.omniboxLeading=[self.omnibox.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.navCluster.trailingAnchor constant:12];
  self.omniboxTrailing=[self.omnibox.trailingAnchor constraintLessThanOrEqualToAnchor:self.bookmarkButton.leadingAnchor constant:-12];
+ // Keep omnibox sizing/centering priorities strictly below NSLayoutPriorityWindowSizeStayPut (500)
+ // so hiding/unhiding the sidebar can never widen the browser window.
  NSLayoutConstraint* omniboxCenter=[self.omnibox.centerXAnchor constraintEqualToAnchor:self.toolbar.centerXAnchor];
- omniboxCenter.priority=900;
+ omniboxCenter.priority=495;
  NSLayoutConstraint* omniboxMaxW=[self.omnibox.widthAnchor constraintLessThanOrEqualToConstant:1100];
  NSLayoutConstraint* omniboxMinW=[self.omnibox.widthAnchor constraintGreaterThanOrEqualToConstant:620];
- omniboxMinW.priority=760;
+ omniboxMinW.priority=490;
  // Compute the capped preferred width without tying window width to the cap.
  self.omniboxPreferredWidth=[self.omnibox.widthAnchor constraintEqualToConstant:MIN(1100,NSWidth(root.bounds)*0.64)];
- self.omniboxPreferredWidth.priority=NSLayoutPriorityDefaultHigh;
+ self.omniboxPreferredWidth.priority=480;
  [NSLayoutConstraint activateConstraints:@[
   [empty.centerXAnchor constraintEqualToAnchor:self.placeholder.centerXAnchor],
   [empty.centerYAnchor constraintEqualToAnchor:self.placeholder.centerYAnchor constant:-18],
