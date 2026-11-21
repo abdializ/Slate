@@ -248,6 +248,7 @@ static void SlateEvaluatePasswordStrength(NSString* password, NSString** outLabe
 }
 
 - (void)conceal:(id)sender {
+ if(self.authentication) return;
  [self.concealTimer invalidate]; self.concealTimer=nil; self.revealedId=nil;
  [self.tableView reloadData];
 }
@@ -440,7 +441,10 @@ static void SlateEvaluatePasswordStrength(NSString* password, NSString** outLabe
    SlatePasswordsPanel* panel=weakSelf;
    if(!panel || generation!=panel.requestGeneration) return;
    panel.authentication=nil;
-   if(!success || !panel.visible || !NSApp.isActive || !panel.store) return;
+   if(!success || !panel.visible || !panel.store) return;
+   // Touch ID / LocalAuthentication briefly deactivates the app; reactivate before revealing/copying.
+   [NSApp activateIgnoringOtherApps:YES];
+   [panel makeKeyAndOrderFront:nil];
    auto credential=panel.store->find_by_id(identifier.UTF8String);
    if(credential) completion(@(credential->password.c_str()));
   });
