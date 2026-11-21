@@ -8078,15 +8078,33 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self returnAutoPiPForVisibleWorkspace];
 }
 - (IBAction)triggerAutofillAction:(id)sender {
+ if(!credentials) [self loadCredentialsWhenRequested];
  auto it = runtimes.find(model.selected());
  if(it == runtimes.end() || !it->second.engine || !credentials || !SlatePasswordServices.autofillEnabled) return;
  const auto* tab = model.find(model.selected());
  if(!tab || tab->incognito) return;
  NSURL* url = [NSURL URLWithString:Text(tab->url)];
- if(!url) return;
+ if(!url || !url.host.length) return;
+ NSString* reqHost = url.host.lowercaseString;
  NSString* portPart = (url.port && url.port.intValue != 443 && url.port.intValue != 80) ? [NSString stringWithFormat:@":%@", url.port] : @"";
- NSString* origin = [NSString stringWithFormat:@"%@://%@%@", url.scheme.lowercaseString, url.host.lowercaseString, portPart];
- auto matches = credentials->find_for_origin(origin.UTF8String);
+ NSString* origin = [NSString stringWithFormat:@"%@://%@%@", url.scheme.lowercaseString, reqHost, portPart];
+ auto sameRegistrable = [](NSString* a, NSString* b) -> BOOL {
+  if([a isEqualToString:b]) return YES;
+  NSArray* pa=[a componentsSeparatedByString:@"."];
+  NSArray* pb=[b componentsSeparatedByString:@"."];
+  if(pa.count>=2 && pb.count>=2) {
+   return [[NSString stringWithFormat:@"%@.%@", pa[pa.count-2], pa[pa.count-1]]
+     isEqualToString:[NSString stringWithFormat:@"%@.%@", pb[pb.count-2], pb[pb.count-1]]];
+  }
+  return NO;
+ };
+ std::vector<slate::Credential> matches;
+ for(const auto& c : credentials->items()) {
+  NSString* s = @(c.origin.c_str());
+  if(![s containsString:@"://"]) s = [@"https://" stringByAppendingString:s];
+  NSString* h = [NSURL URLWithString:s].host.lowercaseString ?: @"";
+  if(h.length && sameRegistrable(h, reqHost)) matches.push_back(c);
+ }
  if(matches.empty()) return;
 
  if(matches.size() == 1) {
@@ -8094,7 +8112,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  } else {
   NSMenu* menu = [[NSMenu alloc] initWithTitle:@"Saved Logins"];
   for(const auto& c : matches) {
-   NSString* title = [NSString stringWithFormat:@"%s (%@)", c.username.c_str(), origin];
+   NSString* title = [NSString stringWithFormat:@"%s (%@)", c.username.c_str(), reqHost];
    NSMenuItem* item = [menu addItemWithTitle:title action:@selector(selectAutofillCredential:) keyEquivalent:@""];
    item.representedObject = @{@"id": @(c.id.c_str()), @"origin":origin, @"tab":@(model.selected())};
    item.target = self;
@@ -8108,16 +8126,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(!dict || !credentials || !SlatePasswordServices.autofillEnabled || [dict[@"tab"] unsignedLongLongValue]!=model.selected()) return;
  const auto* tab=model.find(model.selected());
  if(!tab || tab->incognito)return;
- NSURLComponents* current=[NSURLComponents componentsWithString:Text(tab->url)];
- NSURLComponents* expected=[NSURLComponents componentsWithString:dict[@"origin"]];
- if(![current.scheme.lowercaseString isEqualToString:expected.scheme.lowercaseString] ||
-    ![current.host.lowercaseString isEqualToString:expected.host.lowercaseString] ||
-    (current.port ? current.port.integerValue : 443)!=(expected.port ? expected.port.integerValue : 443))return;
  auto it=runtimes.find(model.selected());
  if(it==runtimes.end() || !it->second.engine)return;
- for(const auto& c:credentials->find_for_origin([dict[@"origin"] UTF8String])) {
-  if(c.id==[dict[@"id"] UTF8String]) { it->second.engine->fill_credentials(c.username,c.password);break; }
- }
+ auto found=credentials->find_by_id([dict[@"id"] UTF8String]);
+ if(found) it->second.engine->fill_credentials(found->username, found->password);
 }
 - (IBAction)showSiteCard:(id)sender {
  if(SlateDetachedTabWindow* window=[self activeDetachedWindow]) { [window showSiteInformation:sender]; return; }

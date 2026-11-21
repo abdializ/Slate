@@ -120,9 +120,10 @@ private final class AutofillRowView: NSView {
         CATransaction.commit()
     }
 
-    override func mouseUp(with event: NSEvent) {
-        let pt = convert(event.locationInWindow, from: nil)
-        if bounds.contains(pt) { onPick() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onPick()
     }
 
     @objc private func dismissPressed() { onDismiss?() }
@@ -386,15 +387,25 @@ private final class AutofillRowView: NSView {
     }
 
     private func fill(user:String,password:String,expected:Int) {
-        guard valid(expected), let web,let frame,let token=fieldToken else { return }
-        web.callAsyncJavaScript("return window.__slatePasswordFill(token,user,password)",arguments:["token":token,"user":user,"password":password],in:frame,in:.defaultClient) { _ in }
+        guard valid(expected), let web, let frame, let token=fieldToken else { return }
+        let targetWeb = web
+        let targetFrame = frame
+        let targetToken = token
         dismiss()
+        targetWeb.window?.makeKeyAndOrderFront(nil)
+        targetWeb.window?.makeFirstResponder(targetWeb)
+        targetWeb.callAsyncJavaScript("return window.__slatePasswordFill(token,user,password)",arguments:["token":targetToken,"user":user,"password":password],in:targetFrame,in:.defaultClient) { _ in }
     }
 
     private func fillGenerated(password:String,expected:Int) {
-        guard valid(expected), let web,let frame,let token=fieldToken else { return }
-        web.callAsyncJavaScript("return window.__slatePasswordGenerateFill(token,password)",arguments:["token":token,"password":password],in:frame,in:.defaultClient) { _ in }
+        guard valid(expected), let web, let frame, let token=fieldToken else { return }
+        let targetWeb = web
+        let targetFrame = frame
+        let targetToken = token
         dismiss()
+        targetWeb.window?.makeKeyAndOrderFront(nil)
+        targetWeb.window?.makeFirstResponder(targetWeb)
+        targetWeb.callAsyncJavaScript("return window.__slatePasswordGenerateFill(token,password)",arguments:["token":targetToken,"password":password],in:targetFrame,in:.defaultClient) { _ in }
     }
 
     static let fieldScript = #"""
