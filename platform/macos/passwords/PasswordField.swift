@@ -224,22 +224,35 @@ private final class AutofillRowView: NSView {
     func popoverDidClose(_ notification:Notification) { dismiss() }
     private func valid(_ expected:Int) -> Bool {
         guard generation == expected, let web, (web.window?.isKeyWindow == true || popover?.contentViewController?.view.window?.isKeyWindow == true), NSApp.isActive,
-              web.url == committedURL, !web.isHiddenOrHasHiddenAncestor, fieldToken != nil else { return false }
+              let curHost = web.url?.host?.lowercased(),
+              let refHost = (committedURL ?? web.url)?.host?.lowercased(),
+              Registrable.sameSite(curHost, refHost),
+              !web.isHiddenOrHasHiddenAncestor, fieldToken != nil else { return false }
         return true
+    }
+
+    private func pointerInsidePopover() -> Bool {
+        guard let popWin = popover?.contentViewController?.view.window, popWin.isVisible else { return false }
+        return popWin.frame.insetBy(dx: -8, dy: -8).contains(NSEvent.mouseLocation)
     }
 
     func userContentController(_ controller:WKUserContentController,didReceive message:WKScriptMessage) {
         guard let web, message.webView === web, let body=message.body as? [String:Any] else { return }
-        if body["kind"] as? String == "blur" { dismiss();fieldToken=nil;return }
+        if body["kind"] as? String == "blur" {
+            if pointerInsidePopover() || popover?.contentViewController?.view.window?.isKeyWindow == true { return }
+            dismiss();fieldToken=nil;return
+        }
+        let page = web.url ?? committedURL
         guard SlatePasswordServices.autofillEnabled, NSApp.isActive, web.window?.isKeyWindow == true,
               !web.isHiddenOrHasHiddenAncestor, !privateTab,
-              let page=committedURL, page.scheme == "https", web.url == page,
+              let page, page.scheme == "https",
               let pageHost=page.host?.lowercased(), !pageHost.isEmpty,
               message.frameInfo.securityOrigin.protocol.lowercased() == "https",
               Registrable.sameSite(pageHost,message.frameInfo.securityOrigin.host.lowercased()),
               let token=body["token"] as? String, token.count <= 128,
               let rect=body["rect"] as? [String:Double], let x=rect["x"],let y=rect["y"],let w=rect["w"],let h=rect["h"],
               [x,y,w,h].allSatisfy({$0.isFinite}),w>0,h>0 else { return }
+        committedURL = page
         dismiss()
         frame=message.frameInfo;fieldToken=token
         var components=URLComponents();components.scheme="https";components.host=message.frameInfo.securityOrigin.host.lowercased()
@@ -263,7 +276,14 @@ private final class AutofillRowView: NSView {
         }
 
         let all = passwords ? accounts(origin) : []
-        let matching=(all ?? []).filter { Self.sameOrigin(URL(string:$0["origin"] ?? ""),origin) }
+        let matching = (all ?? []).filter { item in
+            Self.matchesSite(URL(string: item["origin"] ?? ""), origin)
+        }.sorted { a, b in
+            let aExact = Self.sameOrigin(URL(string: a["origin"] ?? ""), origin)
+            let bExact = Self.sameOrigin(URL(string: b["origin"] ?? ""), origin)
+            if aExact != bExact { return aExact }
+            return (a["user"] ?? "") < (b["user"] ?? "")
+        }
         if passwords && all == nil {
             items.append(AutofillItem(kind: .unlock, title: "Unlock Slate Vault…", subtitle: "Authenticate with Touch ID or password", action: { [weak self] in
                 guard let self,self.valid(expected),self.unlock(),let web=self.web,let frame=self.frame else { return }
@@ -310,6 +330,12 @@ private final class AutofillRowView: NSView {
     static func sameOrigin(_ a:URL?,_ b:URL) -> Bool {
         guard let a else { return false }
         return a.scheme?.lowercased() == b.scheme?.lowercased() && a.host?.lowercased() == b.host?.lowercased() && (a.port ?? 443) == (b.port ?? 443)
+    }
+
+    static func matchesSite(_ saved:URL?, _ current:URL) -> Bool {
+        guard let saved, let savedHost = saved.host?.lowercased(), let curHost = current.host?.lowercased() else { return false }
+        if sameOrigin(saved, current) { return true }
+        return Registrable.sameSite(savedHost, curHost)
     }
 
     private func show(items:[AutofillItem],rect:NSRect) {
@@ -386,10 +412,21 @@ private final class AutofillRowView: NSView {
         const user=candidates.find(x=>x.autocomplete.includes('username')||x.autocomplete.includes('webauthn')) || candidates.find(x=>x.type==='email') || candidates[candidates.length-1];
         return {pass,user};
       };
+      const isLoginInput=e=>{
+        const ac=(e.autocomplete||'').toLowerCase();
+        if(/username|webauthn|email/.test(ac))return true;
+        if(e.type==='email')return true;
+        if(e.type==='text'||e.type==='tel'){
+          const meta=((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')).toLowerCase();
+          return /\b(user(name)?|email|login|account|identifier|session_key|signin|handle)\b/.test(meta);
+        }
+        return false;
+      };
       function send(body){try{webkit.messageHandlers.slatePasswords.postMessage(body);}catch{}}
       function focused(e){
         if(!(e instanceof HTMLInputElement))return;
         const ac=e.autocomplete||'';
+        if(ac==='one-time-code')return;
         if(e.type==='password' && ac==='new-password'){
           active=e;token=Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
           const r=e.getBoundingClientRect();
@@ -398,22 +435,27 @@ private final class AutofillRowView: NSView {
         }
         const p=pair(e);
         if(!p.pass && (e.form||document).querySelector('input[autocomplete="new-password"]'))return;
-        if(e!==p.pass && e!==p.user)return;
-        if(!p.pass && !/username|webauthn/.test(ac))return;
+        const loginLike=!p.pass && isLoginInput(e);
+        if(e!==p.pass && e!==p.user && !loginLike)return;
+        if(!p.pass && !loginLike)return;
         active=e;token=Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
         const r=e.getBoundingClientRect();
-        send({kind:'field',token,passwords:!!p.pass || ac.includes('username'),rect:{x:r.x,y:r.y,w:r.width,h:r.height}});
+        send({kind:'field',token,passwords:!!p.pass || loginLike,rect:{x:r.x,y:r.y,w:r.width,h:r.height}});
       }
       document.addEventListener('focusin',event=>focused(event.target),true);
       window.__slatePasswordRefresh=()=>{if(active===document.activeElement)focused(active);};
-      document.addEventListener('focusout',()=>{setTimeout(()=>{if(document.activeElement!==active){active=null;token=null;send({kind:'blur'});}},150);},true);
+      document.addEventListener('focusout',()=>{setTimeout(()=>{if(document.activeElement!==active){send({kind:'blur'});}},180);},true);
       window.addEventListener('pagehide',()=>{active=null;token=null;send({kind:'blur'});});
       document.addEventListener('keydown',e=>{if(e.key==='Escape')send({kind:'blur'});},true);
       window.__slatePasswordFill=(key,user,password)=>{
-        if(key!==token || !active || document.activeElement!==active || !active.isConnected)return false;
-        const p=pair(active);if(!p.pass && !p.user)return false;
+        const movedToOtherInput = document.activeElement instanceof HTMLInputElement && document.activeElement !== active;
+        if(key!==token || !active || !active.isConnected || movedToOtherInput)return false;
+        const p=pair(active);
+        const targetUser = p.user || (active.type !== 'password' ? active : null);
+        const targetPass = p.pass || (active.type === 'password' ? active : null);
+        if(!targetPass && !targetUser)return false;
         const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        for(const [field,value] of [[p.user,user],[p.pass,password]])if(field){set.call(field,value);field.dispatchEvent(new Event('input',{bubbles:true}));field.dispatchEvent(new Event('change',{bubbles:true}));}
+        for(const [field,value] of [[targetUser,user],[targetPass,password]])if(field && value){set.call(field,value);field.dispatchEvent(new Event('input',{bubbles:true}));field.dispatchEvent(new Event('change',{bubbles:true}));}
         return true;
       };
       window.__slatePasswordGenerateFill=(key,password)=>{

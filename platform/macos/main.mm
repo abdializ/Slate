@@ -10461,7 +10461,27 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   events.credential_unlock_requested=[weakSelf]() -> bool { return [weakSelf loadCredentialsWhenRequested]; };
   events.credential_selected_query=[](std::string id,std::string origin) -> std::optional<std::pair<std::string,std::string>> {
    if(!credentials || !SlatePasswordServices.autofillEnabled) return std::nullopt;
-   for(const auto& c:credentials->find_for_origin(origin)) if(c.id==id) return std::make_pair(c.username,c.password);
+   auto found=credentials->find_by_id(id);
+   if(!found) return std::nullopt;
+   NSString* savedStr=@(found->origin.c_str());
+   if(![savedStr containsString:@"://"]) savedStr=[@"https://" stringByAppendingString:savedStr];
+   NSString* reqStr=@(origin.c_str());
+   if(![reqStr containsString:@"://"]) reqStr=[@"https://" stringByAppendingString:reqStr];
+   NSString* savedHost=[NSURL URLWithString:savedStr].host.lowercaseString ?: @"";
+   NSString* reqHost=[NSURL URLWithString:reqStr].host.lowercaseString ?: @"";
+   if(!savedHost.length || !reqHost.length) return std::nullopt;
+   auto sameRegistrable = [](NSString* a, NSString* b) -> BOOL {
+    if([a isEqualToString:b]) return YES;
+    NSArray* pa=[a componentsSeparatedByString:@"."];
+    NSArray* pb=[b componentsSeparatedByString:@"."];
+    if(pa.count>=2 && pb.count>=2) {
+     NSString* ra=[NSString stringWithFormat:@"%@.%@", pa[pa.count-2], pa[pa.count-1]];
+     NSString* rb=[NSString stringWithFormat:@"%@.%@", pb[pb.count-2], pb[pb.count-1]];
+     return [ra isEqualToString:rb];
+    }
+    return NO;
+   };
+   if(sameRegistrable(savedHost, reqHost)) return std::make_pair(found->username, found->password);
    return std::nullopt;
   };
   events.credential_save_requested=[weakSelf](std::string origin, std::string username, std::string password) {
