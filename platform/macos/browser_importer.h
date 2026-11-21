@@ -48,6 +48,14 @@ class BrowserImporter {
   // Import Passwords from CSV (Chrome, Safari, 1Password, Bitwarden, Brave, Edge, Arc)
   static size_t ImportPasswordsCsv(const std::string& csv_path, CredentialStore& store);
 
+  // Import encrypted Passwords directly from a Chromium profile ("Login Data" / "Login Data For Account")
+  // using the browser's macOS Keychain Safe Storage key.
+  static size_t ImportChromiumPasswords(const std::string& profile_dir,
+                                        const std::string& keychain_service,
+                                        const std::string& keychain_account,
+                                        CredentialStore& store,
+                                        std::string* out_error = nullptr);
+
   // Import Bookmarks and/or History from any Chromium profile directory (e.g. Chrome/Dia/Arc/Brave/Edge Default)
   static ImportSummary ImportChromiumProfile(const std::string& profile_dir, bool import_bookmarks, bool import_history, BookmarkList& bookmarks, std::vector<HistoryItem>& out_history);
 

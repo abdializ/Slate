@@ -22,6 +22,7 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
 @property (nonatomic, strong) NSPopUpButton* sourcePopup;
 @property (nonatomic, strong) NSButton* bookmarksCheck;
 @property (nonatomic, strong) NSButton* historyCheck;
+@property (nonatomic, strong) NSButton* passwordsCheck;
 @property (nonatomic, strong) NSProgressIndicator* spinner;
 @property (nonatomic, strong) NSButton* importButton;
 @property (nonatomic, strong) NSButton* cancelButton;
@@ -49,14 +50,19 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
   NSString* home = [NSString stringWithUTF8String:slate::BrowserImporter::GetRealHomeDirectory().c_str()];
   return @[
     @{@"id":@"chrome", @"title":@"Google Chrome", @"kind":@"profile",
+      @"service":@"Chrome Safe Storage", @"account":@"Chrome",
       @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Google/Chrome/Default"]},
     @{@"id":@"dia", @"title":@"Dia", @"kind":@"profile",
+      @"service":@"Dia Safe Storage", @"account":@"Dia",
       @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Dia/User Data/Default"]},
     @{@"id":@"arc", @"title":@"Arc", @"kind":@"profile",
+      @"service":@"Arc Safe Storage", @"account":@"Arc",
       @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Arc/User Data/Default"]},
     @{@"id":@"brave", @"title":@"Brave", @"kind":@"profile",
+      @"service":@"Brave Safe Storage", @"account":@"Brave",
       @"path":[home stringByAppendingPathComponent:@"Library/Application Support/BraveSoftware/Brave-Browser/Default"]},
     @{@"id":@"edge", @"title":@"Microsoft Edge", @"kind":@"profile",
+      @"service":@"Microsoft Edge Safe Storage", @"account":@"Microsoft Edge",
       @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Microsoft Edge/Default"]},
     @{@"id":@"html", @"title":@"Bookmarks HTML File (Safari / Firefox / Any)…", @"kind":@"html",
       @"path":[home stringByAppendingPathComponent:@"Downloads"]},
@@ -66,7 +72,7 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
 }
 
 - (void)buildAndShow {
-  NSRect frame = NSMakeRect(0, 0, 480, 300);
+  NSRect frame = NSMakeRect(0, 0, 480, 324);
   NSWindow* sheet = [[NSWindow alloc] initWithContentRect:frame
                                                 styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                   backing:NSBackingStoreBuffered
@@ -80,21 +86,21 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
 
   NSTextField* titleLabel = [NSTextField labelWithString:@"Import into Slate"];
   titleLabel.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
-  titleLabel.frame = NSMakeRect(24, 254, 432, 22);
+  titleLabel.frame = NSMakeRect(24, 278, 432, 22);
   [content addSubview:titleLabel];
 
-  NSTextField* descLabel = [NSTextField wrappingLabelWithString:@"Bring your bookmarks, browsing history, or saved passwords from another browser."];
+  NSTextField* descLabel = [NSTextField wrappingLabelWithString:@"Bring your bookmarks, browsing history, and saved passwords from another browser."];
   descLabel.font = [NSFont systemFontOfSize:12];
   descLabel.textColor = NSColor.secondaryLabelColor;
-  descLabel.frame = NSMakeRect(24, 218, 432, 30);
+  descLabel.frame = NSMakeRect(24, 242, 432, 30);
   [content addSubview:descLabel];
 
   NSTextField* fromLabel = [NSTextField labelWithString:@"Source:"];
   fromLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
-  fromLabel.frame = NSMakeRect(24, 180, 56, 20);
+  fromLabel.frame = NSMakeRect(24, 204, 56, 20);
   [content addSubview:fromLabel];
 
-  self.sourcePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(84, 176, 372, 26) pullsDown:NO];
+  self.sourcePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(84, 200, 372, 26) pullsDown:NO];
   [self.sourcePopup removeAllItems];
   for (NSDictionary* entry in [self sourceEntries]) {
     [self.sourcePopup addItemWithTitle:entry[@"title"]];
@@ -106,18 +112,23 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
 
   self.bookmarksCheck = [NSButton checkboxWithTitle:@"Bookmarks / Favorites" target:nil action:nil];
   self.bookmarksCheck.state = NSControlStateValueOn;
-  self.bookmarksCheck.frame = NSMakeRect(86, 140, 220, 20);
+  self.bookmarksCheck.frame = NSMakeRect(86, 164, 220, 20);
   [content addSubview:self.bookmarksCheck];
 
   self.historyCheck = [NSButton checkboxWithTitle:@"Browsing History" target:nil action:nil];
   self.historyCheck.state = NSControlStateValueOn;
-  self.historyCheck.frame = NSMakeRect(86, 114, 220, 20);
+  self.historyCheck.frame = NSMakeRect(86, 138, 220, 20);
   [content addSubview:self.historyCheck];
+
+  self.passwordsCheck = [NSButton checkboxWithTitle:@"Saved Passwords" target:nil action:nil];
+  self.passwordsCheck.state = NSControlStateValueOn;
+  self.passwordsCheck.frame = NSMakeRect(86, 112, 220, 20);
+  [content addSubview:self.passwordsCheck];
 
   self.hintText = [NSTextField wrappingLabelWithString:@""];
   self.hintText.font = [NSFont systemFontOfSize:11];
   self.hintText.textColor = NSColor.secondaryLabelColor;
-  self.hintText.frame = NSMakeRect(24, 62, 432, 40);
+  self.hintText.frame = NSMakeRect(24, 58, 432, 44);
   [content addSubview:self.hintText];
 
   self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24, 22, 16, 16)];
@@ -169,11 +180,13 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
   BOOL isProfile = [kind isEqualToString:@"profile"];
   self.bookmarksCheck.enabled = isProfile;
   self.historyCheck.enabled = isProfile;
+  self.passwordsCheck.enabled = isProfile;
   self.bookmarksCheck.hidden = !isProfile;
   self.historyCheck.hidden = !isProfile;
+  self.passwordsCheck.hidden = !isProfile;
   if (isProfile) {
     self.importButton.title = @"Import…";
-    self.hintText.stringValue = [NSString stringWithFormat:@"macOS will ask you to confirm access to your %@ profile folder (pre-selected for you) so Slate can read Bookmarks and History safely.", entry[@"title"]];
+    self.hintText.stringValue = [NSString stringWithFormat:@"Confirm your %@ profile folder when prompted. For Saved Passwords, click Allow on macOS’s Keychain prompt for “%@”.", entry[@"title"], entry[@"service"]];
   } else if ([kind isEqualToString:@"html"]) {
     self.importButton.title = @"Choose HTML…";
     self.hintText.stringValue = @"Select an exported bookmarks.html file from Safari, Chrome, Firefox, Arc, or Brave.";
@@ -265,10 +278,14 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
 
   BOOL importBookmarks = (self.bookmarksCheck.state == NSControlStateValueOn);
   BOOL importHistory = (self.historyCheck.state == NSControlStateValueOn);
-  if (!importBookmarks && !importHistory) {
-    self.statusText.stringValue = @"Select Bookmarks or History to import.";
+  BOOL importPasswords = (self.passwordsCheck.state == NSControlStateValueOn);
+  if (!importBookmarks && !importHistory && !importPasswords) {
+    self.statusText.stringValue = @"Select at least one category to import.";
     return;
   }
+
+  NSString* service = entry[@"service"] ?: @"";
+  NSString* account = entry[@"account"] ?: @"";
 
   NSOpenPanel* panel = [NSOpenPanel openPanel];
   panel.canChooseFiles = NO;
@@ -291,6 +308,14 @@ static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
       std::vector<slate::HistoryItem> history;
       slate::ImportSummary summary = slate::BrowserImporter::ImportChromiumProfile(
           folderURL.path.UTF8String, importBookmarks, importHistory, *self.bookmarks, history);
+      if (importPasswords && self.credentials && service.length && account.length) {
+        std::string passErr;
+        summary.passwords_imported = slate::BrowserImporter::ImportChromiumPasswords(
+            folderURL.path.UTF8String, service.UTF8String, account.UTF8String, *self.credentials, &passErr);
+        if (!passErr.empty() && summary.passwords_imported == 0) {
+          summary.error_message = passErr;
+        }
+      }
       if (accessed) [folderURL stopAccessingSecurityScopedResource];
 
       dispatch_async(dispatch_get_main_queue(), ^{

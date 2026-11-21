@@ -2,7 +2,10 @@
 // from CSV.
 
 #import "platform/macos/browser_importer.h"
+#import <CommonCrypto/CommonCryptor.h>
+#import <CommonCrypto/CommonKeyDerivation.h>
 #import <Foundation/Foundation.h>
+#import <Security/Security.h>
 #include <pwd.h>
 #include <sqlite3.h>
 #include <sstream>
@@ -255,6 +258,139 @@ size_t BrowserImporter::ImportPasswordsCsv(const std::string& csv_path, Credenti
           imported++;
         }
       }
+    }
+    return imported;
+  }
+}
+
+size_t BrowserImporter::ImportChromiumPasswords(const std::string& profile_dir,
+                                                const std::string& keychain_service,
+                                                const std::string& keychain_account,
+                                                CredentialStore& store,
+                                                std::string* out_error) {
+  @autoreleasepool {
+    NSString* dir = [NSString stringWithUTF8String:profile_dir.c_str()];
+    NSFileManager* fm = [NSFileManager defaultManager];
+
+    auto findLoginFiles = ^NSArray<NSString*>*(NSString* baseDir) {
+      NSMutableArray<NSString*>* found = [NSMutableArray array];
+      for (NSString* name in @[@"Login Data", @"Login Data For Account"]) {
+        NSString* candidate = [baseDir stringByAppendingPathComponent:name];
+        if ([fm fileExistsAtPath:candidate]) [found addObject:candidate];
+      }
+      return found;
+    };
+
+    NSArray<NSString*>* files = findLoginFiles(dir);
+    if (!files.count) {
+      NSString* defaultSub = [dir stringByAppendingPathComponent:@"Default"];
+      files = findLoginFiles(defaultSub);
+    }
+    if (!files.count) {
+      if (out_error) *out_error = "No Login Data database found in the selected browser profile.";
+      return 0;
+    }
+
+    // Look up the browser's Safe Storage key in the macOS Keychain.
+    NSString* service = [NSString stringWithUTF8String:keychain_service.c_str()];
+    NSString* account = [NSString stringWithUTF8String:keychain_account.c_str()];
+    NSDictionary* query = @{
+      (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+      (__bridge id)kSecAttrService: service,
+      (__bridge id)kSecAttrAccount: account,
+      (__bridge id)kSecReturnData: @YES,
+      (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
+    };
+    CFTypeRef result = nullptr;
+    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    if (status != errSecSuccess || !result) {
+      if (out_error) {
+        *out_error = "Could not read '" + keychain_service + "' from Keychain (click Allow when prompted, or use Passwords CSV import).";
+      }
+      return 0;
+    }
+    NSData* passData = (__bridge_transfer NSData*)result;
+    if (!passData.length) return 0;
+
+    // Chromium macOS key derivation: PBKDF2-HMAC-SHA1, salt "saltysalt", 1003 rounds, 16 bytes.
+    uint8_t aesKey[kCCKeySizeAES128] = {0};
+    const char* salt = "saltysalt";
+    int kdfStatus = CCKeyDerivationPBKDF(
+        kCCPBKDF2,
+        (const char*)passData.bytes, passData.length,
+        (const uint8_t*)salt, strlen(salt),
+        kCCPRFHmacAlgSHA1, 1003,
+        aesKey, sizeof(aesKey));
+    if (kdfStatus != kCCSuccess) return 0;
+
+    auto decryptBlob = [&](const uint8_t* bytes, int len) -> NSString* {
+      if (!bytes || len <= 3 || memcmp(bytes, "v10", 3) != 0) return nil;
+      const uint8_t* body = bytes + 3;
+      const size_t bodyLen = (size_t)(len - 3);
+      uint8_t iv[kCCBlockSizeAES128];
+      memset(iv, 0x20, sizeof(iv));
+      std::vector<uint8_t> out(bodyLen + kCCBlockSizeAES128);
+      size_t moved = 0;
+      CCCryptorStatus cs = CCCrypt(
+          kCCDecrypt, kCCAlgorithmAES128, kCCOptionPKCS7Padding,
+          aesKey, sizeof(aesKey), iv,
+          body, bodyLen,
+          out.data(), out.size(), &moved);
+      if (cs != kCCSuccess || moved == 0) return nil;
+      NSString* text = [[NSString alloc] initWithBytes:out.data() length:moved encoding:NSUTF8StringEncoding];
+      if (text) return text;
+      // Newer Chromium builds prepend a 32-byte SHA-256 domain hash before the UTF-8 password.
+      if (moved > 32) {
+        return [[NSString alloc] initWithBytes:(out.data() + 32) length:(moved - 32) encoding:NSUTF8StringEncoding];
+      }
+      return nil;
+    };
+
+    size_t imported = 0;
+    for (NSString* loginPath in files) {
+      NSString* tempCopy = [NSTemporaryDirectory() stringByAppendingPathComponent:
+          [NSString stringWithFormat:@"slate-import-logins-%@.sqlite", NSUUID.UUID.UUIDString]];
+      BOOL copied = [fm copyItemAtPath:loginPath toPath:tempCopy error:nil];
+      NSString* openPath = copied ? tempCopy : loginPath;
+      NSURL* fileURL = [NSURL fileURLWithPath:openPath];
+      NSString* uriString = [NSString stringWithFormat:@"%@?immutable=1", fileURL.absoluteString];
+
+      sqlite3* db = nullptr;
+      if (sqlite3_open_v2(uriString.UTF8String, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nullptr) == SQLITE_OK && db) {
+        const char* sql = "SELECT origin_url, username_value, password_value FROM logins WHERE blacklisted_by_user = 0;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+          while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* rawOrigin = (const char*)sqlite3_column_text(stmt, 0);
+            const char* rawUser = (const char*)sqlite3_column_text(stmt, 1);
+            const uint8_t* blob = (const uint8_t*)sqlite3_column_blob(stmt, 2);
+            int blobLen = sqlite3_column_bytes(stmt, 2);
+            if (!rawOrigin || strlen(rawOrigin) == 0 || !blob || blobLen <= 3) continue;
+
+            NSString* originStr = [NSString stringWithUTF8String:rawOrigin];
+            NSURLComponents* comps = [NSURLComponents componentsWithString:originStr];
+            if (!comps.host.length || ![@[@"http", @"https"] containsObject:comps.scheme.lowercaseString]) continue;
+            comps.path = @"";
+            comps.query = nil;
+            comps.fragment = nil;
+            NSString* cleanOrigin = comps.string;
+            if (!cleanOrigin.length) continue;
+
+            NSString* decrypted = decryptBlob(blob, blobLen);
+            if (!decrypted.length) continue;
+
+            Credential cred;
+            cred.origin = cleanOrigin.UTF8String;
+            cred.username = rawUser ? rawUser : "";
+            cred.password = decrypted.UTF8String;
+            store.save(std::move(cred));
+            imported++;
+          }
+          sqlite3_finalize(stmt);
+        }
+        sqlite3_close(db);
+      }
+      if (copied) [fm removeItemAtPath:tempCopy error:nil];
     }
     return imported;
   }

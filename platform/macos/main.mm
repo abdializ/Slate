@@ -10664,6 +10664,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)showImportNotification:(slate::ImportSummary)summary {
  NSString* msg=[NSString stringWithFormat:@"Successfully imported %zu bookmarks, %zu history items, and %zu passwords.",
                 summary.bookmarks_imported, summary.history_imported, summary.passwords_imported];
+ if(!summary.error_message.empty()) {
+  msg=[msg stringByAppendingFormat:@"\n\n%s", summary.error_message.c_str()];
+ }
  NSAlert* alert=[[NSAlert alloc] init];
  alert.messageText=@"Import Complete";
  alert.informativeText=msg;
