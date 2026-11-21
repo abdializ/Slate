@@ -4,6 +4,7 @@
 #import "engine/webkit_engine.h"
 #import "engine/webkit_shields.h"
 #import "engine/swipe_navigation.h"
+#import "platform/macos/privacy_security.h"
 #include "engine/page_theme_js.h"
 #include "engine/image_download_js.h"
 #include "engine/pip_state.h"
@@ -850,11 +851,16 @@ class WebKitEngine final : public BrowserEngine {
     if (popup_configuration) {
       // Preserve the opener's store, including its private or per-space session.
     } else if (incognito_) {
-      config.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
+      WKWebsiteDataStore* privateStore = [WKWebsiteDataStore nonPersistentDataStore];
+      [SlatePrivacySecurity applyIncognitoProxyToDataStore:privateStore];
+      config.websiteDataStore = privateStore;
     } else if (website_data_store) {
       config.websiteDataStore = (__bridge WKWebsiteDataStore*)website_data_store;
     } else {
       config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    }
+    if (@available(macOS 11.3, *)) {
+      config.upgradeKnownHostsToHTTPS = [SlatePrivacySecurity httpsOnlyEnabled];
     }
 
     // Preferences for media & popups
@@ -882,6 +888,15 @@ class WebKitEngine final : public BrowserEngine {
 
     // Attach shields (ad blocking, stream ad defusers, and anti-fingerprinting)
     WebKitShields::Shared().ApplyToUserContentController(config.userContentController, incognito_);
+
+    // Attach high-alert privacy hardening (GPC, DNT, and WebRTC IP-leak blocking in Incognito)
+    NSString* hardeningJs = [SlatePrivacySecurity hardeningScriptForIncognito:incognito_];
+    if (hardeningJs.length > 0) {
+      WKUserScript* hardeningScript = [[WKUserScript alloc] initWithSource:hardeningJs
+                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                          forMainFrameOnly:NO];
+      [config.userContentController addUserScript:hardeningScript];
+    }
 
     // Anti-flashbang dark mode styling at document start
     NSString* antiFlashJs = @R"JS(
@@ -1342,6 +1357,9 @@ class WebKitEngine final : public BrowserEngine {
       nsUrl = [NSURL URLWithString:[@"https://" stringByAppendingString:nsUrlStr]];
     }
     if (nsUrl) {
+      if (!nsUrl.isFileURL) {
+        nsUrl = [SlatePrivacySecurity sanitizedURLForNavigation:nsUrl];
+      }
       if (nsUrl.host.length) {
         NSString* desiredUa = IsStreamingOrDrmHost(nsUrl.host) ? SafariUserAgentForHost(nsUrl.host) : kSlateChromeUserAgent;
         if (![web_view_.customUserAgent isEqualToString:desiredUa]) {

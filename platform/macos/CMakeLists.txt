@@ -36,6 +36,7 @@ add_executable(Slate MACOSX_BUNDLE
   omnibox_overlay.mm
   pdf_overlay.mm
   find_bar.mm
+  privacy_security.mm
   AppIcon.icns
   AppIcon.png
   TabIconTemplate.png
@@ -72,6 +73,7 @@ target_link_libraries(Slate PRIVATE
   "-framework Security"
   "-framework SecurityInterface"
   "-framework LocalAuthentication"
+  "-framework Network"
   "-framework UniformTypeIdentifiers"
   "-framework PDFKit"
   "-framework CoreImage"
