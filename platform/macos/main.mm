@@ -590,6 +590,8 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) NSMutableDictionary<NSNumber*,NSImage*>* tabIcons;
 @property(strong) NSView* omnibox;
 @property(strong) NSLayoutConstraint* sidebarWidth;
+@property(strong) NSLayoutConstraint* sidebarLeading;
+@property(strong) NSLayoutConstraint* plateFromRootLeading;
 @property(strong) NSLayoutConstraint* sidebarAddLeading;
 @property(strong) NSLayoutConstraint* sidebarHeaderHeight;
 @property(strong) NSLayoutConstraint* sidebarAddHeight;
@@ -650,8 +652,12 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property BOOL addressDirty;
 @property BOOL addressOpen;
 @property CGFloat sidebarUserWidth;
-// Hover-to-peek sidebar (Arc style): reveal while cursor is near left edge
+// Hover-to-peek sidebar (Search/lovesea style): overlay slide-out near left edge with overshoot
 @property BOOL sidebarPeeking;
+@property BOOL sidebarHidingPeek;
+@property BOOL pointerWasInWindow;
+@property NSUInteger peekAnimGen;
+@property NSUInteger foldTicket;
 @property(strong) NSTimer* peekDismissTimer;
 @property(strong) id mouseMovedMonitor;
 @property(strong) id localMouseMovedMonitor;
@@ -1055,6 +1061,7 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
 @property SlateNavMotion navMotion;
 @property(strong) NSImageView* glyph;
 @property(strong) NSColor* hoverInk;
+@property(nonatomic, copy, nullable) NSMenu* (^historyMenuProvider)(void);
 - (void)playMotion;
 - (void)setBusy:(BOOL)busy;
 @end
@@ -1076,10 +1083,52 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
 - (void)mouseExited:(NSEvent*)event {
  self.layer.backgroundColor=NSColor.clearColor.CGColor;
 }
+- (void)showHistoryMenu {
+ if(!self.enabled || !self.historyMenuProvider) return;
+ NSMenu* menu=self.historyMenuProvider();
+ if(!menu || menu.numberOfItems==0) return;
+ [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, -4) inView:self];
+}
+- (void)rightMouseDown:(NSEvent*)event {
+ if(self.enabled && self.historyMenuProvider) {
+  NSMenu* menu=self.historyMenuProvider();
+  if(menu && menu.numberOfItems>0) {
+   [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, -4) inView:self];
+   return;
+  }
+ }
+ [super rightMouseDown:event];
+}
 - (void)mouseDown:(NSEvent*)event {
  if(!self.enabled) return;
  const CGFloat previous=self.alphaValue;
  self.alphaValue=MAX(0.45, previous*0.7);
+ if(self.historyMenuProvider) {
+  NSDate* deadline=[NSDate dateWithTimeIntervalSinceNow:0.32];
+  BOOL openedMenu=NO;
+  BOOL keepTracking=YES;
+  while(keepTracking) {
+   NSEvent* next=[self.window nextEventMatchingMask:(NSEventMaskLeftMouseUp|NSEventMaskLeftMouseDragged)
+                                          untilDate:deadline
+                                             inMode:NSEventTrackingRunLoopMode
+                                            dequeue:YES];
+   if(!next) {
+    openedMenu=YES;
+    keepTracking=NO;
+   } else if(next.type==NSEventTypeLeftMouseUp) {
+    NSPoint local=[self convertPoint:next.locationInWindow fromView:nil];
+    if(NSPointInRect(local, self.bounds) && self.action) {
+     [NSApp sendAction:self.action to:self.target from:self];
+    }
+    keepTracking=NO;
+   }
+  }
+  self.alphaValue=self.enabled ? 1 : 0.28;
+  if(openedMenu) {
+   [self showHistoryMenu];
+  }
+  return;
+ }
  [super mouseDown:event];
  self.alphaValue=self.enabled ? 1 : 0.28;
 }
@@ -5576,6 +5625,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   action:@selector(goBack:) motion:SlateNavMotionBack];
  self.forwardButton=[self navButton:@"chevron.right" fallback:@"chevron.right" label:@"Forward"
   action:@selector(goForward:) motion:SlateNavMotionForward];
+ {
+  __weak SlateDelegate* weakNavSelf=self;
+  self.backButton.historyMenuProvider=^NSMenu*{ return [weakNavSelf historyMenuForBack:YES]; };
+  self.forwardButton.historyMenuProvider=^NSMenu*{ return [weakNavSelf historyMenuForBack:NO]; };
+ }
  self.reloadButton=[self navButton:@"arrow.clockwise" fallback:@"arrow.clockwise" label:@"Reload"
   action:@selector(reload:) motion:SlateNavMotionReload];
  self.navCluster=[NSStackView stackViewWithViews:@[self.sidebarNavButton,self.backButton,self.forwardButton,self.reloadButton]];
@@ -5763,12 +5817,13 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.sidebar.layer.masksToBounds=YES;
  [root addSubview:self.sidebar];
  self.sidebarWidth=[self.sidebar.widthAnchor constraintEqualToConstant:[self sidebarLayoutWidth]];
+ self.sidebarLeading=[self.sidebar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:0];
  self.sidebarBelowChrome=[self.sidebar.topAnchor constraintEqualToAnchor:root.topAnchor];
  self.sidebarFromTop=[self.sidebar.topAnchor constraintEqualToAnchor:root.topAnchor];
  self.sidebarBelowChrome.active=NO;
  self.sidebarFromTop.active=YES;
  [NSLayoutConstraint activateConstraints:@[
-  [self.sidebar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+  self.sidebarLeading,
   [self.sidebar.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
   self.sidebarWidth
  ]];
@@ -5886,14 +5941,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.plateFromTop=[self.chromePlate.topAnchor constraintEqualToAnchor:self.titlebar.bottomAnchor constant:kPlateInset];
  self.plateFromTop.active=YES;
  self.plateLeading=[self.chromePlate.leadingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor constant:kPlateInset];
+ self.plateFromRootLeading=[self.chromePlate.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:kPlateInset];
  self.plateTrailing=[self.chromePlate.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-kPlateInset];
  self.plateBottom=[self.chromePlate.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-kPlateInset];
  self.plateFromTraffic=[self.chromePlate.leadingAnchor constraintGreaterThanOrEqualToAnchor:root.leadingAnchor constant:0];
  self.plateLeading.priority=NSLayoutPriorityDefaultHigh;
+ self.plateFromRootLeading.priority=NSLayoutPriorityDefaultHigh;
  self.plateFromTraffic.active=NO;
+ const BOOL startCollapsedOverlay=(self.verticalTabs && self.tabsCollapsed);
+ self.plateLeading.active=!startCollapsedOverlay;
+ self.plateFromRootLeading.active=startCollapsedOverlay;
  [NSLayoutConstraint activateConstraints:@[
   self.plateFromTop,
-  self.plateLeading,
   self.plateTrailing,
   self.plateBottom,
   [self.stage.leadingAnchor constraintEqualToAnchor:self.chromePlate.leadingAnchor],
@@ -6216,13 +6275,42 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)updateOmniboxPreferredWidth {
  const BOOL fullScreen=(self.window.styleMask & NSWindowStyleMaskFullScreen)!=0;
  const CGFloat inset=fullScreen ? 5.0 : kPlateInset;
- const CGFloat available=MAX(0,NSWidth(self.window.frame)-[self sidebarLayoutWidth]-2*inset);
+ const CGFloat dockedSidebar=(self.verticalTabs && !self.tabsCollapsed) ? [self sidebarLayoutWidth] : 0;
+ const CGFloat available=MAX(0,NSWidth(self.window.frame)-dockedSidebar-2*inset);
  self.omniboxPreferredWidth.constant=MIN(1100,MAX(180,available*0.64));
+}
+- (void)updateSidebarOverlayAppearance {
+ NSView* root=self.window.contentView;
+ if(!root || !self.sidebar || !self.chromePlate) return;
+ const BOOL peekingOverlay=(self.verticalTabs && self.tabsCollapsed && (self.sidebarPeeking || self.sidebarHidingPeek));
+ self.sidebar.wantsLayer=YES;
+ if(peekingOverlay) {
+  [root addSubview:self.sidebar positioned:NSWindowAbove relativeTo:self.chromePlate];
+  if(self.resizeHandle && self.resizeHandle.superview==root) {
+   [root addSubview:self.resizeHandle positioned:NSWindowAbove relativeTo:self.sidebar];
+  }
+  if(self.trafficCluster && self.trafficCluster.superview==root) {
+   [root addSubview:self.trafficCluster positioned:NSWindowAbove relativeTo:self.sidebar];
+  }
+  NSColor* ground=self.window.backgroundColor ?: ([self isDarkAppearance] ? ColorSRGB(0.11,0.11,0.12) : ColorSRGB(0.95,0.94,0.93));
+  self.sidebar.layer.backgroundColor=ground.CGColor;
+  self.sidebar.layer.masksToBounds=NO;
+  self.sidebar.layer.shadowColor=NSColor.blackColor.CGColor;
+  self.sidebar.layer.shadowOpacity=[self isDarkAppearance] ? 0.36f : 0.18f;
+  self.sidebar.layer.shadowRadius=18.0;
+  self.sidebar.layer.shadowOffset=CGSizeMake(4.0, 0.0);
+ } else {
+  [root addSubview:self.sidebar positioned:NSWindowBelow relativeTo:self.chromePlate];
+  self.sidebar.layer.backgroundColor=NSColor.clearColor.CGColor;
+  self.sidebar.layer.masksToBounds=YES;
+  self.sidebar.layer.shadowOpacity=0.0f;
+ }
 }
 - (void)applyTabLayout:(BOOL)animate {
  [self updateOmniboxPreferredWidth];
  [self placeWindowChrome];
  const BOOL showStrip=[self stripRevealed];
+ const BOOL collapsedOverlay=(self.verticalTabs && self.tabsCollapsed);
  const CGFloat width=[self sidebarLayoutWidth];
  ++self.chromeLayoutGen;
  self.chromeAnimating=animate;
@@ -6230,17 +6318,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [CATransaction setDisableActions:!animate];
  if(animate) {
   [CATransaction setAnimationDuration:0.2];
-  [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+  [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0]];
  }
- self.sidebar.hidden=width==0;
+ self.sidebar.hidden=(width==0 && !self.sidebarHidingPeek);
  self.sidebar.alphaValue=1;
  self.sidebarWidth.constant=width;
+ if(!collapsedOverlay) self.sidebarLeading.constant=0;
  self.titlebar.alphaValue=showStrip ? 1 : 0;
  self.titlebarHeight.constant=showStrip ? kTitlebarHeight : 0;
  self.tabCluster.hidden=!showStrip;
  self.tabCluster.alphaValue=showStrip ? 1 : 0;
  self.tabLeadingTitle.constant=showStrip ? 112 : 12;
- self.resizeHandle.hidden=width==0;
+ self.resizeHandle.hidden=(width==0 || collapsedOverlay);
  self.plateFromTraffic.active=NO;
  self.navLeadingTitle.constant=16;
  // The horizontal plate meets the tab strip without an exposed gap.
@@ -6249,7 +6338,15 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const CGFloat fullscreenWebInset = 5.0;
  CGFloat inset = isFs ? fullscreenWebInset : kPlateInset;
  self.plateFromTop.constant = showStrip ? 0 : inset;
- self.plateLeading.constant = inset;
+ if(collapsedOverlay) {
+  self.plateLeading.active = NO;
+  self.plateFromRootLeading.constant = inset;
+  self.plateFromRootLeading.active = YES;
+ } else {
+  self.plateFromRootLeading.active = NO;
+  self.plateLeading.constant = inset;
+  self.plateLeading.active = YES;
+ }
  self.plateTrailing.constant = -inset;
  self.plateBottom.constant = -inset;
  if(showStrip) {
@@ -6262,7 +6359,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   self.addButton.alphaValue=0;
  }
  [self applyPlateChrome];
- const BOOL hideToolbarDownload = (self.verticalTabs && width > 0);
+ [self updateSidebarOverlayAppearance];
+ const BOOL hideToolbarDownload = (self.verticalTabs && !collapsedOverlay && width > 0);
  self.downloadButton.hidden = hideToolbarDownload;
  if(hideToolbarDownload) {
   self.downloadTrailingTitle.active = NO;
@@ -6348,11 +6446,63 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)toggleTabsReveal:(id)sender {
  if(self.quitting) return;
  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
- [self.peekDismissTimer invalidate]; self.peekDismissTimer=nil; self.sidebarPeeking=NO;
+ [self.peekDismissTimer invalidate]; self.peekDismissTimer=nil;
+ self.peekAnimGen += 1;
+ self.foldTicket += 1;
+ // Search/lovesea Fold behavior: if the sidebar is already peeking over the page,
+ // pin it in place as docked without hiding and re-showing it.
+ if(self.verticalTabs && self.tabsCollapsed && self.sidebarPeeking) {
+  self.sidebarPeeking=NO;
+  self.sidebarHidingPeek=NO;
+  self.sidebarLeading.constant=0;
+  self.tabsCollapsed=NO;
+  [self persistUiPrefs];
+  fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
+   ctx.duration=0.2;
+   ctx.allowsImplicitAnimation=YES;
+   ctx.timingFunction=[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
+   [self applyTabLayout:YES];
+  } completionHandler:nil];
+  return;
+ }
+ self.sidebarPeeking=NO;
+ self.sidebarHidingPeek=NO;
+ self.sidebarLeading.constant=0;
+ const BOOL foldingAway = (self.verticalTabs && !self.tabsCollapsed);
  self.tabsCollapsed=!self.tabsCollapsed;
  [self persistUiPrefs];
  fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
- [self applyTabLayout:NO];
+ if(foldingAway) {
+  // Wait briefly for WebKit's next presentation update when folding away, avoiding
+  // resize flashes on the expanding edge.
+  auto it=runtimes.find(model.selected());
+  if(it!=runtimes.end() && it->second.engine) {
+   const NSUInteger ticket=self.foldTicket;
+   __weak SlateDelegate* weakSelf=self;
+   it->second.engine->wait_for_presentation(0.12, [weakSelf, ticket]() {
+    SlateDelegate* strongSelf=weakSelf;
+    if(!strongSelf || strongSelf.quitting || strongSelf.foldTicket!=ticket) return;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
+     ctx.duration=0.18;
+     ctx.allowsImplicitAnimation=YES;
+     ctx.timingFunction=[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
+     [strongSelf applyTabLayout:YES];
+    } completionHandler:nil];
+   });
+   return;
+  }
+ }
+ if(self.verticalTabs) {
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
+   ctx.duration=0.18;
+   ctx.allowsImplicitAnimation=YES;
+   ctx.timingFunction=[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
+   [self applyTabLayout:YES];
+  } completionHandler:nil];
+ } else {
+  [self applyTabLayout:NO];
+ }
 }
 - (void)togglePages120Hz:(id)sender {
  if(self.quitting) return;
@@ -6372,24 +6522,35 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  CGFloat relX = loc.x - NSMinX(windowRect);
  CGFloat relY = loc.y - NSMinY(windowRect);
  const CGFloat topBarSafetyZone = 52.0;
+ const CGFloat edge = 6.0;
+ const CGFloat overshoot = 48.0;
+ const BOOL inWindow = (relX >= 0 && relX <= NSWidth(windowRect) && relY >= 0 && relY <= NSHeight(windowRect));
+ if(inWindow) {
+  self.pointerWasInWindow = YES;
+ } else if(relX < -(overshoot + 8.0) || relX > NSWidth(windowRect) + 8.0 || relY < -8.0 || relY > NSHeight(windowRect) + 8.0) {
+  self.pointerWasInWindow = NO;
+ }
  const BOOL inTopBar = (relY >= NSHeight(windowRect) - topBarSafetyZone);
- BOOL nearLeftEdge = !inTopBar && (relX >= -20 && relX <= 8) && (relY >= 0 && relY < NSHeight(windowRect) - topBarSafetyZone);
+ const BOOL atEdge = (relX >= 0 && relX <= edge);
+ const BOOL overshotEdge = self.pointerWasInWindow && (relX >= -overshoot && relX < 0);
+ const BOOL nearLeftEdge = !inTopBar && (atEdge || overshotEdge) && (relY >= 0 && relY < NSHeight(windowRect) - topBarSafetyZone);
  if(self.sidebarPeeking) {
   CGFloat peekWidth = ClampSidebarWidth(self.sidebarUserWidth, NSWidth(windowRect));
-  BOOL insideSidebar = (relX >= -30 && relX <= peekWidth + 20) && (relY >= -20 && relY <= NSHeight(windowRect) + 20);
-  if(insideSidebar) {
+  BOOL insideSidebar = (relX >= -overshoot && relX <= peekWidth + 14.0) && (relY >= -16.0 && relY <= NSHeight(windowRect) + 16.0);
+  BOOL keepOpen = insideSidebar || (self.window.attachedSheet != nil) || ([NSEvent pressedMouseButtons] != 0);
+  if(keepOpen) {
    [self.peekDismissTimer invalidate];
    self.peekDismissTimer = nil;
   } else {
    if(!self.peekDismissTimer) {
-    self.peekDismissTimer = [NSTimer scheduledTimerWithTimeInterval:0.4
+    self.peekDismissTimer = [NSTimer scheduledTimerWithTimeInterval:0.08
      target:self selector:@selector(hideSidebarPeek) userInfo:nil repeats:NO];
    }
   }
  } else {
   if(nearLeftEdge && NSApp.isActive) {
    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
-   [self performSelector:@selector(revealSidebarPeek) withObject:nil afterDelay:0.15];
+   [self performSelector:@selector(revealSidebarPeek) withObject:nil afterDelay:0.12];
   } else {
    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
   }
@@ -6397,23 +6558,60 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (void)revealSidebarPeek {
  if(!self.verticalTabs || !self.tabsCollapsed || self.quitting) return;
+ [self.peekDismissTimer invalidate];
+ self.peekDismissTimer = nil;
+ self.peekAnimGen += 1;
+ const BOOL alreadyVisible = (self.sidebarPeeking || self.sidebarHidingPeek);
+ self.sidebarHidingPeek = NO;
  self.sidebarPeeking = YES;
+ CGFloat peekWidth = [self sidebarLayoutWidth];
+ if(!alreadyVisible) {
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  self.sidebar.hidden = NO;
+  self.sidebarWidth.constant = peekWidth;
+  self.sidebarLeading.constant = -peekWidth;
+  [self updateSidebarOverlayAppearance];
+  [self.window.contentView layoutSubtreeIfNeeded];
+  [self syncTabListColumnWidth];
+  if(self.tabList) [self.tabList reloadData];
+  [CATransaction commit];
+ }
  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-  context.duration = 0.2;
+  context.duration = 0.18;
   context.allowsImplicitAnimation = YES;
-  [self applyTabLayout:YES];
+  context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
+  self.sidebarLeading.animator.constant = 0;
+  [self.window.contentView layoutSubtreeIfNeeded];
  } completionHandler:nil];
 }
 - (void)hideSidebarPeek {
  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
  [self.peekDismissTimer invalidate];
  self.peekDismissTimer = nil;
+ if(!self.sidebarPeeking && !self.sidebarHidingPeek) return;
  self.sidebarPeeking = NO;
+ self.sidebarHidingPeek = YES;
+ self.peekAnimGen += 1;
+ const NSUInteger gen = self.peekAnimGen;
+ CGFloat peekWidth = MAX(self.sidebarWidth.constant, ClampSidebarWidth(self.sidebarUserWidth, NSWidth(self.window.frame)));
+ __weak SlateDelegate* weakSelf = self;
  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-  context.duration = 0.25;
+  context.duration = 0.15;
   context.allowsImplicitAnimation = YES;
-  [self applyTabLayout:YES];
- } completionHandler:nil];
+  context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.4 :0.0 :1.0 :1.0];
+  self.sidebarLeading.animator.constant = -peekWidth;
+  [self.window.contentView layoutSubtreeIfNeeded];
+ } completionHandler:^{
+  SlateDelegate* strongSelf = weakSelf;
+  if(!strongSelf || strongSelf.peekAnimGen != gen || strongSelf.sidebarPeeking) return;
+  strongSelf.sidebarHidingPeek = NO;
+  strongSelf.sidebar.hidden = YES;
+  strongSelf.sidebarWidth.constant = 0;
+  strongSelf.sidebarLeading.constant = 0;
+  [strongSelf updateSidebarOverlayAppearance];
+  [strongSelf layoutTrafficLights];
+ }];
 }
 - (void)placeWindowChrome {
  const BOOL revealed=![self tabsCollapsed];
@@ -6527,7 +6725,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    self.window.backgroundColor = fill;
 
    // The titlebar remains part of the colored shell; the toolbar is inside the plate.
-   self.sidebar.layer.backgroundColor = NSColor.clearColor.CGColor;
+   const BOOL peekingOverlay = (self.verticalTabs && self.tabsCollapsed && (self.sidebarPeeking || self.sidebarHidingPeek));
+   self.sidebar.layer.backgroundColor = peekingOverlay ? fill.CGColor : NSColor.clearColor.CGColor;
    self.titlebar.wantsLayer = YES;
    self.titlebar.layer.backgroundColor = fill.CGColor;
    self.toolbar.wantsLayer = YES;
@@ -6587,7 +6786,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    }
    self.window.backgroundColor = fill;
 
-   self.sidebar.layer.backgroundColor = NSColor.clearColor.CGColor;
+   const BOOL peekingOverlay = (self.verticalTabs && self.tabsCollapsed && (self.sidebarPeeking || self.sidebarHidingPeek));
+   self.sidebar.layer.backgroundColor = peekingOverlay ? fill.CGColor : NSColor.clearColor.CGColor;
    self.titlebar.wantsLayer = YES;
    self.titlebar.layer.backgroundColor = showStrip ? fill.CGColor : bar.CGColor;
    self.toolbar.wantsLayer = YES;
@@ -6802,7 +7002,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (NSInteger)trafficLayoutMode {
  if([self stripRevealed]) return 1;
- if(self.verticalTabs && [self sidebarLayoutWidth] > 0) return 2;
+ if(self.verticalTabs && !self.tabsCollapsed && [self sidebarLayoutWidth] > 0) return 2;
  return 3;
 }
 - (void)layoutTrafficLights {
@@ -11838,6 +12038,37 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(it==runtimes.end() || !it->second.engine || model.closing(it->first) || !it->second.forward) return;
  [self.forwardButton playMotion];
  it->second.engine->forward();
+}
+- (NSMenu*)historyMenuForBack:(BOOL)back {
+ auto it=runtimes.find([self activeBrowserTab]);
+ if(it==runtimes.end() || !it->second.engine || model.closing(it->first)) return nil;
+ auto stops=it->second.engine->history_stops(back);
+ if(stops.empty()) return nil;
+ NSMenu* menu=[[NSMenu alloc] initWithTitle:back ? @"Back History" : @"Forward History"];
+ for(const auto& stop : stops) {
+  NSString* title=Text(stop.title);
+  if(!title.length) title=Text(stop.url);
+  if(title.length>56) title=[[title substringToIndex:55] stringByAppendingString:@"…"];
+  NSMenuItem* item=[[NSMenuItem alloc] initWithTitle:title ?: @"Page"
+                                              action:@selector(jumpToHistoryMenuItem:)
+                                       keyEquivalent:@""];
+  item.target=self;
+  item.representedObject=@{@"back":@(back), @"index":@(stop.index)};
+  item.toolTip=Text(stop.url);
+  [menu addItem:item];
+ }
+ return menu;
+}
+- (void)jumpToHistoryMenuItem:(NSMenuItem*)item {
+ NSDictionary* info=[item.representedObject isKindOfClass:[NSDictionary class]] ? item.representedObject : nil;
+ if(!info) return;
+ const BOOL back=[info[@"back"] boolValue];
+ const int index=[info[@"index"] intValue];
+ auto it=runtimes.find([self activeBrowserTab]);
+ if(it==runtimes.end() || !it->second.engine || model.closing(it->first)) return;
+ if(back) [self.backButton playMotion];
+ else [self.forwardButton playMotion];
+ it->second.engine->go_to_history_stop(back, index);
 }
 - (void)reload:(id)sender {
  auto it=runtimes.find([self activeBrowserTab]);

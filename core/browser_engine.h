@@ -4,9 +4,16 @@
 
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <vector>
 namespace slate {
 using TabId = uint64_t;
+struct HistoryStop {
+  std::string title;
+  std::string url;
+  int index = 0; // Nearest-first index within back or forward list.
+};
 // UI-thread interface. CEF types must never cross this boundary.
 // Slate note: Virtual methods let the UI navigate and close a page without depending on WKWebView types.
 class BrowserEngine {
@@ -15,6 +22,12 @@ class BrowserEngine {
   virtual void navigate(const std::string& url) = 0;
   virtual void back() = 0;
   virtual void forward() = 0;
+  virtual std::vector<HistoryStop> history_stops(bool back) { (void)back; return {}; }
+  virtual void go_to_history_stop(bool back, int index) { (void)back; (void)index; }
+  virtual void wait_for_presentation(double timeout_seconds, std::function<void()> done) {
+    (void)timeout_seconds;
+    if (done) done();
+  }
   virtual void reload() = 0;
   virtual void reload_ignore_cache() = 0;
   virtual void focus() = 0; // Give keyboard focus to this tab’s document.

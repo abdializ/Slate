@@ -12,6 +12,7 @@ add_executable(Slate MACOSX_BUNDLE
   app_updater.mm
   ../../engine/webkit_engine.mm
   ../../engine/webkit_shields.mm
+  ../../engine/swipe_navigation.mm
   favicon_loader.mm
   interaction_feedback.mm
   memory_monitor.cc

@@ -3,6 +3,7 @@
 
 #import "engine/webkit_engine.h"
 #import "engine/webkit_shields.h"
+#import "engine/swipe_navigation.h"
 #include "engine/page_theme_js.h"
 #include "engine/image_download_js.h"
 #include "engine/pip_state.h"
@@ -554,6 +555,15 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
 // WKScriptMessageHandler: Handle media playing and audible updates from in-page media observer
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+  if ([message.name isEqualToString:kSlateSwipeScrollMessageName]) {
+    if (message.webView != self.webView || ![message.body isKindOfClass:[NSDictionary class]]) return;
+    NSDictionary* dict = (NSDictionary*)message.body;
+    NSString* side = [dict[@"side"] isKindOfClass:[NSString class]] ? dict[@"side"] : nil;
+    if (side && [self.webView isKindOfClass:[SlateSwipeWebView class]]) {
+      [(SlateSwipeWebView*)self.webView handleSwipeScrollAnswerFree:[side isEqualToString:@"free"]];
+    }
+    return;
+  }
   if ([message.name isEqualToString:@"slateImageDownload"]) {
     if (message.webView != self.webView || ![message.body isKindOfClass:NSString.class]) return;
     NSString* source = (NSString*)message.body;
@@ -1173,6 +1183,12 @@ class WebKitEngine final : public BrowserEngine {
     }
 
     if (@available(macOS 11.0, *)) {
+      WKUserScript* swipeScript = [[WKUserScript alloc] initWithSource:SlateSwipeWatchScript()
+                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                      forMainFrameOnly:NO
+                                                        inContentWorld:[WKContentWorld defaultClientWorld]];
+      [config.userContentController addUserScript:swipeScript];
+      [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:kSlateSwipeScrollMessageName];
       [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:@"slateMedia"];
       [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:@"slateTheme"];
       [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:@"slateImageDownload"];
@@ -1182,6 +1198,11 @@ class WebKitEngine final : public BrowserEngine {
         [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:@"slateAutofill"];
       }
     } else {
+      WKUserScript* swipeScript = [[WKUserScript alloc] initWithSource:SlateSwipeWatchScript()
+                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                      forMainFrameOnly:NO];
+      [config.userContentController addUserScript:swipeScript];
+      [config.userContentController addScriptMessageHandler:delegate_ name:kSlateSwipeScrollMessageName];
       [config.userContentController addScriptMessageHandler:delegate_ name:@"slateMedia"];
       [config.userContentController addScriptMessageHandler:delegate_ name:@"slateTheme"];
       [config.userContentController addScriptMessageHandler:delegate_ name:@"slateImageDownload"];
@@ -1199,14 +1220,27 @@ class WebKitEngine final : public BrowserEngine {
     NSRect frame = parent.bounds;
     // Slate note: Construct the actual native page view after configuration; this is where a saved logical
     // tab becomes a rendering engine.
-    web_view_ = [[WKWebView alloc] initWithFrame:frame configuration:config];
+    SlateSwipeWebView* swipeWebView = [[SlateSwipeWebView alloc] initWithFrame:frame configuration:config];
+    web_view_ = swipeWebView;
     web_view_.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     web_view_.allowsMagnification = YES;
     web_view_.magnification = 1.0;
-    web_view_.allowsBackForwardNavigationGestures = YES;
+    web_view_.allowsBackForwardNavigationGestures = NO;
     web_view_.navigationDelegate = delegate_;
     web_view_.UIDelegate = delegate_;
     delegate_.webView = web_view_;
+    __weak SlateSwipeWebView* weakSwipeView = swipeWebView;
+    swipeWebView.onWillNavigate = ^{
+      SlateSwipeWebView* strongView = weakSwipeView;
+      if (!strongView) return;
+      NSAppearance* cur = NSApp.effectiveAppearance;
+      const BOOL dark = [cur.name isEqualToString:NSAppearanceNameDarkAqua] ||
+        [[cur bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+      NSColor* bg = dark ? [NSColor colorWithCalibratedRed:0.11 green:0.11 blue:0.12 alpha:1.0]
+                         : [NSColor colorWithCalibratedRed:0.97 green:0.96 blue:0.95 alpha:1.0];
+      if (@available(macOS 12.0, *)) strongView.underPageBackgroundColor = bg;
+      strongView.layer.backgroundColor = bg.CGColor;
+    };
     __weak SlateWebNavigationDelegate* passwordDelegate=delegate_;
     [SlatePasswordServices.shared configure:web_view_ privateTab:incognito_
       accounts:^NSArray<NSDictionary<NSString*,NSString*>*>*(NSURL* origin) {
@@ -1336,6 +1370,57 @@ class WebKitEngine final : public BrowserEngine {
       sync_anti_flash_background();
       [web_view_ goForward];
     }
+  }
+
+  std::vector<HistoryStop> history_stops(bool back) override {
+    std::vector<HistoryStop> stops;
+    if (!web_view_) return stops;
+    NSArray<WKBackForwardListItem*>* items = back ? web_view_.backForwardList.backList : web_view_.backForwardList.forwardList;
+    if (!items.count) return stops;
+    const NSUInteger maxStops = 12;
+    if (back) {
+      int idx = 0;
+      for (NSInteger i = (NSInteger)items.count - 1; i >= 0 && stops.size() < maxStops; --i, ++idx) {
+        WKBackForwardListItem* item = items[(NSUInteger)i];
+        HistoryStop stop;
+        stop.title = item.title.length ? item.title.UTF8String : (item.URL.host.length ? item.URL.host.UTF8String : "");
+        stop.url = item.URL.absoluteString.length ? item.URL.absoluteString.UTF8String : "";
+        stop.index = idx;
+        stops.push_back(std::move(stop));
+      }
+    } else {
+      for (NSUInteger i = 0; i < items.count && stops.size() < maxStops; ++i) {
+        WKBackForwardListItem* item = items[i];
+        HistoryStop stop;
+        stop.title = item.title.length ? item.title.UTF8String : (item.URL.host.length ? item.URL.host.UTF8String : "");
+        stop.url = item.URL.absoluteString.length ? item.URL.absoluteString.UTF8String : "";
+        stop.index = (int)i;
+        stops.push_back(std::move(stop));
+      }
+    }
+    return stops;
+  }
+
+  void go_to_history_stop(bool back, int index) override {
+    if (!web_view_ || index < 0) return;
+    NSArray<WKBackForwardListItem*>* items = back ? web_view_.backForwardList.backList : web_view_.backForwardList.forwardList;
+    if (!items.count) return;
+    NSInteger target = back ? ((NSInteger)items.count - 1 - index) : (NSInteger)index;
+    if (target < 0 || target >= (NSInteger)items.count) return;
+    sync_anti_flash_background();
+    [web_view_ goToBackForwardListItem:items[(NSUInteger)target]];
+  }
+
+  void wait_for_presentation(double timeout_seconds, std::function<void()> done) override {
+    if (!done) return;
+    if (web_view_ && [web_view_ isKindOfClass:[SlateSwipeWebView class]]) {
+      auto sharedDone = std::make_shared<std::function<void()>>(std::move(done));
+      [(SlateSwipeWebView*)web_view_ waitForNextPresentationWithin:timeout_seconds completion:^{
+        if (sharedDone && *sharedDone) (*sharedDone)();
+      }];
+      return;
+    }
+    done();
   }
 
   void reload() override {
@@ -1479,6 +1564,7 @@ class WebKitEngine final : public BrowserEngine {
           [web_view_ closeAllMediaPresentationsWithCompletionHandler:nil];
         }
         if (@available(macOS 11.0, *)) {
+          [web_view_.configuration.userContentController removeScriptMessageHandlerForName:kSlateSwipeScrollMessageName contentWorld:[WKContentWorld defaultClientWorld]];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateMedia" contentWorld:[WKContentWorld defaultClientWorld]];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateTheme" contentWorld:[WKContentWorld defaultClientWorld]];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateImageDownload" contentWorld:[WKContentWorld defaultClientWorld]];
@@ -1486,6 +1572,7 @@ class WebKitEngine final : public BrowserEngine {
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:[SlateFormRelay messageName] contentWorld:[WKContentWorld defaultClientWorld]];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateAutofill" contentWorld:[WKContentWorld defaultClientWorld]];
         } else {
+          [web_view_.configuration.userContentController removeScriptMessageHandlerForName:kSlateSwipeScrollMessageName];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateMedia"];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateTheme"];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateImageDownload"];
