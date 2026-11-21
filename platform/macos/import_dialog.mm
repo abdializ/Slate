@@ -1,10 +1,19 @@
-// File purpose: Implements the native dialog for selecting a source browser and categories to
-// import.
+// File purpose: Implements the native dialog for selecting a source browser or export file and
+// importing bookmarks, history, and passwords safely inside App Sandbox.
 
 #import "platform/macos/import_dialog.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-@interface SlateImportDialog ()
+static NSMutableSet<SlateImportDialog*>* ActiveImportDialogs(void) {
+  static NSMutableSet<SlateImportDialog*>* active = nil;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    active = [NSMutableSet set];
+  });
+  return active;
+}
+
+@interface SlateImportDialog () <NSWindowDelegate>
 @property (nonatomic, weak) NSWindow* parentWindow;
 @property (nonatomic, assign) slate::BookmarkList* bookmarks;
 @property (nonatomic, assign) slate::CredentialStore* credentials;
@@ -13,11 +22,12 @@
 @property (nonatomic, strong) NSPopUpButton* sourcePopup;
 @property (nonatomic, strong) NSButton* bookmarksCheck;
 @property (nonatomic, strong) NSButton* historyCheck;
-@property (nonatomic, strong) NSButton* passwordsCheck;
 @property (nonatomic, strong) NSProgressIndicator* spinner;
 @property (nonatomic, strong) NSButton* importButton;
 @property (nonatomic, strong) NSButton* cancelButton;
 @property (nonatomic, strong) NSTextField* statusText;
+@property (nonatomic, strong) NSTextField* hintText;
+@property (nonatomic, assign) BOOL dismissed;
 @end
 
 @implementation SlateImportDialog
@@ -31,146 +41,264 @@
   controller.bookmarks = bookmarks;
   controller.credentials = credentials;
   controller.completionBlock = completion;
+  [ActiveImportDialogs() addObject:controller];
   [controller buildAndShow];
 }
 
+- (NSArray<NSDictionary*>*)sourceEntries {
+  NSString* home = [NSString stringWithUTF8String:slate::BrowserImporter::GetRealHomeDirectory().c_str()];
+  return @[
+    @{@"id":@"chrome", @"title":@"Google Chrome", @"kind":@"profile",
+      @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Google/Chrome/Default"]},
+    @{@"id":@"dia", @"title":@"Dia", @"kind":@"profile",
+      @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Dia/User Data/Default"]},
+    @{@"id":@"arc", @"title":@"Arc", @"kind":@"profile",
+      @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Arc/User Data/Default"]},
+    @{@"id":@"brave", @"title":@"Brave", @"kind":@"profile",
+      @"path":[home stringByAppendingPathComponent:@"Library/Application Support/BraveSoftware/Brave-Browser/Default"]},
+    @{@"id":@"edge", @"title":@"Microsoft Edge", @"kind":@"profile",
+      @"path":[home stringByAppendingPathComponent:@"Library/Application Support/Microsoft Edge/Default"]},
+    @{@"id":@"html", @"title":@"Bookmarks HTML File (Safari / Firefox / Any)…", @"kind":@"html",
+      @"path":[home stringByAppendingPathComponent:@"Downloads"]},
+    @{@"id":@"csv", @"title":@"Passwords CSV File (Chrome / Safari / 1Password)…", @"kind":@"csv",
+      @"path":[home stringByAppendingPathComponent:@"Downloads"]}
+  ];
+}
+
 - (void)buildAndShow {
-  NSRect frame = NSMakeRect(0, 0, 440, 280);
+  NSRect frame = NSMakeRect(0, 0, 480, 300);
   NSWindow* sheet = [[NSWindow alloc] initWithContentRect:frame
-                                                styleMask:NSWindowStyleMaskTitled
+                                                styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
   sheet.title = @"Import Browser Data";
+  sheet.delegate = self;
+  sheet.releasedWhenClosed = NO;
   self.window = sheet;
 
   NSView* content = sheet.contentView;
 
-  // Header Icon & Title
-  NSTextField* titleLabel = [NSTextField labelWithString:@"Import Bookmarks and History"];
-  titleLabel.font = [NSFont boldSystemFontOfSize:14];
-  titleLabel.frame = NSMakeRect(24, 235, 390, 22);
+  NSTextField* titleLabel = [NSTextField labelWithString:@"Import into Slate"];
+  titleLabel.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+  titleLabel.frame = NSMakeRect(24, 254, 432, 22);
   [content addSubview:titleLabel];
 
-  NSTextField* descLabel = [NSTextField labelWithString:@"Select a browser to transfer your favorites, browsing history, and data into Slate:"];
+  NSTextField* descLabel = [NSTextField wrappingLabelWithString:@"Bring your bookmarks, browsing history, or saved passwords from another browser."];
   descLabel.font = [NSFont systemFontOfSize:12];
   descLabel.textColor = NSColor.secondaryLabelColor;
-  descLabel.frame = NSMakeRect(24, 195, 390, 32);
+  descLabel.frame = NSMakeRect(24, 218, 432, 30);
   [content addSubview:descLabel];
 
-  // Browser Selection
-  NSTextField* fromLabel = [NSTextField labelWithString:@"From:"];
-  fromLabel.frame = NSMakeRect(24, 160, 50, 20);
+  NSTextField* fromLabel = [NSTextField labelWithString:@"Source:"];
+  fromLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
+  fromLabel.frame = NSMakeRect(24, 180, 56, 20);
   [content addSubview:fromLabel];
 
-  self.sourcePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(75, 158, 340, 26) pullsDown:NO];
+  self.sourcePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(84, 176, 372, 26) pullsDown:NO];
   [self.sourcePopup removeAllItems];
-
-  BOOL hasDia = slate::BrowserImporter::HasDiaInstalled();
-  BOOL hasChrome = slate::BrowserImporter::HasChromeInstalled();
-
-  if (hasDia) [self.sourcePopup addItemWithTitle:@"Dia (Detected)"];
-  if (hasChrome) [self.sourcePopup addItemWithTitle:@"Google Chrome"];
-  [self.sourcePopup addItemWithTitle:@"Passwords CSV File…"];
-
+  for (NSDictionary* entry in [self sourceEntries]) {
+    [self.sourcePopup addItemWithTitle:entry[@"title"]];
+  }
+  self.sourcePopup.target = self;
+  self.sourcePopup.action = @selector(sourceChanged:);
   [self.sourcePopup selectItemAtIndex:0];
   [content addSubview:self.sourcePopup];
 
-  // Checkboxes
-  self.bookmarksCheck = [NSButton checkboxWithTitle:@"Favorites / Bookmarks" target:nil action:nil];
+  self.bookmarksCheck = [NSButton checkboxWithTitle:@"Bookmarks / Favorites" target:nil action:nil];
   self.bookmarksCheck.state = NSControlStateValueOn;
-  self.bookmarksCheck.frame = NSMakeRect(40, 120, 200, 20);
+  self.bookmarksCheck.frame = NSMakeRect(86, 140, 220, 20);
   [content addSubview:self.bookmarksCheck];
 
   self.historyCheck = [NSButton checkboxWithTitle:@"Browsing History" target:nil action:nil];
   self.historyCheck.state = NSControlStateValueOn;
-  self.historyCheck.frame = NSMakeRect(40, 95, 200, 20);
+  self.historyCheck.frame = NSMakeRect(86, 114, 220, 20);
   [content addSubview:self.historyCheck];
 
-  self.passwordsCheck = [NSButton checkboxWithTitle:@"Saved Passwords" target:nil action:nil];
-  self.passwordsCheck.state = NSControlStateValueOff;
-  self.passwordsCheck.frame = NSMakeRect(40, 70, 200, 20);
-  [content addSubview:self.passwordsCheck];
+  self.hintText = [NSTextField wrappingLabelWithString:@""];
+  self.hintText.font = [NSFont systemFontOfSize:11];
+  self.hintText.textColor = NSColor.secondaryLabelColor;
+  self.hintText.frame = NSMakeRect(24, 62, 432, 40);
+  [content addSubview:self.hintText];
 
-  // Status & Spinner
-  self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24, 24, 18, 18)];
+  self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(24, 22, 16, 16)];
   self.spinner.style = NSProgressIndicatorStyleSpinning;
+  self.spinner.controlSize = NSControlSizeSmall;
   self.spinner.displayedWhenStopped = NO;
   [content addSubview:self.spinner];
 
   self.statusText = [NSTextField labelWithString:@""];
-  self.statusText.frame = NSMakeRect(48, 24, 200, 18);
+  self.statusText.font = [NSFont systemFontOfSize:11.5];
+  self.statusText.frame = NSMakeRect(46, 21, 220, 18);
   self.statusText.textColor = NSColor.secondaryLabelColor;
   [content addSubview:self.statusText];
 
-  // Buttons
   self.cancelButton = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(onCancel:)];
-  self.cancelButton.frame = NSMakeRect(255, 18, 80, 28);
+  self.cancelButton.frame = NSMakeRect(274, 16, 86, 30);
   self.cancelButton.keyEquivalent = @"\e";
   [content addSubview:self.cancelButton];
 
-  self.importButton = [NSButton buttonWithTitle:@"Import" target:self action:@selector(onImport:)];
-  self.importButton.frame = NSMakeRect(340, 18, 80, 28);
+  self.importButton = [NSButton buttonWithTitle:@"Choose Folder…" target:self action:@selector(onImport:)];
+  self.importButton.frame = NSMakeRect(366, 16, 94, 30);
   self.importButton.keyEquivalent = @"\r";
+  self.importButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:self.importButton];
 
-  [self.parentWindow beginSheet:sheet completionHandler:nil];
+  [self sourceChanged:nil];
+
+  if (self.parentWindow) {
+    [self.parentWindow beginSheet:sheet completionHandler:^(NSModalResponse returnCode) {
+      (void)returnCode;
+      [ActiveImportDialogs() removeObject:self];
+    }];
+  } else {
+    [sheet center];
+    [sheet makeKeyAndOrderFront:nil];
+  }
+}
+
+- (NSDictionary*)selectedEntry {
+  NSArray<NSDictionary*>* entries = [self sourceEntries];
+  NSInteger idx = self.sourcePopup.indexOfSelectedItem;
+  if (idx < 0 || (NSUInteger)idx >= entries.count) return entries.firstObject;
+  return entries[(NSUInteger)idx];
+}
+
+- (void)sourceChanged:(id)sender {
+  NSDictionary* entry = [self selectedEntry];
+  NSString* kind = entry[@"kind"];
+  BOOL isProfile = [kind isEqualToString:@"profile"];
+  self.bookmarksCheck.enabled = isProfile;
+  self.historyCheck.enabled = isProfile;
+  self.bookmarksCheck.hidden = !isProfile;
+  self.historyCheck.hidden = !isProfile;
+  if (isProfile) {
+    self.importButton.title = @"Import…";
+    self.hintText.stringValue = [NSString stringWithFormat:@"macOS will ask you to confirm access to your %@ profile folder (pre-selected for you) so Slate can read Bookmarks and History safely.", entry[@"title"]];
+  } else if ([kind isEqualToString:@"html"]) {
+    self.importButton.title = @"Choose HTML…";
+    self.hintText.stringValue = @"Select an exported bookmarks.html file from Safari, Chrome, Firefox, Arc, or Brave.";
+  } else {
+    self.importButton.title = @"Choose CSV…";
+    self.hintText.stringValue = @"Select a passwords .csv export from Chrome, Safari, 1Password, Bitwarden, Brave, or Edge.";
+  }
+}
+
+- (void)dismissAndFinishWithSummary:(slate::ImportSummary)summary history:(std::vector<slate::HistoryItem>)history notify:(BOOL)notify {
+  if (self.dismissed) return;
+  self.dismissed = YES;
+  void (^cb)(slate::ImportSummary, const std::vector<slate::HistoryItem>&) = self.completionBlock;
+  self.completionBlock = nil;
+  NSWindow* parent = self.parentWindow;
+  NSWindow* sheet = self.window;
+  if (parent && sheet && sheet.isSheet) {
+    [parent endSheet:sheet returnCode:notify ? NSModalResponseOK : NSModalResponseCancel];
+    if (notify && cb) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        cb(summary, history);
+      });
+    }
+  } else {
+    [sheet close];
+    [ActiveImportDialogs() removeObject:self];
+    if (notify && cb) cb(summary, history);
+  }
+}
+
+- (BOOL)windowShouldClose:(NSWindow*)sender {
+  (void)sender;
+  [self dismissAndFinishWithSummary:slate::ImportSummary{} history:{} notify:NO];
+  return NO;
 }
 
 - (void)onCancel:(id)sender {
-  [self.parentWindow endSheet:self.window];
+  (void)sender;
+  [self dismissAndFinishWithSummary:slate::ImportSummary{} history:{} notify:NO];
 }
 
-// Slate note: Read the selected categories and source, then complete the dialog with the requested import
-// operation.
 - (void)onImport:(id)sender {
-  NSString* selected = self.sourcePopup.titleOfSelectedItem;
-  BOOL importBookmarks = (self.bookmarksCheck.state == NSControlStateValueOn);
-  BOOL importHistory = (self.historyCheck.state == NSControlStateValueOn);
+  (void)sender;
+  NSDictionary* entry = [self selectedEntry];
+  NSString* kind = entry[@"kind"];
+  NSString* defaultPath = entry[@"path"];
 
-  if ([selected isEqualToString:@"Passwords CSV File…"]) {
+  if ([kind isEqualToString:@"csv"]) {
     NSOpenPanel* panel = [NSOpenPanel openPanel];
-    panel.allowedContentTypes = @[[UTType typeWithFilenameExtension:@"csv"]];
+    panel.allowedContentTypes = @[UTTypeCommaSeparatedText];
     panel.allowsMultipleSelection = NO;
     panel.canChooseDirectories = NO;
-
+    panel.canChooseFiles = YES;
+    panel.message = @"Choose your exported passwords CSV file";
+    if (defaultPath.length) panel.directoryURL = [NSURL fileURLWithPath:defaultPath];
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
-      if (result == NSModalResponseOK && panel.URL && self.credentials) {
-        size_t count = slate::BrowserImporter::ImportPasswordsCsv(panel.URL.path.UTF8String, *self.credentials);
-        slate::ImportSummary summary;
-        summary.passwords_imported = count;
-        std::vector<slate::HistoryItem> emptyHist;
-        if (self.completionBlock) self.completionBlock(summary, emptyHist);
-        [self.parentWindow endSheet:self.window];
-      }
+      if (result != NSModalResponseOK || !panel.URL || !self.credentials) return;
+      NSURL* url = panel.URL;
+      BOOL accessed = [url startAccessingSecurityScopedResource];
+      size_t count = slate::BrowserImporter::ImportPasswordsCsv(url.path.UTF8String, *self.credentials);
+      if (accessed) [url stopAccessingSecurityScopedResource];
+      slate::ImportSummary summary;
+      summary.passwords_imported = count;
+      [self dismissAndFinishWithSummary:summary history:{} notify:YES];
     }];
     return;
   }
 
-  [self.spinner startAnimation:nil];
-  self.statusText.stringValue = @"Importing…";
-  self.importButton.enabled = NO;
-  self.cancelButton.enabled = NO;
+  if ([kind isEqualToString:@"html"]) {
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    panel.allowedContentTypes = @[UTTypeHTML];
+    panel.allowsMultipleSelection = NO;
+    panel.canChooseDirectories = NO;
+    panel.canChooseFiles = YES;
+    panel.message = @"Choose your exported bookmarks HTML file";
+    if (defaultPath.length) panel.directoryURL = [NSURL fileURLWithPath:defaultPath];
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+      if (result != NSModalResponseOK || !panel.URL || !self.bookmarks) return;
+      NSURL* url = panel.URL;
+      BOOL accessed = [url startAccessingSecurityScopedResource];
+      size_t count = slate::BrowserImporter::ImportHtmlBookmarks(url.path.UTF8String, *self.bookmarks);
+      if (accessed) [url stopAccessingSecurityScopedResource];
+      slate::ImportSummary summary;
+      summary.bookmarks_imported = count;
+      [self dismissAndFinishWithSummary:summary history:{} notify:YES];
+    }];
+    return;
+  }
 
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    slate::ImportSummary summary;
-    std::vector<slate::HistoryItem> history;
+  BOOL importBookmarks = (self.bookmarksCheck.state == NSControlStateValueOn);
+  BOOL importHistory = (self.historyCheck.state == NSControlStateValueOn);
+  if (!importBookmarks && !importHistory) {
+    self.statusText.stringValue = @"Select Bookmarks or History to import.";
+    return;
+  }
 
-    if ([selected containsString:@"Dia"] && self.bookmarks) {
-      summary = slate::BrowserImporter::ImportFromDia(importBookmarks, importHistory, *self.bookmarks, history);
-    } else if ([selected containsString:@"Chrome"] && self.bookmarks) {
-      summary = slate::BrowserImporter::ImportFromChrome(importBookmarks, importHistory, *self.bookmarks, history);
-    }
+  NSOpenPanel* panel = [NSOpenPanel openPanel];
+  panel.canChooseFiles = NO;
+  panel.canChooseDirectories = YES;
+  panel.allowsMultipleSelection = NO;
+  panel.prompt = @"Import";
+  panel.message = [NSString stringWithFormat:@"Confirm your %@ profile folder (Default) to grant read access", entry[@"title"]];
+  if (defaultPath.length) panel.directoryURL = [NSURL fileURLWithPath:defaultPath];
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [self.spinner stopAnimation:nil];
-      self.statusText.stringValue = @"Done!";
+  [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+    if (result != NSModalResponseOK || !panel.URL || !self.bookmarks) return;
+    NSURL* folderURL = panel.URL;
+    [self.spinner startAnimation:nil];
+    self.statusText.stringValue = @"Importing…";
+    self.importButton.enabled = NO;
+    self.cancelButton.enabled = NO;
 
-      if (self.completionBlock) {
-        self.completionBlock(summary, history);
-      }
-      [self.parentWindow endSheet:self.window];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      BOOL accessed = [folderURL startAccessingSecurityScopedResource];
+      std::vector<slate::HistoryItem> history;
+      slate::ImportSummary summary = slate::BrowserImporter::ImportChromiumProfile(
+          folderURL.path.UTF8String, importBookmarks, importHistory, *self.bookmarks, history);
+      if (accessed) [folderURL stopAccessingSecurityScopedResource];
+
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [self.spinner stopAnimation:nil];
+        [self dismissAndFinishWithSummary:summary history:std::move(history) notify:YES];
+      });
     });
-  });
+  }];
 }
 
 @end

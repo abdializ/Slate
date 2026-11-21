@@ -31,18 +31,25 @@ class BrowserImporter {
   static bool HasChromeInstalled();
   static bool HasSafariInstalled();
 
+  static std::string GetRealHomeDirectory();
   static std::string GetDiaProfilePath();
   static std::string GetChromeProfilePath();
   static std::string GetSafariProfilePath();
 
-  // Import Bookmarks from a Chromium Bookmarks JSON file (Dia, Chrome, Brave, Arc)
+  // Import Bookmarks from a Chromium Bookmarks JSON file (Dia, Chrome, Brave, Arc, Edge)
   static size_t ImportChromiumBookmarks(const std::string& bookmarks_json_path, BookmarkList& bookmark_list);
 
-  // Import History from a Chromium SQLite History database (using ?immutable=1)
+  // Import Bookmarks from a standard Netscape HTML export (Safari, Chrome, Firefox, Arc, Brave)
+  static size_t ImportHtmlBookmarks(const std::string& html_path, BookmarkList& bookmark_list);
+
+  // Import History from a Chromium SQLite History database (via safe temp copy + ?immutable=1)
   static std::vector<HistoryItem> ImportChromiumHistory(const std::string& history_db_path, size_t max_items = 10000);
 
-  // Import Passwords from CSV (format: url,username,password or name,url,username,password)
+  // Import Passwords from CSV (Chrome, Safari, 1Password, Bitwarden, Brave, Edge, Arc)
   static size_t ImportPasswordsCsv(const std::string& csv_path, CredentialStore& store);
+
+  // Import Bookmarks and/or History from any Chromium profile directory (e.g. Chrome/Dia/Arc/Brave/Edge Default)
+  static ImportSummary ImportChromiumProfile(const std::string& profile_dir, bool import_bookmarks, bool import_history, BookmarkList& bookmarks, std::vector<HistoryItem>& out_history);
 
   // One-shot import for Dia
   static ImportSummary ImportFromDia(bool import_bookmarks, bool import_history, BookmarkList& bookmarks, std::vector<HistoryItem>& out_history);
