@@ -382,16 +382,16 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   [_containerView addSubview:themeSub];
 
   NSArray* palette = @[
-    @{@"id":@"slate",    @"title":@"Slate",    @"color":[NSColor colorWithSRGBRed:0.28 green:0.33 blue:0.41 alpha:1]},
-    @{@"id":@"rose",     @"title":@"Rose",     @"color":[NSColor colorWithSRGBRed:0.88 green:0.20 blue:0.35 alpha:1]},
-    @{@"id":@"mauve",    @"title":@"Mauve",    @"color":[NSColor colorWithSRGBRed:0.64 green:0.50 blue:0.72 alpha:1]},
-    @{@"id":@"coral",    @"title":@"Coral",    @"color":[NSColor colorWithSRGBRed:0.89 green:0.43 blue:0.43 alpha:1]},
-    @{@"id":@"peach",    @"title":@"Peach",    @"color":[NSColor colorWithSRGBRed:0.93 green:0.62 blue:0.44 alpha:1]},
-    @{@"id":@"marigold", @"title":@"Marigold", @"color":[NSColor colorWithSRGBRed:0.93 green:0.78 blue:0.43 alpha:1]},
-    @{@"id":@"sand",     @"title":@"Sand",     @"color":[NSColor colorWithSRGBRed:0.82 green:0.76 blue:0.68 alpha:1]},
-    @{@"id":@"sage",     @"title":@"Sage",     @"color":[NSColor colorWithSRGBRed:0.54 green:0.67 blue:0.58 alpha:1]},
-    @{@"id":@"sky",      @"title":@"Sky",      @"color":[NSColor colorWithSRGBRed:0.32 green:0.58 blue:0.89 alpha:1]},
-    @{@"id":@"graphite", @"title":@"Graphite", @"color":[NSColor colorWithSRGBRed:0.38 green:0.38 blue:0.40 alpha:1]}
+    @{@"id":@"slate",    @"title":@"Slate",      @"color":[NSColor colorWithSRGBRed:0.39 green:0.45 blue:0.55 alpha:1]},
+    @{@"id":@"graphite", @"title":@"Graphite",   @"color":[NSColor colorWithSRGBRed:0.32 green:0.32 blue:0.36 alpha:1]},
+    @{@"id":@"sand",     @"title":@"Warm Stone", @"color":[NSColor colorWithSRGBRed:0.66 green:0.60 blue:0.52 alpha:1]},
+    @{@"id":@"sky",      @"title":@"Mist Blue",  @"color":[NSColor colorWithSRGBRed:0.29 green:0.51 blue:0.72 alpha:1]},
+    @{@"id":@"sage",     @"title":@"Eucalyptus", @"color":[NSColor colorWithSRGBRed:0.36 green:0.55 blue:0.45 alpha:1]},
+    @{@"id":@"rose",     @"title":@"Blush",      @"color":[NSColor colorWithSRGBRed:0.72 green:0.42 blue:0.49 alpha:1]},
+    @{@"id":@"mauve",    @"title":@"Iris",       @"color":[NSColor colorWithSRGBRed:0.49 green:0.42 blue:0.62 alpha:1]},
+    @{@"id":@"coral",    @"title":@"Terracotta", @"color":[NSColor colorWithSRGBRed:0.76 green:0.45 blue:0.38 alpha:1]},
+    @{@"id":@"peach",    @"title":@"Apricot",    @"color":[NSColor colorWithSRGBRed:0.79 green:0.54 blue:0.39 alpha:1]},
+    @{@"id":@"marigold", @"title":@"Ochre",      @"color":[NSColor colorWithSRGBRed:0.77 green:0.64 blue:0.33 alpha:1]}
   ];
 
   CGFloat sx = 24;

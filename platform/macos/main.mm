@@ -154,7 +154,7 @@ struct SideRow {
  TabId tab=0;
  std::string group;
 };
-struct UiPrefs { BOOL vertical=NO; BOOL collapsed=NO; CGFloat sidebarWidth=kSidebarOpenWidth; NSString* accent=@"rose"; NSString* accentHex=@""; NSString* accentHex2=@""; BOOL showBookmarksBar=YES; CGFloat graniteIntensity=0.0; int themeMode=0; BOOL pages120Hz=NO; int tabStyle=1; TabId splitLeft=0; TabId splitRight=0; double splitRatio=0.5; BOOL splitRightActive=NO; std::vector<slate::SplitPair> splitGroups; };
+struct UiPrefs { BOOL vertical=NO; BOOL collapsed=NO; CGFloat sidebarWidth=kSidebarOpenWidth; NSString* accent=@"slate"; NSString* accentHex=@""; NSString* accentHex2=@""; BOOL showBookmarksBar=YES; CGFloat graniteIntensity=0.0; int themeMode=0; BOOL pages120Hz=NO; int tabStyle=1; TabId splitLeft=0; TabId splitRight=0; double splitRatio=0.5; BOOL splitRightActive=NO; std::vector<slate::SplitPair> splitGroups; };
 NSColor* ColorSRGB(CGFloat r, CGFloat g, CGFloat b) {
  return [NSColor colorWithSRGBRed:r green:g blue:b alpha:1];
 }
@@ -206,39 +206,39 @@ NSColor* ChromeAccent(NSString* ident, NSString* hex, BOOL dark) {
   if(custom) return custom;
  }
  if([ident isEqualToString:@"slate"])
-  return dark ? ColorSRGB(0.18,0.20,0.24) : ColorSRGB(0.35,0.40,0.46);
- if([ident isEqualToString:@"rose"])
-  return dark ? ColorSRGB(0.34,0.22,0.24) : ColorSRGB(0.96,0.89,0.89);
- if([ident isEqualToString:@"mauve"])
-  return dark ? ColorSRGB(0.28,0.20,0.32) : ColorSRGB(0.94,0.89,0.96);
- if([ident isEqualToString:@"coral"])
-  return dark ? ColorSRGB(0.36,0.18,0.18) : ColorSRGB(0.96,0.89,0.87);
- if([ident isEqualToString:@"peach"])
-  return dark ? ColorSRGB(0.36,0.24,0.18) : ColorSRGB(0.97,0.90,0.85);
- if([ident isEqualToString:@"marigold"])
-  return dark ? ColorSRGB(0.36,0.30,0.18) : ColorSRGB(0.97,0.93,0.84);
- if([ident isEqualToString:@"sand"])
-  return dark ? ColorSRGB(0.32,0.28,0.22) : ColorSRGB(0.96,0.93,0.87);
- if([ident isEqualToString:@"sage"])
-  return dark ? ColorSRGB(0.22,0.30,0.26) : ColorSRGB(0.89,0.94,0.90);
- if([ident isEqualToString:@"sky"])
-  return dark ? ColorSRGB(0.20,0.26,0.32) : ColorSRGB(0.89,0.93,0.97);
+  return dark ? ColorSRGB(0.106,0.122,0.149) : ColorSRGB(0.914,0.929,0.949);
  if([ident isEqualToString:@"graphite"])
-  return dark ? ColorSRGB(0.18,0.18,0.19) : ColorSRGB(0.30,0.30,0.33);
- return dark ? ColorSRGB(0.18,0.20,0.24) : ColorSRGB(0.91,0.93,0.95);
+  return dark ? ColorSRGB(0.102,0.102,0.114) : ColorSRGB(0.925,0.925,0.937);
+ if([ident isEqualToString:@"sand"])
+  return dark ? ColorSRGB(0.133,0.122,0.106) : ColorSRGB(0.949,0.929,0.902);
+ if([ident isEqualToString:@"sky"])
+  return dark ? ColorSRGB(0.086,0.125,0.169) : ColorSRGB(0.902,0.937,0.969);
+ if([ident isEqualToString:@"sage"])
+  return dark ? ColorSRGB(0.090,0.133,0.114) : ColorSRGB(0.910,0.941,0.922);
+ if([ident isEqualToString:@"rose"])
+  return dark ? ColorSRGB(0.149,0.102,0.118) : ColorSRGB(0.957,0.914,0.925);
+ if([ident isEqualToString:@"mauve"])
+  return dark ? ColorSRGB(0.125,0.106,0.157) : ColorSRGB(0.937,0.922,0.957);
+ if([ident isEqualToString:@"coral"])
+  return dark ? ColorSRGB(0.153,0.110,0.098) : ColorSRGB(0.961,0.925,0.910);
+ if([ident isEqualToString:@"peach"])
+  return dark ? ColorSRGB(0.149,0.118,0.094) : ColorSRGB(0.965,0.937,0.902);
+ if([ident isEqualToString:@"marigold"])
+  return dark ? ColorSRGB(0.145,0.129,0.086) : ColorSRGB(0.961,0.945,0.894);
+ return dark ? ColorSRGB(0.106,0.122,0.149) : ColorSRGB(0.914,0.929,0.949);
 }
 NSArray<NSDictionary*>* AccentCatalog() {
  return @[
   @{@"id":@"slate",@"title":@"Slate"},
-  @{@"id":@"rose",@"title":@"Rose"},
-  @{@"id":@"mauve",@"title":@"Mauve"},
-  @{@"id":@"coral",@"title":@"Coral"},
-  @{@"id":@"peach",@"title":@"Peach"},
-  @{@"id":@"marigold",@"title":@"Marigold"},
-  @{@"id":@"sand",@"title":@"Sand"},
-  @{@"id":@"sage",@"title":@"Sage"},
-  @{@"id":@"sky",@"title":@"Sky"},
-  @{@"id":@"graphite",@"title":@"Graphite"}
+  @{@"id":@"graphite",@"title":@"Graphite"},
+  @{@"id":@"sand",@"title":@"Warm Stone"},
+  @{@"id":@"sky",@"title":@"Mist Blue"},
+  @{@"id":@"sage",@"title":@"Eucalyptus"},
+  @{@"id":@"rose",@"title":@"Blush"},
+  @{@"id":@"mauve",@"title":@"Iris"},
+  @{@"id":@"coral",@"title":@"Terracotta"},
+  @{@"id":@"peach",@"title":@"Apricot"},
+  @{@"id":@"marigold",@"title":@"Ochre"}
  ];
 }
 NSColor* HostColor(NSString* host) {
@@ -6641,10 +6641,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   self.barMuted=isDark ? [NSColor colorWithCalibratedWhite:0.96 alpha:0.60] : [NSColor colorWithCalibratedWhite:0.11 alpha:0.58];
  }
  if(home) {
-  NSColor* srgb=[fill colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: fill;
-  CGFloat hue=0, saturation=0, brightness=0, alpha=0;
-  [srgb getHue:&hue saturation:&saturation brightness:&brightness alpha:&alpha];
-  bar=isDark ? [NSColor colorWithHue:hue saturation:MIN(saturation*0.35,0.25) brightness:0.09 alpha:1.0] : fill;
+  // Clean, solid canvas for the home screen (no vertical gradient); the Aurora renders softly on top.
+  bar = isDark ? ColorSRGB(0.075,0.077,0.088) : ColorSRGB(0.980,0.980,0.976);
   self.barInk=InkOn(bar);
   self.barMuted=MutedInkOn(bar);
  }
@@ -6680,41 +6678,16 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSView* root=self.window.contentView;
   root.wantsLayer=YES;
   if(home) {
-   // Keep the accent on the outer shell and the New Tab canvas inside the plate.
-   NSColor* srgb = [fill colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: fill;
-   CGFloat r = 0, g = 0, b = 0, a = 1;
-   [srgb getRed:&r green:&g blue:&b alpha:&a];
-   CGFloat hue = 0, sat = 0, bri = 0;
-   [srgb getHue:&hue saturation:&sat brightness:&bri alpha:&a];
-
-   if(!self.homePlateGradientLayer) {
-    self.homePlateGradientLayer = [CAGradientLayer layer];
-    self.homePlateGradientLayer.startPoint = CGPointMake(0.5, 0.0);
-    self.homePlateGradientLayer.endPoint = CGPointMake(0.5, 1.0);
-    [self.stage.layer insertSublayer:self.homePlateGradientLayer atIndex:0];
-   }
+   // Keep the accent on the outer shell and a clean, flat canvas inside the plate (Aurora renders on top).
    [CATransaction begin];
    [CATransaction setDisableActions:YES];
    self.chromeGradientLayer.hidden = YES;
-   self.homePlateGradientLayer.hidden = NO;
-   self.homePlateGradientLayer.frame = self.stage.bounds;
-   if(isDark) {
-    NSColor* cTop = bar;
-    NSColor* cBottom = [NSColor colorWithHue:hue saturation:MIN(sat * 0.45, 0.30) brightness:0.04 alpha:1.0];
-    self.homePlateGradientLayer.colors = @[ (id)cTop.CGColor, (id)cBottom.CGColor ];
-    self.homePlateGradientLayer.locations = @[ @0.0, @1.0 ];
-   } else {
-    NSColor* cTop = bar;
-    NSColor* cMid = [NSColor colorWithHue:hue saturation:MIN(sat * 0.40, 0.15) brightness:0.99 alpha:1.0];
-    NSColor* cBottom = [NSColor colorWithHue:hue saturation:MIN(sat * 0.30, 0.12) brightness:0.97 alpha:1.0];
-    self.homePlateGradientLayer.colors = @[ (id)cTop.CGColor, (id)cMid.CGColor, (id)cBottom.CGColor ];
-    self.homePlateGradientLayer.locations = @[ @0.0, @0.38, @1.0 ];
-   }
+   if(self.homePlateGradientLayer) self.homePlateGradientLayer.hidden = YES;
    [CATransaction commit];
    root.layer.backgroundColor = fill.CGColor;
    self.window.backgroundColor = fill;
 
-   // The titlebar remains part of the colored shell; the toolbar is inside the plate.
+   // The titlebar remains part of the colored shell; the toolbar sits seamlessly on the flat home canvas.
    const BOOL peekingOverlay = (self.verticalTabs && self.tabsCollapsed && (self.sidebarPeeking || self.sidebarHidingPeek));
    self.sidebar.layer.backgroundColor = peekingOverlay ? fill.CGColor : NSColor.clearColor.CGColor;
    self.titlebar.wantsLayer = YES;
@@ -6733,7 +6706,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    }
    self.stage.layer.cornerRadius = isFs ? fsRadius : kPlateRadius;
    self.stage.layer.masksToBounds = YES;
-   self.stage.layer.backgroundColor = NSColor.clearColor.CGColor;
+   self.stage.layer.backgroundColor = bar.CGColor;
    self.stage.layer.borderWidth = 0;
    self.content.layer.backgroundColor = NSColor.clearColor.CGColor;
    self.content.layer.cornerRadius = isFs ? fsRadius : 0;

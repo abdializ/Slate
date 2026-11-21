@@ -4,14 +4,14 @@
 
 // Runs only in the main frame's isolated WebKit content world. The page can
 // change its own styles, but cannot send arbitrary colors to the native bridge.
-// Slate note: report sends only a changed color. suspend removes observers/timers for hidden documents;
-// resume reconnects and refreshes when visible.
+// Slate note: Prefers authoritative <meta name="theme-color">, then a genuine fixed/sticky top
+// header bar, then document.body / documentElement background. Never samples arbitrary scrolled
+// content (such as feed photos/cards), and never polls on a timer.
 inline constexpr char kPageThemeJs[] = R"JS((function() {
  if (window.__slateThemeObserver) return;
  window.__slateThemeObserver = true;
  var last = null;
  var timer = 0;
- var fallback = 0;
  var observing = false;
  var paused = false;
  var canvas = document.createElement('canvas');
@@ -35,18 +35,6 @@ inline constexpr char kPageThemeJs[] = R"JS((function() {
   try { return color(getComputedStyle(element).backgroundColor); }
   catch (e) { return ''; }
  }
- function backdrop() {
-  var x = Math.max(0, Math.floor(innerWidth * 0.5));
-  var ys = [Math.min(160, Math.floor(innerHeight * 0.18)), 56, 28, 8];
-  for (var i = 0; i < ys.length; i++) {
-   var element = document.elementFromPoint(x, ys[i]);
-   for (var hops = 0; element && hops < 20; hops++, element = element.parentElement) {
-    var value = background(element);
-    if (value) return value;
-   }
-  }
-  return '';
- }
  function metadata() {
   var metas = document.querySelectorAll('meta[name="theme-color" i],meta[name="msapplication-navbutton-color" i]');
   for (var i = 0; i < metas.length; i++) {
@@ -57,10 +45,28 @@ inline constexpr char kPageThemeJs[] = R"JS((function() {
   }
   return '';
  }
+ function fixedHeader() {
+  if (!document.elementFromPoint || innerWidth < 100) return '';
+  var el = document.elementFromPoint(Math.floor(innerWidth * 0.5), 4);
+  for (var hops = 0; el && hops < 12; hops++, el = el.parentElement) {
+   if (el === document.body || el === document.documentElement) break;
+   var tag = el.tagName;
+   if (tag === 'IMG' || tag === 'VIDEO' || tag === 'PICTURE' || tag === 'CANVAS' || tag === 'SVG') continue;
+   var st;
+   try { st = getComputedStyle(el); } catch (e) { continue; }
+   if (st.position !== 'fixed' && st.position !== 'sticky') continue;
+   if (!el.getBoundingClientRect) continue;
+   var r = el.getBoundingClientRect();
+   if (r.top > 6 || r.height < 28 || r.height > 110 || r.width < innerWidth * 0.75) continue;
+   var value = color(st.backgroundColor);
+   if (value) return value;
+  }
+  return '';
+ }
  function current() {
-  return backdrop() || background(document.body) ||
-   background(document.documentElement) || metadata() ||
-   (getComputedStyle(document.documentElement).colorScheme.indexOf('dark') >= 0 ? '#121212' : '#ffffff');
+  return metadata() || fixedHeader() || background(document.body) ||
+   background(document.documentElement) ||
+   (getComputedStyle(document.documentElement).colorScheme.indexOf('dark') >= 0 ? '#141416' : '#ffffff');
  }
  function report() {
   timer = 0;
@@ -80,24 +86,29 @@ inline constexpr char kPageThemeJs[] = R"JS((function() {
   if (paused || document.hidden) return;
   if (!observing) {
    observer.observe(document.documentElement, {
-    subtree: true, childList: true, attributes: true,
-    attributeFilter: ['class', 'style', 'content', 'media']
+    attributes: true,
+    attributeFilter: ['class', 'style', 'data-theme', 'data-color-scheme']
    });
+   if (document.body && document.body !== document.documentElement) {
+    observer.observe(document.body, {
+     attributes: true,
+     attributeFilter: ['class', 'style', 'data-theme', 'data-color-scheme']
+    });
+   }
+   if (document.head) {
+    observer.observe(document.head, {
+     subtree: true, childList: true, attributes: true,
+     attributeFilter: ['content', 'media']
+    });
+   }
    observing = true;
   }
   schedule();
-  if (!fallback) fallback = setTimeout(function tick() {
-   fallback = 0;
-   if (paused || document.hidden) return;
-   schedule();
-   fallback = setTimeout(tick, 3000);
-  }, 3000);
  }
  function suspend() {
   observer.disconnect(); observing = false;
   if (timer) clearTimeout(timer);
-  if (fallback) clearTimeout(fallback);
-  timer = fallback = 0;
+  timer = 0;
  }
  resume();
  window.addEventListener('resize', schedule);
