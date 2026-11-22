@@ -1,5 +1,5 @@
 // File purpose: Native Twitch HLS Web Worker & fetch stitched-ad blocker (vaft-style backup
-// stream swapper + ad-cue stripper + display-ad hider) for both Normal and Incognito tabs.
+// stream swapper + display-ad hider) for both Normal and Incognito tabs.
 
 #pragma once
 
@@ -46,18 +46,15 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
 
     const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
     const AD_SIGNIFIER = 'stitched';
-    const BACKUP_PLAYER_TYPES = ['embed', 'popout', 'autoplay', 'frontpage'];
+    const BACKUP_PLAYER_TYPES = ['embed', 'popout', 'autoplay'];
     const GQL_URL = 'https://gql.twitch.tv/gql';
     const USHER_BASE = 'https://usher.ttvnw.net/api/channel/hls/';
 
     const realFetch = self.fetch.bind(self);
     let clientId = CLIENT_ID;
     let deviceId = null;
-    let authHeader = null;
 
-    // Channel state map: channelName -> { masterUrl, backupUrl, backupPlayerIdx, lastBackupAt, isStripping, selectedRes }
     const channels = new Map();
-    // Variant URL -> { channel, resolution }
     const variantToChannel = new Map();
 
     self.addEventListener('message', function(ev) {
@@ -65,43 +62,26 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
       if (!d || d.__slateTwitchMeta !== true) return;
       if (d.clientId) clientId = d.clientId;
       if (d.deviceId) deviceId = d.deviceId;
-      if (d.authHeader) authHeader = d.authHeader;
     });
+
+    function makeResponseWithUrl(body, origResp, fallbackUrl) {
+      const modified = new Response(body, {
+        status: origResp.status || 200,
+        statusText: origResp.statusText || 'OK',
+        headers: origResp.headers
+      });
+      try {
+        Object.defineProperty(modified, 'url', { value: origResp.url || fallbackUrl || '' });
+      } catch (e) {}
+      return modified;
+    }
 
     function hasStitchedAds(text) {
       if (!text) return false;
       return text.includes('stitched-ad') ||
              text.includes('twitch-stitched-ad') ||
              text.includes('amazon-adsystem') ||
-             text.includes('CLASS="twitch-ad') ||
              (text.includes('#EXT-X-DATERANGE') && text.includes(AD_SIGNIFIER));
-    }
-
-    function stripAdCues(text) {
-      if (!text) return text;
-      const lines = text.split('\\n');
-      const out = [];
-      let skipNextUri = false;
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.startsWith('#EXT-X-DATERANGE') &&
-            (line.includes('stitched-ad') || line.includes('twitch-ad') || line.includes('amazon-adsystem'))) {
-          continue;
-        }
-        if (line.startsWith('#EXT-X-SCTE35-OUT') || line.startsWith('#EXT-X-SCTE35-IN')) {
-          continue;
-        }
-        if (line.startsWith('#EXTINF') && line.includes('Amazon')) {
-          skipNextUri = true;
-          continue;
-        }
-        if (skipNextUri && line && !line.startsWith('#')) {
-          skipNextUri = false;
-          continue;
-        }
-        out.push(line);
-      }
-      return out.join('\\n');
     }
 
     function parseChannelFromUsher(url) {
@@ -185,14 +165,13 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
         channels.set(channel, state);
       }
 
-      // Reuse cached clean backup variant URL if fresh (< 20s)
       if (state.backupUrl && (Date.now() - state.lastBackupAt) < 20000) {
         try {
           const r = await realFetch(state.backupUrl);
           if (r.ok) {
             const txt = await r.text();
             if (txt && txt.includes('#EXTM3U') && !hasStitchedAds(txt)) {
-              return stripAdCues(txt);
+              return { text: txt, url: r.url || state.backupUrl };
             }
           }
         } catch (e) {}
@@ -224,7 +203,7 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
             state.backupUrl = variantUrl;
             state.backupPlayerIdx = idx;
             state.lastBackupAt = Date.now();
-            return stripAdCues(mediaText);
+            return { text: mediaText, url: mediaResp.url || variantUrl };
           }
         } catch (e) {}
       }
@@ -235,35 +214,36 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
       const url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
       if (!url) return realFetch(input, init);
 
-      // Master playlist from usher.ttvnw.net
+      // Master playlist from usher.ttvnw.net: inspect a clone, return original Response untouched
       if (url.includes('usher.ttvnw.net/api/channel/hls/') && url.includes('.m3u8')) {
         const resp = await realFetch(input, init);
         const channel = parseChannelFromUsher(url);
         if (channel && resp.ok) {
-          const text = await resp.text();
-          indexMasterPlaylist(channel, text);
-          return new Response(text, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+          try {
+            const text = await resp.clone().text();
+            indexMasterPlaylist(channel, text);
+          } catch (e) {}
         }
         return resp;
       }
 
-      // Media playlist from *.hls.ttvnw.net
+      // Media playlist from *.hls.ttvnw.net: inspect a clone, only replace if stitched ads are present
       if (url.includes('.m3u8') && (url.includes('ttvnw.net') || variantToChannel.has(url))) {
         const resp = await realFetch(input, init);
         if (!resp.ok) return resp;
-        const text = await resp.text();
-        if (hasStitchedAds(text)) {
-          const meta = variantToChannel.get(url);
-          if (meta && meta.channel) {
-            const clean = await fetchCleanBackupPlaylist(meta.channel, meta.resolution);
-            if (clean) {
-              return new Response(clean, { status: 200, statusText: 'OK', headers: resp.headers });
+        try {
+          const text = await resp.clone().text();
+          if (hasStitchedAds(text)) {
+            const meta = variantToChannel.get(url);
+            if (meta && meta.channel) {
+              const clean = await fetchCleanBackupPlaylist(meta.channel, meta.resolution);
+              if (clean && clean.text) {
+                return makeResponseWithUrl(clean.text, resp, clean.url);
+              }
             }
           }
-          // Fallback: strip ad cue metadata and Amazon ad segments
-          return new Response(stripAdCues(text), { status: resp.status, statusText: resp.statusText, headers: resp.headers });
-        }
-        return new Response(text, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+        } catch (e) {}
+        return resp;
       }
 
       return realFetch(input, init);
@@ -271,9 +251,25 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
   })();
   `;
 
-  // 3. Wrap window.Worker so Twitch's IVS HLS worker gets our fetch hook automatically
+  // 3. Delay revoking blob URLs that were just passed into our wrapped Worker so importScripts() never 404s
+  const protectedBlobUrls = new Set();
+  try {
+    const origRevoke = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = function(u) {
+      if (protectedBlobUrls.has(u)) {
+        setTimeout(() => {
+          protectedBlobUrls.delete(u);
+          try { origRevoke(u); } catch (e) {}
+        }, 8000);
+        return;
+      }
+      return origRevoke(u);
+    };
+  } catch (e) {}
+
+  // 4. Wrap classic Twitch IVS Workers so they inherit our HLS fetch interceptor safely
   const activeWorkers = new Set();
-  let lastMeta = { __slateTwitchMeta: true, clientId: null, deviceId: null, authHeader: null };
+  let lastMeta = { __slateTwitchMeta: true, clientId: null, deviceId: null };
 
   function broadcastMeta() {
     activeWorkers.forEach(w => {
@@ -286,15 +282,17 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
     if (typeof OrigWorker === 'function') {
       const WrappedWorker = function(scriptURL, options) {
         const urlStr = typeof scriptURL === 'string' ? scriptURL : String(scriptURL || '');
-        const shouldWrap = urlStr.startsWith('blob:') ||
-                           urlStr.includes('twitch') ||
-                           urlStr.includes('ttvnw') ||
-                           urlStr.includes('amazon-ivs') ||
-                           urlStr.includes('wasmworker');
+        const isModule = options && options.type === 'module';
+        const shouldWrap = !isModule && (
+          urlStr.startsWith('blob:') ||
+          urlStr.includes('amazon-ivs') ||
+          urlStr.includes('wasmworker')
+        );
         if (!shouldWrap) {
           return new OrigWorker(scriptURL, options);
         }
         try {
+          if (urlStr.startsWith('blob:')) protectedBlobUrls.add(urlStr);
           const bootstrap = workerHookSource + '\nimportScripts(' + JSON.stringify(urlStr) + ');\n';
           const blob = new Blob([bootstrap], { type: 'application/javascript' });
           const wrappedUrl = URL.createObjectURL(blob);
@@ -318,7 +316,7 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
     }
   } catch (e) {}
 
-  // 4. Intercept main-thread fetch to capture Twitch Client-ID/Device-ID & neutralize ad event beacons
+  // 5. Intercept main-thread fetch to capture Twitch Client-ID/Device-ID & neutralize ad event beacons
   try {
     const origFetch = window.fetch.bind(window);
     window.fetch = function(input, init) {
@@ -331,13 +329,10 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
             const getH = (k) => (h instanceof Headers) ? h.get(k) : (h[k] || h[k.toLowerCase()]);
             const cid = getH('Client-ID') || getH('Client-Id');
             const did = getH('X-Device-Id');
-            const auth = getH('Authorization');
             if (cid && cid !== lastMeta.clientId) { lastMeta.clientId = cid; changed = true; }
             if (did && did !== lastMeta.deviceId) { lastMeta.deviceId = did; changed = true; }
-            if (auth && auth !== lastMeta.authHeader) { lastMeta.authHeader = auth; changed = true; }
             if (changed) broadcastMeta();
           }
-          // Neutralize client-side ad telemetry beacons without breaking player state
           if (init && typeof init.body === 'string' &&
               (init.body.includes('ClientSideAdEventHandling_RecordAdEvent') ||
                init.body.includes('videoAdRequestDecline'))) {
