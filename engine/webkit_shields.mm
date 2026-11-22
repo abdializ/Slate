@@ -4,6 +4,7 @@
 
 #import "engine/webkit_shields.h"
 #include "engine/stealth_js.h"
+#include "engine/twitch_adblock_js.h"
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -1138,6 +1139,15 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
   // Apply stealth / anti-fingerprinting in incognito mode
   if (incognito) {
     [controller addUserScript:stealth_script_];
+  }
+
+  // Attach native Twitch HLS Web Worker ad blocker at document start for BOTH Normal and Incognito
+  if (enabled_ && ![disabled_sites_ containsObject:@"twitch.tv"]) {
+    NSString* twitchJs = [NSString stringWithUTF8String:kTwitchAdBlockJs];
+    WKUserScript* twitchScript = [[WKUserScript alloc] initWithSource:twitchJs
+                                                        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                     forMainFrameOnly:NO];
+    [controller addUserScript:twitchScript];
   }
 
   // Attach compiled rule list immediately if already available
