@@ -42,6 +42,7 @@
 #import "platform/macos/form_relay.h"
 #import "platform/macos/omnibox_overlay.h"
 #import "platform/macos/find_bar.h"
+#import "platform/macos/privacy_security.h"
 #import "platform/macos/tab_switcher.h"
 #import "platform/macos/app_updater.h"
 #include "engine/floating_video_js.h"
@@ -4556,15 +4557,17 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   const auto* curTab=self.owner ? [self.owner selectedTab] : nullptr;
   const BOOL isIncog=curTab && curTab->incognito;
   if(isIncog) {
-   self.greeting.stringValue=@"🕶 Untrackable Mode";
-   self.greeting.hidden=YES;
-   self.omniboxCard.placeholder=@"Enter a web address";
+   const BOOL vpnOn = [SlatePrivacySecurity isIncognitoTunnelActive];
+   self.greeting.stringValue = vpnOn ? @"Private Browsing · VPN" : @"Private Browsing";
+   self.greeting.font = [NSFont systemFontOfSize:26 weight:NSFontWeightMedium];
+   self.greeting.hidden = NO;
+   self.omniboxCard.placeholder = @"Search or enter address privately";
   } else {
    self.greeting.stringValue=@"";
    self.greeting.hidden=YES;
    self.omniboxCard.placeholder=@"Enter a web address";
   }
-  self.greeting.textColor=self.owner.barInk ?: NSColor.labelColor;
+  self.greeting.textColor=isIncog ? [NSColor colorWithCalibratedRed:0.86 green:0.82 blue:1.0 alpha:0.95] : (self.owner.barInk ?: NSColor.labelColor);
   [self setNeedsLayout:YES];
   [self setNeedsDisplay:YES];
 }
@@ -4576,12 +4579,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   const CGFloat h = NSHeight(self.bounds);
   if (w <= 0 || h <= 0) return;
 
-  // Accurately determine Light vs Dark mode based on explicit themeMode and appearance
-  const BOOL isDark = (self.owner && self.owner.themeMode == 1) ? NO
+  const auto* curTab = self.owner ? [self.owner selectedTab] : nullptr;
+  const BOOL isIncog = curTab && curTab->incognito;
+  const BOOL isDark = isIncog ? YES
+    : ((self.owner && self.owner.themeMode == 1) ? NO
     : ((self.owner && self.owner.themeMode == 2) ? YES
-    : [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua]);
+    : [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua]));
 
-  NSColor* accent = ChromeAccent(self.owner.accentId, self.owner.accentHex, isDark);
+  NSColor* accent = isIncog ? ColorSRGB(0.45, 0.34, 0.85) : ChromeAccent(self.owner.accentId, self.owner.accentHex, isDark);
   NSColor* srgb = [accent colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: accent;
   CGFloat r = 0, g = 0, b = 0, a = 1;
   [srgb getRed:&r green:&g blue:&b alpha:&a];
@@ -6612,11 +6617,15 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   self.hideTabsMenuItem.title=revealed ? @"Hide Tabs" : @"Show Tabs";
 }
 - (void)applyPlateChrome {
+ const auto* tab=model.find(model.selected());
+ const BOOL isIncog=tab && tab->incognito;
  const BOOL systemDark=[[NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua,NSAppearanceNameAqua]]
   isEqualToString:NSAppearanceNameDarkAqua];
- const BOOL isDark=(self.themeMode==1) ? NO : ((self.themeMode==2) ? YES : systemDark);
+ const BOOL isDark=isIncog ? YES : ((self.themeMode==1) ? NO : ((self.themeMode==2) ? YES : systemDark));
  NSAppearance* targetAppearance=nil;
- if(self.themeMode==1) {
+ if(isIncog) {
+  targetAppearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+ } else if(self.themeMode==1) {
   targetAppearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
  } else if(self.themeMode==2) {
   targetAppearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
@@ -6624,13 +6633,17 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(self.window.appearance!=targetAppearance) {
   self.window.appearance=targetAppearance;
  }
- NSColor* fill=ChromeAccent(self.accentId, self.accentHex, isDark);
- NSColor* plate=isDark ? ColorSRGB(0.11,0.11,0.12) : ColorSRGB(0.97,0.96,0.95);
+ NSColor* fill=isIncog ? ColorSRGB(0.115,0.100,0.175) : ChromeAccent(self.accentId, self.accentHex, isDark);
+ NSColor* plate=isIncog ? ColorSRGB(0.088,0.078,0.138) : (isDark ? ColorSRGB(0.11,0.11,0.12) : ColorSRGB(0.97,0.96,0.95));
  NSColor* bar=plate;
- const auto* tab=model.find(model.selected());
  const BOOL home=tab && tab->url=="about:blank";
  auto it=runtimes.find(model.selected());
- if(!home && it!=runtimes.end() && !it->second.theme_hex.empty()) {
+ if(isIncog) {
+  // Always keep the unmistakable Private Indigo toolbar in Incognito so pages can't disguise it.
+  bar = ColorSRGB(0.095,0.084,0.148);
+  self.barInk = [NSColor colorWithCalibratedRed:0.95 green:0.93 blue:1.0 alpha:0.96];
+  self.barMuted = [NSColor colorWithCalibratedRed:0.84 green:0.80 blue:0.96 alpha:0.68];
+ } else if(!home && it!=runtimes.end() && !it->second.theme_hex.empty()) {
   NSColor* site=ColorFromHex(Text(it->second.theme_hex));
   if(site) bar=site;
   self.barInk=InkOn(bar);
@@ -6642,7 +6655,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  if(home) {
   // Clean, solid canvas for the home screen (no vertical gradient); the Aurora renders softly on top.
-  bar = isDark ? ColorSRGB(0.075,0.077,0.088) : ColorSRGB(0.980,0.980,0.976);
+  bar = isIncog ? ColorSRGB(0.072,0.064,0.112) : (isDark ? ColorSRGB(0.075,0.077,0.088) : ColorSRGB(0.980,0.980,0.976));
   self.barInk=InkOn(bar);
   self.barMuted=MutedInkOn(bar);
  }
@@ -6656,6 +6669,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  static BOOL lastHome = NO;
  const BOOL homeChanged = (home != lastHome);
  lastHome = home;
+ static BOOL lastIncog = NO;
+ const BOOL incogChanged = (isIncog != lastIncog);
+ lastIncog = isIncog;
  static BOOL lastStrip = NO;
  const BOOL stripChanged = (showStrip != lastStrip);
  lastStrip = showStrip;
@@ -6663,7 +6679,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  static BOOL lastFs = NO;
  const BOOL fsChanged = (isFs != lastFs);
  lastFs = isFs;
- const BOOL fillChanged=!self.window.backgroundColor || !ColorsEqual(self.window.backgroundColor, fill) || hex2Changed || homeChanged || stripChanged || fsChanged;
+ const BOOL fillChanged=!self.window.backgroundColor || !ColorsEqual(self.window.backgroundColor, fill) || hex2Changed || homeChanged || incogChanged || stripChanged || fsChanged;
  self.barColor=bar;
  if(self.graniteIntensity<=0.005 || home) {
   self.graniteView.hidden=YES;
@@ -6707,7 +6723,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    self.stage.layer.cornerRadius = isFs ? fsRadius : kPlateRadius;
    self.stage.layer.masksToBounds = YES;
    self.stage.layer.backgroundColor = bar.CGColor;
-   self.stage.layer.borderWidth = 0;
+   self.stage.layer.borderWidth = isIncog ? 1.0 : 0;
+   self.stage.layer.borderColor = isIncog ? [ColorSRGB(0.55,0.45,0.95) colorWithAlphaComponent:0.45].CGColor : NSColor.clearColor.CGColor;
    self.content.layer.backgroundColor = NSColor.clearColor.CGColor;
    self.content.layer.cornerRadius = isFs ? fsRadius : 0;
    self.content.layer.masksToBounds = YES;
@@ -7678,7 +7695,23 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const BOOL show=!self.quitting && tab && tab->url!="about:blank" && !model.closing(tab->id);
  self.omnibox.hidden=!show;
  self.stealthBadge.hidden=!isIncog;
- self.stealthBadgeWidth.constant=isIncog ? 96 : 0;
+ if(isIncog) {
+  const BOOL vpnOn = [SlatePrivacySecurity isIncognitoTunnelActive];
+  NSString* label = vpnOn ? @"Private · VPN" : @"Private";
+  self.stealthBadge.layer.backgroundColor = vpnOn
+    ? [ColorSRGB(0.14, 0.34, 0.24) colorWithAlphaComponent:0.95].CGColor
+    : [ColorSRGB(0.36, 0.26, 0.68) colorWithAlphaComponent:0.95].CGColor;
+  self.stealthBadge.layer.borderColor = vpnOn
+    ? [ColorSRGB(0.35, 0.80, 0.55) colorWithAlphaComponent:0.75].CGColor
+    : [ColorSRGB(0.66, 0.56, 1.0) colorWithAlphaComponent:0.75].CGColor;
+  self.stealthBadge.attributedTitle = [[NSAttributedString alloc] initWithString:label attributes:@{
+   NSFontAttributeName:[NSFont systemFontOfSize:10.5 weight:NSFontWeightSemibold],
+   NSForegroundColorAttributeName:[NSColor colorWithCalibratedWhite:0.98 alpha:1.0]
+  }];
+  self.stealthBadgeWidth.constant = vpnOn ? 92 : 58;
+ } else {
+  self.stealthBadgeWidth.constant = 0;
+ }
  const BOOL showSecurity=show;
  self.securityButton.hidden=!showSecurity;
  self.securityButtonWidth.constant=showSecurity ? 18 : 0;
