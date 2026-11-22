@@ -779,7 +779,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   auto sites = slate::WebKitShields::Shared().DisabledSites();
   std::sort(sites.begin(), sites.end());
-  CGFloat docH = MAX(NSHeight(_containerView.bounds), 640.0 + sites.size() * 30.0);
+  CGFloat docH = MAX(NSHeight(_containerView.bounds), 660.0 + sites.size() * 30.0);
   NSView* doc = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(_containerView.bounds), docH)];
   scroll.documentView = doc;
   [_containerView addSubview:scroll];
@@ -790,19 +790,19 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   title.frame = NSMakeRect(24, y, 320, 24);
   [doc addSubview:title];
 
-  auto addToggleRow = ^(NSString* heading, NSString* sub, BOOL on, SEL action, NSSwitch** outSwitch) {
+  auto addToggleRow = ^(CGFloat rowY, NSString* heading, NSString* sub, BOOL on, SEL action, NSSwitch** outSwitch) {
     NSTextField* h = [NSTextField labelWithString:heading];
     h.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    h.frame = NSMakeRect(24, y, 360, 18);
+    h.frame = NSMakeRect(24, rowY, 370, 18);
     [doc addSubview:h];
 
     NSTextField* s = [NSTextField labelWithString:sub];
     s.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
     s.textColor = NSColor.secondaryLabelColor;
-    s.frame = NSMakeRect(24, y - 17, 376, 15);
+    s.frame = NSMakeRect(24, rowY - 17, 380, 15);
     [doc addSubview:s];
 
-    NSSwitch* sw = [[NSSwitch alloc] initWithFrame:NSMakeRect(420, y - 9, 40, 22)];
+    NSSwitch* sw = [[NSSwitch alloc] initWithFrame:NSMakeRect(420, rowY - 9, 40, 22)];
     sw.state = on ? NSControlStateValueOn : NSControlStateValueOff;
     sw.target = self;
     sw.action = action;
@@ -812,7 +812,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   y -= 44;
   NSSwitch* s1 = nil;
-  addToggleRow(@"Ad & Tracker Blocker (High Alert)",
+  addToggleRow(y, @"Ad & Tracker Blocker (High Alert)",
                @"Native WebKit filter (EasyList + EasyPrivacy + Slate rules)",
                slate::WebKitShields::Shared().IsEnabled(),
                @selector(toggleShieldsClicked:), &s1);
@@ -820,7 +820,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   y -= 48;
   NSSwitch* s2 = nil;
-  addToggleRow(@"Strict Tracking & Fingerprint Protection",
+  addToggleRow(y, @"Strict Tracking & Fingerprint Protection",
                @"Strip utm/fbclid/gclid trackers, send Global Privacy Control & DNT",
                [SlatePrivacySecurity strictTrackingProtectionEnabled],
                @selector(toggleStrictPrivacyClicked:), &s2);
@@ -828,7 +828,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   y -= 48;
   NSSwitch* s3 = nil;
-  addToggleRow(@"HTTPS-Only Mode",
+  addToggleRow(y, @"HTTPS-Only Mode",
                @"Automatically upgrade insecure http:// connections to https://",
                [SlatePrivacySecurity httpsOnlyEnabled],
                @selector(toggleHttpsOnlyClicked:), &s3);
@@ -836,15 +836,15 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   y -= 48;
   NSSwitch* s4 = nil;
-  addToggleRow(@"Block WebRTC IP Leaks in Incognito",
+  addToggleRow(y, @"Block WebRTC IP Leaks in Incognito",
                @"Disable RTCPeerConnection in Private tabs to prevent real-IP leaks",
                [SlatePrivacySecurity blockWebRTCInIncognito],
                @selector(toggleWebRTCBlockClicked:), &s4);
   self.switchWebRTCBlock = s4;
 
   // Incognito VPN / Proxy Tunnel Card
-  y -= 32;
-  NSView* vpnCard = [[NSView alloc] initWithFrame:NSMakeRect(24, y - 226, 438, 226)];
+  y -= 36;
+  NSView* vpnCard = [[NSView alloc] initWithFrame:NSMakeRect(24, y - 246, 438, 246)];
   vpnCard.wantsLayer = YES;
   vpnCard.layer.cornerRadius = 11;
   if (@available(macOS 11.0, *)) vpnCard.layer.cornerCurve = kCACornerCurveContinuous;
@@ -855,16 +855,16 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   NSTextField* vpnTitle = [NSTextField labelWithString:@"Incognito VPN / Proxy Tunnel"];
   vpnTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  vpnTitle.frame = NSMakeRect(14, 194, 300, 18);
+  vpnTitle.frame = NSMakeRect(14, 214, 300, 18);
   [vpnCard addSubview:vpnTitle];
 
   NSTextField* vpnSub = [NSTextField labelWithString:@"Route all Private tabs through Tor or your VPN’s SOCKS5 / HTTP proxy"];
   vpnSub.font = [NSFont systemFontOfSize:11];
   vpnSub.textColor = NSColor.secondaryLabelColor;
-  vpnSub.frame = NSMakeRect(14, 176, 410, 15);
+  vpnSub.frame = NSMakeRect(14, 196, 410, 15);
   [vpnCard addSubview:vpnSub];
 
-  NSPopUpButton* modePop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(14, 142, 410, 26) pullsDown:NO];
+  NSPopUpButton* modePop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(14, 162, 410, 26) pullsDown:NO];
   [modePop addItemsWithTitles:@[
     @"Off (Direct)",
     @"Tor Local Tunnel (SOCKS5 127.0.0.1:9050)",
@@ -877,23 +877,23 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   self.vpnModePopup = modePop;
   [vpnCard addSubview:modePop];
 
-  self.vpnHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 108, 294, 24)];
+  self.vpnHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 128, 294, 24)];
   self.vpnHostField.placeholderString = @"Host (e.g. 10.64.0.1 or us-nyc.socks5.mullvad.net)";
   self.vpnHostField.stringValue = [SlatePrivacySecurity incognitoProxyHost];
   [vpnCard addSubview:self.vpnHostField];
 
-  self.vpnPortField = [[NSTextField alloc] initWithFrame:NSMakeRect(316, 108, 108, 24)];
+  self.vpnPortField = [[NSTextField alloc] initWithFrame:NSMakeRect(316, 128, 108, 24)];
   self.vpnPortField.placeholderString = @"Port (1080)";
   NSInteger portVal = [SlatePrivacySecurity incognitoProxyPort];
   self.vpnPortField.stringValue = portVal > 0 ? [NSString stringWithFormat:@"%ld", (long)portVal] : @"";
   [vpnCard addSubview:self.vpnPortField];
 
-  self.vpnUserField = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 76, 200, 24)];
+  self.vpnUserField = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 96, 200, 24)];
   self.vpnUserField.placeholderString = @"Username (optional)";
   self.vpnUserField.stringValue = [SlatePrivacySecurity incognitoProxyUsername];
   [vpnCard addSubview:self.vpnUserField];
 
-  self.vpnPassField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(222, 76, 202, 24)];
+  self.vpnPassField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(222, 96, 202, 24)];
   self.vpnPassField.placeholderString = @"Password (Keychain)";
   self.vpnPassField.stringValue = [SlatePrivacySecurity incognitoProxyPassword];
   [vpnCard addSubview:self.vpnPassField];
@@ -901,27 +901,27 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   self.vpnFailClosedCheck = [NSButton checkboxWithTitle:@"Kill Switch: block Incognito if tunnel is unreachable" target:nil action:nil];
   self.vpnFailClosedCheck.state = [SlatePrivacySecurity incognitoProxyFailClosed] ? NSControlStateValueOn : NSControlStateValueOff;
   self.vpnFailClosedCheck.font = [NSFont systemFontOfSize:11.5];
-  self.vpnFailClosedCheck.frame = NSMakeRect(14, 46, 410, 20);
+  self.vpnFailClosedCheck.frame = NSMakeRect(14, 66, 410, 20);
   [vpnCard addSubview:self.vpnFailClosedCheck];
 
   NSButton* saveVpn = [NSButton buttonWithTitle:@"Save Tunnel" target:self action:@selector(saveVpnClicked:)];
-  saveVpn.frame = NSMakeRect(14, 12, 106, 26);
+  saveVpn.frame = NSMakeRect(14, 34, 106, 26);
   [vpnCard addSubview:saveVpn];
 
   NSButton* testVpn = [NSButton buttonWithTitle:@"Test Tunnel" target:self action:@selector(testVpnClicked:)];
-  testVpn.frame = NSMakeRect(126, 12, 100, 26);
+  testVpn.frame = NSMakeRect(126, 34, 100, 26);
   [vpnCard addSubview:testVpn];
 
   self.vpnStatusLabel = [NSTextField labelWithString:[SlatePrivacySecurity isIncognitoTunnelActive] ? @"Active for new Incognito tabs" : @"Tunnel off"];
   self.vpnStatusLabel.font = [NSFont systemFontOfSize:11];
   self.vpnStatusLabel.textColor = [SlatePrivacySecurity isIncognitoTunnelActive] ? NSColor.systemGreenColor : NSColor.secondaryLabelColor;
   self.vpnStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-  self.vpnStatusLabel.frame = NSMakeRect(234, 17, 192, 16);
+  self.vpnStatusLabel.frame = NSMakeRect(14, 10, 410, 16);
   [vpnCard addSubview:self.vpnStatusLabel];
   [self updateVpnFieldStates];
 
   // Allowed Sites
-  y -= 254;
+  y -= 274;
   NSTextField* allowedTitle = [NSTextField labelWithString:@"Allowed Sites (Ad Blocker Paused)"];
   allowedTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
   allowedTitle.frame = NSMakeRect(24, y, 320, 20);
