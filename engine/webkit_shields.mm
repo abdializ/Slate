@@ -95,10 +95,17 @@ static NSString* const kYahooAdDefuserSource = @R"JS(
 
   cleanYahooAds();
   try {
-    const obs = new MutationObserver(cleanYahooAds);
+    let yahooTimer = 0;
+    const obs = new MutationObserver(function() {
+      if (document.hidden || yahooTimer) return;
+      yahooTimer = setTimeout(function() {
+        yahooTimer = 0;
+        if (!document.hidden) cleanYahooAds();
+      }, 300);
+    });
     obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
   } catch(e) {}
-  setInterval(cleanYahooAds, 1000);
+  setInterval(function() { if (!document.hidden) cleanYahooAds(); }, 3000);
 })();
 )JS";
 
@@ -608,6 +615,7 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
   }
 
   function scanMedia() {
+    if (document.hidden) return;
     triggerSkipButtons();
     const videos = document.getElementsByTagName('video');
     for (let i = 0; i < videos.length; i++) {
@@ -620,11 +628,11 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
   try {
     let obsTimer = 0;
     const obs = new MutationObserver(function() {
-      if (obsTimer) return;
+      if (document.hidden || obsTimer) return;
       obsTimer = setTimeout(function() {
         obsTimer = 0;
         scanMedia();
-      }, 100);
+      }, 250);
     });
     const target = document.body || document.documentElement;
     if (target) {
@@ -638,7 +646,7 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
     }
   } catch(e) {}
 
-  setInterval(scanMedia, 1000);
+  setInterval(scanMedia, 2000);
   document.addEventListener('play', scanMedia, true);
   document.addEventListener('loadedmetadata', scanMedia, true);
   document.addEventListener('resize', scanMedia, true);
@@ -1167,7 +1175,7 @@ void WebKitShields::InjectStreamingProtection(WKWebView* webView) const {
   if (!host.length || [disabled_sites_ containsObject:host]) return;
   NSArray<NSString*>* domains = @[@"max.com", @"hbomax.com", @"disneyplus.com",
     @"hulu.com", @"peacocktv.com", @"paramountplus.com", @"youtube.com",
-    @"twitch.tv", @"kick.com", @"crunchyroll.com", @"tubitv.com", @"pluto.tv"];
+    @"kick.com", @"crunchyroll.com", @"tubitv.com", @"pluto.tv"];
   for (NSString* domain in domains) {
     if ([host isEqualToString:domain] || [host hasSuffix:[@"." stringByAppendingString:domain]]) {
       [webView evaluateJavaScript:kStreamAdDefuserSource completionHandler:nil];

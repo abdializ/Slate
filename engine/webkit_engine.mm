@@ -852,6 +852,22 @@ class WebKitEngine final : public BrowserEngine {
         [config.preferences setValue:@NO forKey:@"backspaceKeyNavigationEnabled"];
       } @catch (id ex) {}
     }
+    // macOS energy & battery optimization: match Safari's background tab suspension,
+    // progressive hidden-tab DOM timer throttling, and low-power media audio/video buffering.
+    if (@available(macOS 14.0, *)) {
+      config.preferences.inactiveSchedulingPolicy = WKInactiveSchedulingPolicySuspend;
+    }
+    for (NSString* selName in @[
+      @"_setDOMTimersThrottlingEnabled:",
+      @"_setHiddenPageDOMTimerThrottlingEnabled:",
+      @"_setHiddenPageDOMTimerThrottlingAutoIncreases:",
+      @"_setLowPowerVideoAudioBufferSizeEnabled:"
+    ]) {
+      SEL s = NSSelectorFromString(selName);
+      if ([config.preferences respondsToSelector:s]) {
+        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(config.preferences, s, YES);
+      }
+    }
     [SlateFrameRate applyToPreferences:config.preferences];
 
     // Attach shields (ad blocking, stream ad defusers, and anti-fingerprinting)

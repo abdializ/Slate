@@ -46,7 +46,7 @@ class MacMemoryMonitor final : public MemoryMonitor {
   } else { state_->known=false; }
   timer_=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,dispatch_get_main_queue());
   if(timer_) {
-   dispatch_source_set_timer(timer_,dispatch_time(DISPATCH_TIME_NOW,0),10*NSEC_PER_SEC,NSEC_PER_SEC);
+   dispatch_source_set_timer(timer_,dispatch_time(DISPATCH_TIME_NOW,0),60*NSEC_PER_SEC,15*NSEC_PER_SEC);
    dispatch_source_set_event_handler(timer_, ^{ state->emit(); });
    dispatch_resume(timer_);
   }

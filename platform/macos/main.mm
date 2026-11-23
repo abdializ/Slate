@@ -4535,9 +4535,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self stopGreetingTimer];
  [self updateGreetingMessage];
  __weak typeof(self) weakSelf=self;
- _greetingTimer=[NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer* timer) {
+ _greetingTimer=[NSTimer scheduledTimerWithTimeInterval:300.0 repeats:YES block:^(NSTimer* timer) {
+  if(!weakSelf || weakSelf.isHiddenOrHasHiddenAncestor) return;
   [weakSelf updateGreetingMessage];
  }];
+ _greetingTimer.tolerance=30.0;
  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onClockChanged:) name:NSSystemClockDidChangeNotification object:nil];
  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onClockChanged:) name:NSCalendarDayChangedNotification object:nil];
 }
@@ -6228,15 +6230,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSAlert* alert=[[NSAlert alloc] init]; alert.messageText=@"Session recovery"; alert.informativeText=loadError;
   [alert beginSheetModalForWindow:self.window completionHandler:nil];
  }
- // Setup mouse monitor for hover-to-peek sidebar
- self.mouseMovedMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskMouseMoved handler:^(NSEvent *event) {
-  [weakSelf checkSidebarPeek];
- }];
- // Local monitor catches moves when the app is active and over its own windows
- self.localMouseMovedMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved handler:^NSEvent*(NSEvent *event) {
-  [weakSelf checkSidebarPeek];
-  return event;
- }];
+ // Install mouse-move monitors ONLY when the vertical sidebar is collapsed so Slate
+ // incurs zero global mouse wakeups during normal browsing.
+ [self syncSidebarPeekMonitors];
  // Initialize custom downloads directory if configured on active space
  SlateSpace* initialSpace = [self.spacesManager currentSpace];
  if(initialSpace.downloads.length) {
@@ -6437,6 +6433,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.verticalMenuItem.state=self.verticalTabs ? NSControlStateValueOn : NSControlStateValueOff;
  fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
  [self applyTabLayout:NO];
+ [self syncSidebarPeekMonitors];
 }
 - (void)toggleTabsReveal:(id)sender {
  if(self.quitting) return;
@@ -6452,6 +6449,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   self.sidebarLeading.constant=0;
   self.tabsCollapsed=NO;
   [self persistUiPrefs];
+  [self syncSidebarPeekMonitors];
   fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
   [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
    ctx.duration=0.2;
@@ -6467,6 +6465,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const BOOL foldingAway = (self.verticalTabs && !self.tabsCollapsed);
  self.tabsCollapsed=!self.tabsCollapsed;
  [self persistUiPrefs];
+ [self syncSidebarPeekMonitors];
  fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
  if(foldingAway) {
   // Wait briefly for WebKit's next presentation update when folding away, avoiding
@@ -6510,8 +6509,30 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self persistUiPrefs];
  fprintf(stderr,"SLATE_FRAMERATE fast=%d\n", self.pages120Hz ? 1 : 0);
 }
+- (void)syncSidebarPeekMonitors {
+ const BOOL needed = (self.verticalTabs && self.tabsCollapsed && !self.quitting);
+ if(!needed) {
+  if(self.mouseMovedMonitor) { [NSEvent removeMonitor:self.mouseMovedMonitor]; self.mouseMovedMonitor=nil; }
+  if(self.localMouseMovedMonitor) { [NSEvent removeMonitor:self.localMouseMovedMonitor]; self.localMouseMovedMonitor=nil; }
+  return;
+ }
+ __weak SlateDelegate* weakSelf=self;
+ if(!self.mouseMovedMonitor) {
+  self.mouseMovedMonitor=[NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskMouseMoved handler:^(NSEvent *event) {
+   [weakSelf checkSidebarPeek];
+  }];
+ }
+ if(!self.localMouseMovedMonitor) {
+  self.localMouseMovedMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved handler:^NSEvent*(NSEvent *event) {
+   [weakSelf checkSidebarPeek];
+   return event;
+  }];
+ }
+}
 - (void)checkSidebarPeek {
  if(!self.verticalTabs || !self.tabsCollapsed || self.quitting) return;
+ if(!self.window || !self.window.isVisible || self.window.isMiniaturized) return;
+ if(!NSApp.isActive && !self.sidebarPeeking) return;
  NSPoint loc = [NSEvent mouseLocation];
  NSRect windowRect = self.window.frame;
  CGFloat relX = loc.x - NSMinX(windowRect);
