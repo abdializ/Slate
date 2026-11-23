@@ -37,6 +37,7 @@ add_executable(Slate MACOSX_BUNDLE
   pdf_overlay.mm
   find_bar.mm
   privacy_security.mm
+  extensions_manager.mm
   AppIcon.icns
   AppIcon.png
   TabIconTemplate.png

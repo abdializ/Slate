@@ -5,6 +5,7 @@
 #import "engine/webkit_shields.h"
 #import "engine/swipe_navigation.h"
 #import "platform/macos/privacy_security.h"
+#import "platform/macos/extensions_manager.h"
 #include "engine/page_theme_js.h"
 #include "engine/image_download_js.h"
 #include "engine/pip_state.h"
@@ -300,6 +301,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
       ![scheme isEqualToString:@"about"] &&
       ![scheme isEqualToString:@"blob"] &&
       ![scheme isEqualToString:@"data"] &&
+      ![scheme isEqualToString:@"webkit-extension"] &&
+      ![scheme isEqualToString:@"safari-web-extension"] &&
+      ![scheme isEqualToString:@"chrome-extension"] &&
       !targetUrl.isFileURL) {
     fprintf(stderr, "SLATE_BLOCKED_EXTERNAL_SCHEME scheme=%s url=%s\n",
             scheme.UTF8String ?: "nil", urlStr.UTF8String ?: "nil");
@@ -794,6 +798,12 @@ class WebKitEngine final : public BrowserEngine {
       config.processPool = GetSharedProcessPool(incognito_);
     }
     config.applicationNameForUserAgent = SlateSafariApplicationName();
+    if (@available(macOS 15.4, *)) {
+      WKWebExtensionController* extCtrl = [SlateExtensionsManager sharedManager].controller;
+      if (extCtrl) {
+        config.webExtensionController = extCtrl;
+      }
+    }
     config.allowsAirPlayForMediaPlayback = YES;
     config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeAudio;
 

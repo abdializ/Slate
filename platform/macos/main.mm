@@ -37,6 +37,7 @@
 #import "platform/macos/download_manager.h"
 #import "platform/macos/spaces_manager.h"
 #import "platform/macos/settings_panel.h"
+#import "platform/macos/extensions_manager.h"
 #import "platform/macos/site_card_panel.h"
 #import "platform/macos/float_window.h"
 #import "platform/macos/form_relay.h"
@@ -511,7 +512,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 
 @class SlateThemePanel;
 @class SlateDetachedTabWindow;
-@interface SlateDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSMenuDelegate,SlateBookmarksOwner,SlateOmniboxDelegate,SlateTabSwitcherOwner> {
+@interface SlateDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSMenuDelegate,SlateBookmarksOwner,SlateOmniboxDelegate,SlateTabSwitcherOwner,SlateExtensionHostDelegate> {
  slate::WorkspaceLayout workspace;
  slate::SplitDragIntent splitIntent;
 }
@@ -568,6 +569,8 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) NSLayoutConstraint* tabLeadingTitle;
 @property(strong) NSButton* extensionsButton;
 @property(strong) NSButton* shieldsButton;
+@property(strong) NSStackView* extensionsStack;
+@property(strong) NSMutableDictionary<NSString*,NSButton*>* extensionButtons;
 @property(strong) NSButton* bookmarkButton;
 @property(strong) NSView* homeView;
 @property(strong) SlateHomeBoard* homeBoard;
@@ -4892,6 +4895,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 @property(strong) NSButton* securityButton;
 @property(strong) NSButton* bookmarkButton;
 @property(strong) NSButton* shieldsButton;
+@property(strong) NSStackView* extensionsStack;
+@property(strong) NSMutableDictionary<NSString*,NSButton*>* extensionButtons;
 @property(strong) NSButton* downloadButton;
 - (instancetype)initWithOwner:(SlateDelegate*)owner tab:(TabId)tabId atScreenPoint:(NSPoint)point;
 - (void)refresh;
@@ -5998,6 +6003,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.toolbar addSubview:self.downloadButton];
  [self.toolbar addSubview:self.shieldsButton];
  [self.toolbar addSubview:self.bookmarkButton];
+ self.extensionsStack=[[NSStackView alloc] initWithFrame:NSZeroRect];
+ self.extensionsStack.orientation=NSUserInterfaceLayoutOrientationHorizontal;
+ self.extensionsStack.alignment=NSLayoutAttributeCenterY;
+ self.extensionsStack.spacing=4;
+ self.extensionsStack.translatesAutoresizingMaskIntoConstraints=NO;
+ self.extensionButtons=[NSMutableDictionary dictionary];
+ [self.toolbar addSubview:self.extensionsStack];
+ [NSLayoutConstraint activateConstraints:@[
+  [self.extensionsStack.trailingAnchor constraintEqualToAnchor:self.bookmarkButton.leadingAnchor constant:-6],
+  [self.extensionsStack.centerYAnchor constraintEqualToAnchor:self.toolbar.centerYAnchor constant:1],
+  [self.extensionsStack.heightAnchor constraintEqualToConstant:24]
+ ]];
  self.loadBar=[[NSView alloc] initWithFrame:NSZeroRect];
  self.loadBar.translatesAutoresizingMaskIntoConstraints=NO;
  self.loadBar.wantsLayer=YES;
@@ -6108,7 +6125,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.omnibox setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
  [self.omnibox setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
  self.omniboxLeading=[self.omnibox.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.navCluster.trailingAnchor constant:12];
- self.omniboxTrailing=[self.omnibox.trailingAnchor constraintLessThanOrEqualToAnchor:self.bookmarkButton.leadingAnchor constant:-12];
+ self.omniboxTrailing=[self.omnibox.trailingAnchor constraintLessThanOrEqualToAnchor:self.extensionsStack.leadingAnchor constant:-10];
  // Keep omnibox sizing/centering priorities strictly below NSLayoutPriorityWindowSizeStayPut (500)
  // so hiding/unhiding the sidebar can never widen the browser window.
  NSLayoutConstraint* omniboxCenter=[self.omnibox.centerXAnchor constraintEqualToAnchor:self.toolbar.centerXAnchor];
@@ -6219,6 +6236,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   if(!slate::WebKitShields::Shared().IsEnabled()) shields->set_mode(slate::ShieldMode::Off);
   for(const auto& site:slate::WebKitShields::Shared().DisabledSites()) shields->pause_site(site);
   fprintf(stderr,"SLATE_SHIELDS native_rules=%zu\n",slate::WebKitShields::Shared().CompiledRuleCount());
+ }
+ {
+  SlateExtensionsManager* extMgr = [SlateExtensionsManager sharedManager];
+  extMgr.hostDelegate = self;
+  [extMgr startIfNeeded];
+  [extMgr notifyWindowOpened];
+  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildExtensionButtons) name:SlateExtensionsDidChangeNotification object:nil];
+  [self rebuildExtensionButtons];
  }
  if(workspace.visible_for(model.selected())) {
   const TabId focused=model.selected();
@@ -8618,6 +8643,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)windowDidBecomeKey:(NSNotification*)notification {
  [self.zoomIndicator dismiss];
  [self updateZoomMenu];
+ [[SlateExtensionsManager sharedManager] notifyWindowFocused];
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)table {
  return (NSInteger)[self sidebarRows].size();
@@ -10301,8 +10327,13 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 // Slate note: Selecting an unloaded tab creates its runtime on demand; selecting an already loaded tab
 // reuses it.
 - (void)activateTab:(TabId)identifier {
+ const TabId prevTab = model.selected();
  [self rememberOmniboxDraft];
  if(self.quitting) { [self scheduleRefresh]; return; }
+ if(identifier != prevTab) {
+  [[SlateExtensionsManager sharedManager] notifyTabActivated:identifier previousTabId:prevTab];
+  [self rebuildExtensionButtons];
+ }
  if(SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)]) {
   [detached selectTab:identifier];
   [detached.window makeKeyAndOrderFront:nil];
@@ -12074,12 +12105,101 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
 }
 - (void)showExtensions:(id)sender {
- NSAlert* alert=[[NSAlert alloc] init];
- alert.messageText=@"Extensions stay off in this build";
- alert.informativeText=@"Chrome Web Store add-ons are not loaded here. This Chromium embed (Alloy) has no extension installer, and Slate does not load unpacked packages from disk. That keeps school and personal pages from running extra third-party code with the browser's privileges.\n\nThe puzzle-piece control and the Extensions menu are placeholders for a later, reviewed extension model. Sandbox, site isolation, and certificate checks stay on.";
- [alert addButtonWithTitle:@"OK"];
- if(self.window) [alert beginSheetModalForWindow:self.window completionHandler:nil];
- else [alert runModal];
+ (void)sender;
+ [[SlateSettingsPanel sharedPanel] showForSlateDelegate:self selectedPage:@"extensions"];
+}
+- (void)rebuildExtensionButtons {
+ if(!self.extensionsStack) return;
+ for(NSView* v in [self.extensionsStack.arrangedSubviews copy]) {
+  [self.extensionsStack removeArrangedSubview:v];
+  [v removeFromSuperview];
+ }
+ [self.extensionButtons removeAllObjects];
+ SlateExtensionsManager* mgr = [SlateExtensionsManager sharedManager];
+ for(SlateExtensionRecord* rec in mgr.extensions) {
+  if(!rec.enabled) continue;
+  NSImage* img = [mgr actionIconForExtensionId:rec.identifier size:CGSizeMake(16, 16)]
+    ?: [NSImage imageWithSystemSymbolName:@"puzzlepiece.extension" accessibilityDescription:rec.name];
+  if(img) img.size = NSMakeSize(16, 16);
+  NSButton* btn = [NSButton buttonWithImage:img target:self action:@selector(extensionToolbarButtonClicked:)];
+  btn.identifier = rec.identifier;
+  btn.bezelStyle = NSBezelStyleInline;
+  btn.bordered = NO;
+  btn.imagePosition = NSImageOnly;
+  btn.refusesFirstResponder = YES;
+  btn.translatesAutoresizingMaskIntoConstraints = NO;
+  btn.wantsLayer = YES;
+  btn.layer.cornerRadius = 5.0;
+  NSString* badge = [mgr actionBadgeForExtensionId:rec.identifier];
+  NSString* tip = [mgr actionTooltipForExtensionId:rec.identifier] ?: rec.name;
+  btn.toolTip = badge.length ? [NSString stringWithFormat:@"%@ (%@)", tip, badge] : tip;
+  [NSLayoutConstraint activateConstraints:@[
+   [btn.widthAnchor constraintEqualToConstant:22],
+   [btn.heightAnchor constraintEqualToConstant:22]
+  ]];
+  [self.extensionsStack addArrangedSubview:btn];
+  self.extensionButtons[rec.identifier] = btn;
+ }
+}
+- (void)extensionToolbarButtonClicked:(NSButton*)sender {
+ if(!sender.identifier.length) return;
+ [[SlateExtensionsManager sharedManager] performActionForExtensionId:sender.identifier anchorView:sender];
+}
+#pragma mark - SlateExtensionHostDelegate
+- (NSWindow*)extensionHostWindow { return self.window; }
+- (NSArray<NSNumber*>*)extensionHostTabIds {
+ NSMutableArray<NSNumber*>* ids = [NSMutableArray array];
+ for(const auto& tab : model.tabs()) [ids addObject:@(tab.id)];
+ return ids;
+}
+- (uint64_t)extensionHostSelectedTabId { return model.selected(); }
+- (WKWebView*)extensionHostWebViewForTabId:(uint64_t)tabId {
+ auto it = runtimes.find(tabId);
+ if(it == runtimes.end() || !it->second.host) return nil;
+ for(NSView* sub in it->second.host.subviews) {
+  if([sub isKindOfClass:WKWebView.class]) return (WKWebView*)sub;
+ }
+ return nil;
+}
+- (NSString*)extensionHostTitleForTabId:(uint64_t)tabId {
+ const auto* tab = model.find(tabId);
+ return tab ? Text(tab->title) : nil;
+}
+- (NSURL*)extensionHostURLForTabId:(uint64_t)tabId {
+ const auto* tab = model.find(tabId);
+ if(!tab || tab->url.empty()) return nil;
+ return [NSURL URLWithString:Text(tab->url)];
+}
+- (BOOL)extensionHostIsIncognitoTabId:(uint64_t)tabId {
+ const auto* tab = model.find(tabId);
+ return tab ? (BOOL)tab->incognito : NO;
+}
+- (BOOL)extensionHostIsLoadingTabId:(uint64_t)tabId {
+ auto it = runtimes.find(tabId);
+ return it != runtimes.end() ? (BOOL)it->second.loading : NO;
+}
+- (BOOL)extensionHostIsMutedTabId:(uint64_t)tabId { return [self tabIsMuted:tabId]; }
+- (BOOL)extensionHostIsAudibleTabId:(uint64_t)tabId { return [self tabIsAudible:tabId]; }
+- (BOOL)extensionHostIsPinnedTabId:(uint64_t)tabId {
+ const auto* tab = model.find(tabId);
+ return tab ? (BOOL)tab->pinned : NO;
+}
+- (void)extensionHostActivateTabId:(uint64_t)tabId { [self activateTab:tabId]; }
+- (void)extensionHostCloseTabId:(uint64_t)tabId { [self closeTabWithId:tabId]; }
+- (void)extensionHostToggleMuteTabId:(uint64_t)tabId muted:(BOOL)muted {
+ if([self tabIsMuted:tabId] != muted) [self toggleTabMute:tabId];
+}
+- (uint64_t)extensionHostOpenURL:(NSURL*)url incognito:(BOOL)incognito activate:(BOOL)activate {
+ NSString* target = url.absoluteString.length ? url.absoluteString : @"about:blank";
+ const TabId prev = model.selected();
+ [self openUrl:target incognito:incognito];
+ const TabId created = model.selected();
+ [[SlateExtensionsManager sharedManager] notifyTabOpened:created];
+ if(!activate && prev && model.find(prev)) [self activateTab:prev];
+ return created;
+}
+- (NSView*)extensionHostAnchorViewForExtensionId:(NSString*)extensionId {
+ return self.extensionButtons[extensionId] ?: self.shieldsButton;
 }
 - (void)reloadOrGo:(id)sender {
  if(self.address.currentEditor) [self navigate:sender];

@@ -11,6 +11,8 @@
 #import "platform/macos/download_manager.h"
 #import "platform/macos/specs_panel.h"
 #import "platform/macos/privacy_security.h"
+#import "platform/macos/extensions_manager.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "engine/webkit_shields.h"
 #include <algorithm>
 #import <QuartzCore/QuartzCore.h>
@@ -312,6 +314,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     _currentPage = @"appearance";
     _railButtons = [NSMutableArray array];
     _swatchButtons = [NSMutableArray array];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(extensionsDidChange:) name:SlateExtensionsDidChangeNotification object:nil];
     [self setupLayout];
   }
   return self;
@@ -383,6 +386,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     @{@"id":@"downloads",  @"title":@"Downloads",  @"icon":@"arrow.down.circle"},
     @{@"id":@"passwords",  @"title":@"Passwords",  @"icon":@"key"},
     @{@"id":@"privacy",    @"title":@"Privacy",    @"icon":@"shield"},
+    @{@"id":@"extensions", @"title":@"Extensions", @"icon":@"puzzlepiece.extension"},
     @{@"id":@"about",      @"title":@"About",      @"icon":@"info.circle"}
   ];
 
@@ -634,6 +638,8 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     [self renderPasswordsPage];
   } else if ([_currentPage isEqualToString:@"privacy"]) {
     [self renderPrivacyPage];
+  } else if ([_currentPage isEqualToString:@"extensions"]) {
+    [self renderExtensionsPage];
   } else if ([_currentPage isEqualToString:@"about"]) {
     [self renderAboutPage];
   }
@@ -1210,6 +1216,221 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 }
 - (void)toggleShieldsClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleShields:sender];
+}
+
+#pragma mark - Extensions Page
+
+- (void)extensionsDidChange:(NSNotification*)note {
+  (void)note;
+  if ([_currentPage isEqualToString:@"extensions"] && self.isVisible) {
+    [self renderCurrentPage];
+  }
+}
+
+- (void)renderExtensionsPage {
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = [self addPageHeaderTo:doc title:@"Extensions" subtitle:@"Run Chrome WebExtensions natively on macOS WebKit."];
+
+  if (![SlateExtensionsManager isSupported]) {
+    SlateSettingsCard* unavail = [self addCardTo:doc y:y height:64];
+    NSTextField* msg = [NSTextField wrappingLabelWithString:@"Native WebExtensions require macOS 15.4 or later."];
+    msg.font = [NSFont systemFontOfSize:12.5];
+    msg.textColor = NSColor.secondaryLabelColor;
+    msg.frame = NSMakeRect(16, 22, NSWidth(unavail.bounds) - 32, 20);
+    msg.autoresizingMask = NSViewWidthSizable;
+    [unavail addSubview:msg];
+    [self finishCanvas:doc scroll:scroll contentHeight:y + 64];
+    return;
+  }
+
+  // Install Card
+  y = [self addSectionCaptionTo:doc y:y text:@"Add Extension"];
+  SlateSettingsCard* addCard = [self addCardTo:doc y:y height:60];
+  CGFloat cw = NSWidth(addCard.bounds);
+
+  SlateQuietButton* crxBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(16, 17, 146, 26)
+                                                               title:@"Install .crx / .zip…"
+                                                              target:self
+                                                              action:@selector(installExtensionArchiveClicked:)
+                                                             primary:YES];
+  [addCard addSubview:crxBtn];
+
+  SlateQuietButton* unpackedBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(170, 17, 134, 26)
+                                                                    title:@"Load Unpacked…"
+                                                                   target:self
+                                                                   action:@selector(loadUnpackedExtensionClicked:)
+                                                                  primary:NO];
+  [addCard addSubview:unpackedBtn];
+
+  NSTextField* hint = [NSTextField labelWithString:@"MV2 & MV3 supported"];
+  hint.font = [NSFont systemFontOfSize:11];
+  hint.textColor = NSColor.tertiaryLabelColor;
+  hint.alignment = NSTextAlignmentRight;
+  hint.frame = NSMakeRect(cw - 146, 23, 130, 14);
+  hint.autoresizingMask = NSViewMinXMargin;
+  [addCard addSubview:hint];
+
+  // Installed Extensions Card
+  y += 60 + 20;
+  NSArray<SlateExtensionRecord*>* list = [SlateExtensionsManager sharedManager].extensions;
+  y = [self addSectionCaptionTo:doc y:y text:[NSString stringWithFormat:@"Installed (%lu)", (unsigned long)list.count]];
+
+  if (list.count == 0) {
+    SlateSettingsCard* emptyCard = [self addCardTo:doc y:y height:68];
+    NSTextField* empty = [NSTextField wrappingLabelWithString:@"No extensions installed yet. Choose a Chrome .crx / .zip package or an unpacked extension folder containing manifest.json."];
+    empty.font = [NSFont systemFontOfSize:12];
+    empty.textColor = NSColor.secondaryLabelColor;
+    empty.frame = NSMakeRect(16, 18, NSWidth(emptyCard.bounds) - 32, 34);
+    empty.autoresizingMask = NSViewWidthSizable;
+    [emptyCard addSubview:empty];
+    [self finishCanvas:doc scroll:scroll contentHeight:y + 68];
+    return;
+  }
+
+  const CGFloat rowH = 82.0;
+  SlateSettingsCard* listCard = [self addCardTo:doc y:y height:list.count * rowH];
+  cw = NSWidth(listCard.bounds);
+  CGFloat ry = 0;
+  for (NSUInteger i = 0; i < list.count; ++i) {
+    SlateExtensionRecord* rec = list[i];
+
+    NSImageView* iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(16, ry + 16, 28, 28)];
+    iconView.image = rec.icon ?: [NSImage imageWithSystemSymbolName:@"puzzlepiece.extension" accessibilityDescription:nil];
+    iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
+    [listCard addSubview:iconView];
+
+    NSString* headerStr = rec.version.length ? [NSString stringWithFormat:@"%@  %@", rec.name ?: @"Extension", rec.version] : (rec.name ?: @"Extension");
+    NSTextField* nameField = [NSTextField labelWithString:headerStr];
+    nameField.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+    nameField.textColor = NSColor.labelColor;
+    nameField.lineBreakMode = NSLineBreakByTruncatingTail;
+    nameField.frame = NSMakeRect(54, ry + 12, cw - 120, 17);
+    nameField.autoresizingMask = NSViewWidthSizable;
+    [listCard addSubview:nameField];
+
+    NSString* descStr = rec.loadError.length ? rec.loadError : (rec.summary.length ? rec.summary : @"Chrome WebExtension");
+    NSTextField* descField = [NSTextField labelWithString:descStr];
+    descField.font = [NSFont systemFontOfSize:11.5];
+    descField.textColor = NSColor.secondaryLabelColor;
+    descField.lineBreakMode = NSLineBreakByTruncatingTail;
+    descField.frame = NSMakeRect(54, ry + 30, cw - 120, 15);
+    descField.autoresizingMask = NSViewWidthSizable;
+    [listCard addSubview:descField];
+
+    NSSwitch* sw = [[NSSwitch alloc] initWithFrame:NSMakeRect(cw - 52, ry + 16, 36, 22)];
+    sw.controlSize = NSControlSizeSmall;
+    sw.state = rec.enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    sw.identifier = rec.identifier;
+    sw.target = self;
+    sw.action = @selector(toggleExtensionEnabled:);
+    sw.autoresizingMask = NSViewMinXMargin;
+    [listCard addSubview:sw];
+
+    NSButton* privCheck = [NSButton checkboxWithTitle:@"Allow in Incognito" target:self action:@selector(toggleExtensionPrivate:)];
+    privCheck.controlSize = NSControlSizeSmall;
+    privCheck.font = [NSFont systemFontOfSize:11];
+    privCheck.state = rec.allowInPrivate ? NSControlStateValueOn : NSControlStateValueOff;
+    privCheck.identifier = rec.identifier;
+    privCheck.frame = NSMakeRect(54, ry + 52, 140, 18);
+    [listCard addSubview:privCheck];
+
+    CGFloat btnX = cw - 76;
+    SlateQuietButton* removeBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(btnX, ry + 49, 60, 22)
+                                                                    title:@"Remove"
+                                                                   target:self
+                                                                   action:@selector(removeExtensionClicked:)
+                                                                  primary:NO];
+    removeBtn.identifier = rec.identifier;
+    removeBtn.autoresizingMask = NSViewMinXMargin;
+    [listCard addSubview:removeBtn];
+
+    if (rec.hasOptionsPage && rec.enabled) {
+      SlateQuietButton* optBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(btnX - 68, ry + 49, 62, 22)
+                                                                   title:@"Options"
+                                                                  target:self
+                                                                  action:@selector(openExtensionOptions:)
+                                                                 primary:NO];
+      optBtn.identifier = rec.identifier;
+      optBtn.autoresizingMask = NSViewMinXMargin;
+      [listCard addSubview:optBtn];
+    }
+
+    if (i + 1 < list.count) [self addDividerToCard:listCard y:ry + rowH - 1];
+    ry += rowH;
+  }
+
+  [self finishCanvas:doc scroll:scroll contentHeight:y + list.count * rowH];
+}
+
+- (void)showExtensionInstallError:(NSError*)error {
+  if (!error) return;
+  NSAlert* alert = [[NSAlert alloc] init];
+  alert.messageText = @"Could not install extension";
+  alert.informativeText = error.localizedDescription ?: @"Invalid Chrome extension package.";
+  [alert addButtonWithTitle:@"OK"];
+  [alert beginSheetModalForWindow:self completionHandler:nil];
+}
+
+- (void)installExtensionArchiveClicked:(id)sender {
+  (void)sender;
+  NSOpenPanel* panel = [NSOpenPanel openPanel];
+  panel.canChooseFiles = YES;
+  panel.canChooseDirectories = NO;
+  panel.allowsMultipleSelection = NO;
+  panel.prompt = @"Install";
+  if (@available(macOS 11.0, *)) {
+    UTType* crxType = [UTType typeWithFilenameExtension:@"crx"];
+    NSMutableArray<UTType*>* types = [NSMutableArray arrayWithObject:UTTypeZIP];
+    if (crxType) [types addObject:crxType];
+    panel.allowedContentTypes = types;
+  }
+  [panel beginSheetModalForWindow:self completionHandler:^(NSModalResponse result) {
+    if (result != NSModalResponseOK || !panel.URL) return;
+    [[SlateExtensionsManager sharedManager] installFromArchiveURL:panel.URL completion:^(SlateExtensionRecord* rec, NSError* err) {
+      (void)rec;
+      if (err) [self showExtensionInstallError:err];
+      else [self renderCurrentPage];
+    }];
+  }];
+}
+
+- (void)loadUnpackedExtensionClicked:(id)sender {
+  (void)sender;
+  NSOpenPanel* panel = [NSOpenPanel openPanel];
+  panel.canChooseFiles = NO;
+  panel.canChooseDirectories = YES;
+  panel.allowsMultipleSelection = NO;
+  panel.prompt = @"Load";
+  [panel beginSheetModalForWindow:self completionHandler:^(NSModalResponse result) {
+    if (result != NSModalResponseOK || !panel.URL) return;
+    [[SlateExtensionsManager sharedManager] installFromUnpackedDirectory:panel.URL completion:^(SlateExtensionRecord* rec, NSError* err) {
+      (void)rec;
+      if (err) [self showExtensionInstallError:err];
+      else [self renderCurrentPage];
+    }];
+  }];
+}
+
+- (void)toggleExtensionEnabled:(NSSwitch*)sender {
+  if (!sender.identifier.length) return;
+  [[SlateExtensionsManager sharedManager] setExtensionId:sender.identifier enabled:(sender.state == NSControlStateValueOn)];
+}
+
+- (void)toggleExtensionPrivate:(NSButton*)sender {
+  if (!sender.identifier.length) return;
+  [[SlateExtensionsManager sharedManager] setExtensionId:sender.identifier allowInPrivate:(sender.state == NSControlStateValueOn)];
+}
+
+- (void)openExtensionOptions:(NSButton*)sender {
+  if (!sender.identifier.length) return;
+  [[SlateExtensionsManager sharedManager] openOptionsPageForExtensionId:sender.identifier];
+}
+
+- (void)removeExtensionClicked:(NSButton*)sender {
+  if (!sender.identifier.length) return;
+  [[SlateExtensionsManager sharedManager] removeExtensionId:sender.identifier];
+  [self renderCurrentPage];
 }
 
 #pragma mark - About Page
