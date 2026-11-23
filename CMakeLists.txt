@@ -2,8 +2,8 @@
 # macOS target.
 
 cmake_minimum_required(VERSION 3.21)
-project(Slate VERSION 0.4.20 LANGUAGES CXX)
-set(SLATE_BUILD_VERSION "20261122.6" CACHE STRING "Monotonically increasing Slate build version")
+project(Slate VERSION 0.4.21 LANGUAGES CXX)
+set(SLATE_BUILD_VERSION "20261122.7" CACHE STRING "Monotonically increasing Slate build version")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Slate note: Build reusable browser logic separately from the native shell.

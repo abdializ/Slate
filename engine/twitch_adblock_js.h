@@ -1,5 +1,5 @@
-// File purpose: Native Twitch HLS Web Worker & fetch stitched-ad blocker (vaft-style backup
-// stream swapper + display-ad hider) for both Normal and Incognito tabs.
+// File purpose: Native Twitch HLS Web Worker stitched-ad blocker (vaft-style backup stream
+// swapper + display-ad hider) for both Normal and Incognito tabs.
 
 #pragma once
 
@@ -38,7 +38,7 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
     (document.head || document.documentElement).appendChild(style);
   } catch (e) {}
 
-  // 2. Worker-side HLS playlist interceptor (injected before Twitch's IVS WASM worker runs)
+  // 2. Worker-side HLS playlist interceptor (injected ONLY into Twitch's IVS WASM worker)
   const workerHookSource = `
   (function() {
     if (self.__slateTwitchWorkerShield) return;
@@ -51,18 +51,8 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
     const USHER_BASE = 'https://usher.ttvnw.net/api/channel/hls/';
 
     const realFetch = self.fetch.bind(self);
-    let clientId = CLIENT_ID;
-    let deviceId = null;
-
     const channels = new Map();
     const variantToChannel = new Map();
-
-    self.addEventListener('message', function(ev) {
-      const d = ev && ev.data;
-      if (!d || d.__slateTwitchMeta !== true) return;
-      if (d.clientId) clientId = d.clientId;
-      if (d.deviceId) deviceId = d.deviceId;
-    });
 
     function makeResponseWithUrl(body, origResp, fallbackUrl) {
       const modified = new Response(body, {
@@ -129,11 +119,6 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
     }
 
     async function fetchBackupAccessToken(channel, playerType) {
-      const headers = {
-        'Client-ID': clientId || CLIENT_ID,
-        'Content-Type': 'application/json'
-      };
-      if (deviceId) headers['X-Device-Id'] = deviceId;
       const body = JSON.stringify({
         operationName: 'PlaybackAccessToken',
         extensions: {
@@ -150,7 +135,14 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
           playerType: playerType
         }
       });
-      const resp = await realFetch(GQL_URL, { method: 'POST', headers, body });
+      const resp = await realFetch(GQL_URL, {
+        method: 'POST',
+        headers: {
+          'Client-ID': CLIENT_ID,
+          'Content-Type': 'application/json'
+        },
+        body
+      });
       if (!resp.ok) return null;
       const json = await resp.json();
       const tokenObj = json && json.data && json.data.streamPlaybackAccessToken;
@@ -251,57 +243,80 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
   })();
   `;
 
-  // 3. Delay revoking blob URLs that were just passed into our wrapped Worker so importScripts() never 404s
-  const protectedBlobUrls = new Set();
+  // 3. Identify ONLY Twitch's IVS player worker bootstrap blobs (avoid wrapping unrelated workers
+  //    or doing nested importScripts('blob:...') which fails in WebKit)
+  const ivsBlobSources = new WeakMap();
+  const ivsBlobUrlToSource = new Map();
+  const OrigBlob = window.Blob;
   try {
-    const origRevoke = URL.revokeObjectURL.bind(URL);
-    URL.revokeObjectURL = function(u) {
-      if (protectedBlobUrls.has(u)) {
-        setTimeout(() => {
-          protectedBlobUrls.delete(u);
-          try { origRevoke(u); } catch (e) {}
-        }, 8000);
-        return;
-      }
-      return origRevoke(u);
+    if (typeof OrigBlob === 'function') {
+      const TrackedBlob = function(parts, options) {
+        const blob = new OrigBlob(parts, options);
+        try {
+          if (Array.isArray(parts) && parts.length > 0 && parts.length <= 4) {
+            let joined = '';
+            let allStrings = true;
+            for (let i = 0; i < parts.length; i++) {
+              if (typeof parts[i] !== 'string' || parts[i].length > 4096) {
+                allStrings = false;
+                break;
+              }
+              joined += parts[i];
+            }
+            if (allStrings && joined.length > 0 && joined.length <= 4096 &&
+                (joined.includes('amazon-ivs') || joined.includes('wasmworker'))) {
+              ivsBlobSources.set(blob, joined);
+            }
+          }
+        } catch (e) {}
+        return blob;
+      };
+      TrackedBlob.prototype = OrigBlob.prototype;
+      Object.setPrototypeOf(TrackedBlob, OrigBlob);
+      window.Blob = TrackedBlob;
+    }
+
+    const origCreateObjectURL = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = function(obj) {
+      const url = origCreateObjectURL(obj);
+      try {
+        if (obj && ivsBlobSources.has(obj)) {
+          ivsBlobUrlToSource.set(url, ivsBlobSources.get(obj));
+        }
+      } catch (e) {}
+      return url;
     };
   } catch (e) {}
 
-  // 4. Wrap classic Twitch IVS Workers so they inherit our HLS fetch interceptor safely
-  const activeWorkers = new Set();
-  let lastMeta = { __slateTwitchMeta: true, clientId: null, deviceId: null };
-
-  function broadcastMeta() {
-    activeWorkers.forEach(w => {
-      try { w.postMessage(lastMeta); } catch (e) {}
-    });
-  }
-
+  // 4. Wrap ONLY the Twitch IVS player Worker with flat inline source (no postMessage pollution)
   try {
     const OrigWorker = window.Worker;
     if (typeof OrigWorker === 'function') {
       const WrappedWorker = function(scriptURL, options) {
         const urlStr = typeof scriptURL === 'string' ? scriptURL : String(scriptURL || '');
         const isModule = options && options.type === 'module';
-        const shouldWrap = !isModule && (
-          urlStr.startsWith('blob:') ||
-          urlStr.includes('amazon-ivs') ||
-          urlStr.includes('wasmworker')
-        );
-        if (!shouldWrap) {
+        if (isModule) {
           return new OrigWorker(scriptURL, options);
         }
+
+        let bootstrap = null;
+        if (ivsBlobUrlToSource.has(urlStr)) {
+          bootstrap = workerHookSource + '\n' + ivsBlobUrlToSource.get(urlStr) + '\n';
+        } else if (urlStr.startsWith('http') &&
+                   (urlStr.includes('amazon-ivs') || urlStr.includes('wasmworker'))) {
+          bootstrap = workerHookSource + '\nimportScripts(' + JSON.stringify(urlStr) + ');\n';
+        }
+
+        if (!bootstrap) {
+          return new OrigWorker(scriptURL, options);
+        }
+
         try {
-          if (urlStr.startsWith('blob:')) protectedBlobUrls.add(urlStr);
-          const bootstrap = workerHookSource + '\nimportScripts(' + JSON.stringify(urlStr) + ');\n';
-          const blob = new Blob([bootstrap], { type: 'application/javascript' });
+          const blob = new OrigBlob([bootstrap], { type: 'application/javascript' });
           const wrappedUrl = URL.createObjectURL(blob);
           const worker = new OrigWorker(wrappedUrl, options);
-          activeWorkers.add(worker);
-          try { worker.postMessage(lastMeta); } catch (e) {}
           const origTerminate = worker.terminate.bind(worker);
           worker.terminate = function() {
-            activeWorkers.delete(worker);
             try { URL.revokeObjectURL(wrappedUrl); } catch (e) {}
             return origTerminate();
           };
@@ -314,37 +329,6 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
       Object.setPrototypeOf(WrappedWorker, OrigWorker);
       window.Worker = WrappedWorker;
     }
-  } catch (e) {}
-
-  // 5. Intercept main-thread fetch to capture Twitch Client-ID/Device-ID & neutralize ad event beacons
-  try {
-    const origFetch = window.fetch.bind(window);
-    window.fetch = function(input, init) {
-      const url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-      if (url && url.includes('gql.twitch.tv/gql')) {
-        try {
-          const h = init && init.headers;
-          let changed = false;
-          if (h) {
-            const getH = (k) => (h instanceof Headers) ? h.get(k) : (h[k] || h[k.toLowerCase()]);
-            const cid = getH('Client-ID') || getH('Client-Id');
-            const did = getH('X-Device-Id');
-            if (cid && cid !== lastMeta.clientId) { lastMeta.clientId = cid; changed = true; }
-            if (did && did !== lastMeta.deviceId) { lastMeta.deviceId = did; changed = true; }
-            if (changed) broadcastMeta();
-          }
-          if (init && typeof init.body === 'string' &&
-              (init.body.includes('ClientSideAdEventHandling_RecordAdEvent') ||
-               init.body.includes('videoAdRequestDecline'))) {
-            return Promise.resolve(new Response(JSON.stringify({ data: {} }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' }
-            }));
-          }
-        } catch (e) {}
-      }
-      return origFetch(input, init);
-    };
   } catch (e) {}
 })();)JS";
 
