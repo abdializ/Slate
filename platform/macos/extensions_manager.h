@@ -54,6 +54,7 @@ extern NSNotificationName const SlateExtensionsDidChangeNotification;
 + (NSString* _Nullable)chromeStoreExtensionIdFromInput:(NSString* _Nullable)input;
 
 @property (nonatomic, weak, nullable) id<SlateExtensionHostDelegate> hostDelegate;
+@property (nonatomic, assign, getter=isGlobalEnabled) BOOL globalEnabled;
 @property (nonatomic, readonly) NSArray<SlateExtensionRecord*>* extensions;
 
 // Returns WKWebExtensionController* on macOS 15.4+, nil on older macOS.

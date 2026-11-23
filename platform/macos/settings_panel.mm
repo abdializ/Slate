@@ -1246,6 +1246,17 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     return;
   }
 
+  // Master Extensions On/Off Card
+  BOOL extGlobalOn = [SlateExtensionsManager sharedManager].globalEnabled;
+  y = [self addSectionCaptionTo:doc y:y text:@"Extensions"];
+  SlateSettingsCard* masterCard = [self addCardTo:doc y:y height:56];
+  [self addSwitchRowToCard:masterCard y:0
+                     title:@"Enable Chrome Extensions"
+                  subtitle:@"Turn all installed extensions on or off (managed only in Settings)"
+                        on:extGlobalOn
+                    action:@selector(toggleExtensionsMaster:)];
+
+  y += 56 + 20;
   // Chrome Web Store Card
   y = [self addSectionCaptionTo:doc y:y text:@"Chrome Web Store"];
   SlateSettingsCard* storeCard = [self addCardTo:doc y:y height:114];
@@ -1385,7 +1396,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
       [listCard addSubview:optBtn];
       nextBtnX -= 84;
     }
-    if (rec.sidePanelPath.length && rec.enabled) {
+    if (rec.sidePanelPath.length && rec.enabled && extGlobalOn) {
       SlateQuietButton* spBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(nextBtnX - 16, ry + 49, 78, 22)
                                                                   title:@"Side Panel"
                                                                  target:self
@@ -1394,6 +1405,17 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
       spBtn.identifier = rec.identifier;
       spBtn.autoresizingMask = NSViewMinXMargin;
       [listCard addSubview:spBtn];
+      nextBtnX -= 84;
+    }
+    if (rec.enabled && extGlobalOn) {
+      SlateQuietButton* popBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(nextBtnX + 6, ry + 49, 56, 22)
+                                                                   title:@"Open"
+                                                                  target:self
+                                                                  action:@selector(openExtensionPopupClicked:)
+                                                                 primary:NO];
+      popBtn.identifier = rec.identifier;
+      popBtn.autoresizingMask = NSViewMinXMargin;
+      [listCard addSubview:popBtn];
     }
 
     if (i + 1 < list.count) [self addDividerToCard:listCard y:ry + rowH - 1];
@@ -1482,6 +1504,16 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
       else [self renderCurrentPage];
     }];
   }];
+}
+
+- (void)toggleExtensionsMaster:(NSSwitch*)sender {
+  [SlateExtensionsManager sharedManager].globalEnabled = (sender.state == NSControlStateValueOn);
+  [self renderCurrentPage];
+}
+
+- (void)openExtensionPopupClicked:(NSButton*)sender {
+  if (!sender.identifier.length) return;
+  [[SlateExtensionsManager sharedManager] performActionForExtensionId:sender.identifier anchorView:sender];
 }
 
 - (void)toggleExtensionEnabled:(NSSwitch*)sender {

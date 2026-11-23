@@ -7,6 +7,7 @@
 #import <UserNotifications/UserNotifications.h>
 
 NSNotificationName const SlateExtensionsDidChangeNotification = @"SlateExtensionsDidChangeNotification";
+static NSString* const kExtensionsGlobalEnabledKey = @"SlateExtensionsGlobalEnabled";
 
 @implementation SlateExtensionRecord
 @end
@@ -361,6 +362,28 @@ API_AVAILABLE(macos(15.4))
   return [_mutableExtensions copy];
 }
 
+- (BOOL)isGlobalEnabled {
+  id v = [NSUserDefaults.standardUserDefaults objectForKey:kExtensionsGlobalEnabledKey];
+  return v ? [v boolValue] : YES;
+}
+
+- (void)setGlobalEnabled:(BOOL)globalEnabled {
+  BOOL prev = [self isGlobalEnabled];
+  [NSUserDefaults.standardUserDefaults setBool:globalEnabled forKey:kExtensionsGlobalEnabledKey];
+  if (prev == globalEnabled) return;
+  if (!globalEnabled) {
+    for (SlateExtensionRecord* rec in _mutableExtensions) {
+      [self unloadRecordFromController:rec];
+    }
+    if (_sidePanelWindow) [_sidePanelWindow orderOut:nil];
+  } else {
+    for (SlateExtensionRecord* rec in _mutableExtensions) {
+      if (rec.enabled) [self loadRecordIntoController:rec completion:nil];
+    }
+  }
+  [self postDidChange];
+}
+
 - (WKWebExtensionController*)controller API_AVAILABLE(macos(15.4)) {
   return (WKWebExtensionController*)_webExtensionController;
 }
@@ -449,7 +472,7 @@ API_AVAILABLE(macos(15.4))
     rec.allowInPrivate = [row[@"allowInPrivate"] boolValue];
     [_mutableExtensions addObject:rec];
 
-    if (rec.enabled) {
+    if (rec.enabled && self.globalEnabled) {
       [self loadRecordIntoController:rec completion:nil];
     }
   }
@@ -839,7 +862,7 @@ API_AVAILABLE(macos(15.4))
   SlateExtensionRecord* rec = [self recordForId:identifier];
   if (!rec || rec.enabled == enabled) return;
   rec.enabled = enabled;
-  if (enabled) {
+  if (enabled && self.globalEnabled) {
     [self loadRecordIntoController:rec completion:nil];
   } else {
     [self unloadRecordFromController:rec];

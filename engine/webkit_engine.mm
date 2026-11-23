@@ -543,6 +543,10 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
       }
     };
     if ([op isEqualToString:@"query"]) {
+      if (![SlateExtensionsManager sharedManager].globalEnabled) {
+        sendState(@"disabled", @"");
+        return;
+      }
       BOOL installed = [[SlateExtensionsManager sharedManager] isExtensionInstalled:extId];
       sendState(installed ? @"installed" : @"ready", @"");
     } else if ([op isEqualToString:@"install"]) {
@@ -1288,6 +1292,11 @@ class WebKitEngine final : public BrowserEngine {
           }
           window.__slateWebStoreUpdate = function(info) {
             if (!info || info.id !== currentId || !bar) return;
+            if (info.state === 'disabled') {
+              bar.style.display = 'none';
+              return;
+            }
+            bar.style.display = 'flex';
             if (info.state === 'installing') {
               btn.disabled = true; btn.textContent = 'Installing…'; subBtn.style.display = 'none';
               label.textContent = 'Downloading from Chrome Web Store';

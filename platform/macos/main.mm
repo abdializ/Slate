@@ -6125,7 +6125,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self.omnibox setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
  [self.omnibox setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
  self.omniboxLeading=[self.omnibox.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.navCluster.trailingAnchor constant:12];
- self.omniboxTrailing=[self.omnibox.trailingAnchor constraintLessThanOrEqualToAnchor:self.extensionsStack.leadingAnchor constant:-10];
+ self.omniboxTrailing=[self.omnibox.trailingAnchor constraintLessThanOrEqualToAnchor:self.bookmarkButton.leadingAnchor constant:-12];
  // Keep omnibox sizing/centering priorities strictly below NSLayoutPriorityWindowSizeStayPut (500)
  // so hiding/unhiding the sidebar can never widen the browser window.
  NSLayoutConstraint* omniboxCenter=[self.omnibox.centerXAnchor constraintEqualToAnchor:self.toolbar.centerXAnchor];
@@ -12109,55 +12109,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [[SlateSettingsPanel sharedPanel] showForSlateDelegate:self selectedPage:@"extensions"];
 }
 - (void)rebuildExtensionButtons {
+ // Extensions are managed exclusively inside Settings -> Extensions to keep the browser toolbar clean.
  if(!self.extensionsStack) return;
  for(NSView* v in [self.extensionsStack.arrangedSubviews copy]) {
   [self.extensionsStack removeArrangedSubview:v];
   [v removeFromSuperview];
  }
  [self.extensionButtons removeAllObjects];
- SlateExtensionsManager* mgr = [SlateExtensionsManager sharedManager];
- for(SlateExtensionRecord* rec in mgr.extensions) {
-  if(!rec.enabled) continue;
-  NSImage* img = [mgr actionIconForExtensionId:rec.identifier size:CGSizeMake(16, 16)]
-    ?: [NSImage imageWithSystemSymbolName:@"puzzlepiece.extension" accessibilityDescription:rec.name];
-  if(img) img.size = NSMakeSize(16, 16);
-  NSButton* btn = [NSButton buttonWithImage:img target:self action:@selector(extensionToolbarButtonClicked:)];
-  btn.identifier = rec.identifier;
-  btn.bezelStyle = NSBezelStyleInline;
-  btn.bordered = NO;
-  btn.imagePosition = NSImageOnly;
-  btn.refusesFirstResponder = YES;
-  btn.translatesAutoresizingMaskIntoConstraints = NO;
-  btn.wantsLayer = YES;
-  btn.layer.cornerRadius = 5.0;
-  NSString* badge = [mgr actionBadgeForExtensionId:rec.identifier];
-  NSString* tip = [mgr actionTooltipForExtensionId:rec.identifier] ?: rec.name;
-  btn.toolTip = badge.length ? [NSString stringWithFormat:@"%@ (%@)", tip, badge] : tip;
-  NSMenu* ctxMenu = [[NSMenu alloc] initWithTitle:rec.name ?: @"Extension"];
-  NSMenuItem* hdr = [ctxMenu addItemWithTitle:rec.name ?: @"Extension" action:nil keyEquivalent:@""];
-  hdr.enabled = NO;
-  [ctxMenu addItem:[NSMenuItem separatorItem]];
-  if(rec.sidePanelPath.length) {
-   NSMenuItem* sp = [ctxMenu addItemWithTitle:@"Open Side Panel" action:@selector(extensionMenuOpenSidePanel:) keyEquivalent:@""];
-   sp.target = self; sp.representedObject = rec.identifier;
-  }
-  if(rec.hasOptionsPage) {
-   NSMenuItem* opt = [ctxMenu addItemWithTitle:@"Options" action:@selector(extensionMenuOpenOptions:) keyEquivalent:@""];
-   opt.target = self; opt.representedObject = rec.identifier;
-  }
-  NSMenuItem* manage = [ctxMenu addItemWithTitle:@"Manage Extensions…" action:@selector(showExtensions:) keyEquivalent:@""];
-  manage.target = self;
-  [ctxMenu addItem:[NSMenuItem separatorItem]];
-  NSMenuItem* rem = [ctxMenu addItemWithTitle:@"Remove Extension" action:@selector(extensionMenuRemove:) keyEquivalent:@""];
-  rem.target = self; rem.representedObject = rec.identifier;
-  btn.menu = ctxMenu;
-  [NSLayoutConstraint activateConstraints:@[
-   [btn.widthAnchor constraintEqualToConstant:22],
-   [btn.heightAnchor constraintEqualToConstant:22]
-  ]];
-  [self.extensionsStack addArrangedSubview:btn];
-  self.extensionButtons[rec.identifier] = btn;
- }
+ self.extensionsStack.hidden = YES;
 }
 - (void)extensionToolbarButtonClicked:(NSButton*)sender {
  if(!sender.identifier.length) return;
