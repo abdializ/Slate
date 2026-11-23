@@ -780,6 +780,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property BOOL pinningTraffic;
 @property BOOL pages120Hz;
 @property(strong) NSMenuItem* pages120HzMenuItem;
+@property(strong) NSMenu* extensionsMenu;
 #if defined(SLATE_ENABLE_VERIFY)
 @property NSUInteger verifyLine;
 @property NSTimeInterval verifyDelay;
@@ -8954,6 +8955,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self activateTab:rows[row].tab];
 }
 - (void)menuNeedsUpdate:(NSMenu*)menu {
+ if(menu==self.extensionsMenu) {
+  [self populateExtensionsMenu:menu];
+  return;
+ }
  if(menu!=self.tabList.menu) return;
  const auto rows=[self sidebarRows];
  const NSInteger row=self.tabList.clickedRow>=0 ? self.tabList.clickedRow : self.tabList.selectedRow;
@@ -12134,6 +12139,139 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  NSString* extId = sender.representedObject;
  if(extId.length) [[SlateExtensionsManager sharedManager] removeExtensionId:extId];
 }
+- (void)extensionMenuOpenPopup:(NSMenuItem*)sender {
+ NSString* extId = sender.representedObject;
+ if(extId.length) [[SlateExtensionsManager sharedManager] performActionForExtensionId:extId anchorView:self.shieldsButton];
+}
+- (void)extensionMenuToggleGlobal:(id)sender {
+ (void)sender;
+ SlateExtensionsManager* mgr = [SlateExtensionsManager sharedManager];
+ mgr.globalEnabled = !mgr.globalEnabled;
+}
+- (void)extensionMenuToggleEnabled:(NSMenuItem*)sender {
+ NSString* extId = sender.representedObject;
+ if(!extId.length) return;
+ SlateExtensionsManager* mgr = [SlateExtensionsManager sharedManager];
+ for(SlateExtensionRecord* rec in mgr.extensions) {
+  if([rec.identifier isEqualToString:extId]) {
+   [mgr setExtensionId:extId enabled:!rec.enabled];
+   break;
+  }
+ }
+}
+- (void)extensionMenuTogglePrivate:(NSMenuItem*)sender {
+ NSString* extId = sender.representedObject;
+ if(!extId.length) return;
+ SlateExtensionsManager* mgr = [SlateExtensionsManager sharedManager];
+ for(SlateExtensionRecord* rec in mgr.extensions) {
+  if([rec.identifier isEqualToString:extId]) {
+   [mgr setExtensionId:extId allowInPrivate:!rec.allowInPrivate];
+   break;
+  }
+ }
+}
+- (void)extensionMenuAllowOnSite:(NSMenuItem*)sender {
+ NSDictionary* info = sender.representedObject;
+ NSString* extId = info[@"id"]; NSString* host = info[@"host"];
+ if(extId.length && host.length) {
+  [[SlateExtensionsManager sharedManager] setExtensionId:extId allowed:YES onHost:host];
+  [self reload:nil];
+ }
+}
+- (void)extensionMenuDenyOnSite:(NSMenuItem*)sender {
+ NSDictionary* info = sender.representedObject;
+ NSString* extId = info[@"id"]; NSString* host = info[@"host"];
+ if(extId.length && host.length) {
+  [[SlateExtensionsManager sharedManager] setExtensionId:extId allowed:NO onHost:host];
+  [self reload:nil];
+ }
+}
+- (void)populateExtensionsMenu:(NSMenu*)menu {
+ [menu removeAllItems];
+ SlateExtensionsManager* mgr = [SlateExtensionsManager sharedManager];
+ const BOOL globalOn = mgr.globalEnabled;
+
+ NSMenuItem* master = [menu addItemWithTitle:@"Enable Chrome Extensions" action:@selector(extensionMenuToggleGlobal:) keyEquivalent:@""];
+ master.target = self;
+ master.state = globalOn ? NSControlStateValueOn : NSControlStateValueOff;
+
+ NSMenuItem* manage = [menu addItemWithTitle:@"Manage Extensions…" action:@selector(showExtensions:) keyEquivalent:@""];
+ manage.target = self;
+
+ NSArray<SlateExtensionRecord*>* list = mgr.extensions;
+ [menu addItem:[NSMenuItem separatorItem]];
+ if(list.count == 0) {
+  NSMenuItem* none = [menu addItemWithTitle:@"No Extensions Installed" action:nil keyEquivalent:@""];
+  none.enabled = NO;
+  return;
+ }
+
+ const auto activeHostStr = [self currentPageHost];
+ NSString* activeHost = (activeHostStr.size() && activeHostStr != "about:blank")
+  ? [NSString stringWithUTF8String:activeHostStr.c_str()] : nil;
+
+ for(SlateExtensionRecord* rec in list) {
+  NSString* badge = (globalOn && rec.enabled) ? [mgr actionBadgeForExtensionId:rec.identifier] : nil;
+  NSString* title = rec.name ?: @"Extension";
+  if(badge.length) title = [NSString stringWithFormat:@"%@ (%@)", title, badge];
+  else if(!rec.enabled || !globalOn) title = [NSString stringWithFormat:@"%@ (Off)", title];
+
+  NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+  NSImage* img = [mgr actionIconForExtensionId:rec.identifier size:CGSizeMake(16, 16)]
+    ?: [NSImage imageWithSystemSymbolName:@"puzzlepiece.extension" accessibilityDescription:rec.name];
+  if(img) {
+   NSImage* copy = [img copy];
+   copy.size = NSMakeSize(16, 16);
+   item.image = copy;
+  }
+
+  NSMenu* sub = [[NSMenu alloc] initWithTitle:rec.name ?: @"Extension"];
+  if(globalOn && rec.enabled) {
+   NSMenuItem* openPop = [sub addItemWithTitle:@"Open Popup" action:@selector(extensionMenuOpenPopup:) keyEquivalent:@""];
+   openPop.target = self; openPop.representedObject = rec.identifier;
+   if(rec.sidePanelPath.length) {
+    NSMenuItem* sp = [sub addItemWithTitle:@"Open Side Panel" action:@selector(extensionMenuOpenSidePanel:) keyEquivalent:@""];
+    sp.target = self; sp.representedObject = rec.identifier;
+   }
+   if(rec.hasOptionsPage) {
+    NSMenuItem* opt = [sub addItemWithTitle:@"Options…" action:@selector(extensionMenuOpenOptions:) keyEquivalent:@""];
+    opt.target = self; opt.representedObject = rec.identifier;
+   }
+   if(activeHost.length) {
+    [sub addItem:[NSMenuItem separatorItem]];
+    BOOL allowed = [mgr extensionId:rec.identifier isAllowedOnHost:activeHost];
+    NSDictionary* info = @{@"id": rec.identifier, @"host": activeHost};
+    NSMenuItem* allowItem = [sub addItemWithTitle:[NSString stringWithFormat:@"Allow on %@", activeHost]
+                                           action:@selector(extensionMenuAllowOnSite:)
+                                    keyEquivalent:@""];
+    allowItem.target = self; allowItem.representedObject = info;
+    allowItem.state = allowed ? NSControlStateValueOn : NSControlStateValueOff;
+
+    NSMenuItem* denyItem = [sub addItemWithTitle:[NSString stringWithFormat:@"Don’t Allow on %@", activeHost]
+                                          action:@selector(extensionMenuDenyOnSite:)
+                                   keyEquivalent:@""];
+    denyItem.target = self; denyItem.representedObject = info;
+    denyItem.state = !allowed ? NSControlStateValueOn : NSControlStateValueOff;
+   }
+   [sub addItem:[NSMenuItem separatorItem]];
+  }
+
+  NSMenuItem* enItem = [sub addItemWithTitle:@"Enabled" action:@selector(extensionMenuToggleEnabled:) keyEquivalent:@""];
+  enItem.target = self; enItem.representedObject = rec.identifier;
+  enItem.state = rec.enabled ? NSControlStateValueOn : NSControlStateValueOff;
+
+  NSMenuItem* privItem = [sub addItemWithTitle:@"Allow in Incognito" action:@selector(extensionMenuTogglePrivate:) keyEquivalent:@""];
+  privItem.target = self; privItem.representedObject = rec.identifier;
+  privItem.state = rec.allowInPrivate ? NSControlStateValueOn : NSControlStateValueOff;
+
+  [sub addItem:[NSMenuItem separatorItem]];
+  NSMenuItem* remItem = [sub addItemWithTitle:@"Remove Extension" action:@selector(extensionMenuRemove:) keyEquivalent:@""];
+  remItem.target = self; remItem.representedObject = rec.identifier;
+
+  item.submenu = sub;
+  [menu addItem:item];
+ }
+}
 #pragma mark - SlateExtensionHostDelegate
 - (NSWindow*)extensionHostWindow { return self.window; }
 - (NSArray<NSNumber*>*)extensionHostTabIds {
@@ -14147,11 +14285,13 @@ static void InstallMenus(SlateDelegate* delegate) {
  windowItem.submenu = windowMenu;
  NSApp.windowsMenu = windowMenu;
 
- // 9. Extensions Menu
+ // 9. Extensions Menu (dynamically populated from installed Chrome WebExtensions)
  NSMenuItem* extMenuItem = [[NSMenuItem alloc] init]; [menu addItem:extMenuItem];
  NSMenu* ext = [[NSMenu alloc] initWithTitle:@"Extensions"];
- NSMenuItem* aboutExt = [ext addItemWithTitle:@"About Extensions…" action:@selector(showExtensions:) keyEquivalent:@""];
- aboutExt.target = delegate;
+ ext.delegate = delegate;
+ delegate.extensionsMenu = ext;
+ NSMenuItem* manageExt = [ext addItemWithTitle:@"Manage Extensions…" action:@selector(showExtensions:) keyEquivalent:@""];
+ manageExt.target = delegate;
  extMenuItem.submenu = ext;
 
  NSApp.mainMenu = menu;

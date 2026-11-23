@@ -10,6 +10,12 @@ NSNotificationName const SlateExtensionsDidChangeNotification = @"SlateExtension
 static NSString* const kExtensionsGlobalEnabledKey = @"SlateExtensionsGlobalEnabled";
 
 @implementation SlateExtensionRecord
+- (instancetype)init {
+  if (self = [super init]) {
+    _deniedHosts = [NSMutableSet set];
+  }
+  return self;
+}
 @end
 
 #pragma mark - Tab & Window Adapters (macOS 15.4+)
@@ -428,6 +434,7 @@ API_AVAILABLE(macos(15.4))
       @"summary": rec.summary ?: @"",
       @"path": rec.directoryPath ?: @"",
       @"sidePanelPath": rec.sidePanelPath ?: @"",
+      @"deniedHosts": rec.deniedHosts.allObjects ?: @[],
       @"enabled": @(rec.enabled),
       @"allowInPrivate": @(rec.allowInPrivate)
     }];
@@ -468,6 +475,12 @@ API_AVAILABLE(macos(15.4))
     rec.directoryPath = path;
     NSString* sp = row[@"sidePanelPath"];
     rec.sidePanelPath = ([sp isKindOfClass:[NSString class]] && sp.length) ? sp : nil;
+    NSArray* dh = row[@"deniedHosts"];
+    if ([dh isKindOfClass:[NSArray class]]) {
+      for (id h in dh) {
+        if ([h isKindOfClass:[NSString class]] && [h length]) [rec.deniedHosts addObject:[h lowercaseString]];
+      }
+    }
     rec.enabled = [row[@"enabled"] boolValue];
     rec.allowInPrivate = [row[@"allowInPrivate"] boolValue];
     [_mutableExtensions addObject:rec];
@@ -573,6 +586,9 @@ API_AVAILABLE(macos(15.4))
         ctx.uniqueIdentifier = rec.identifier;
         ctx.hasAccessToPrivateData = rec.allowInPrivate;
         [self grantRequestedPermissionsOnContext:ctx];
+        for (NSString* deniedHost in rec.deniedHosts) {
+          [self applyHostPermission:NO forHost:deniedHost onContext:ctx];
+        }
 
         NSError* loadErr = nil;
         BOOL ok = [ctrl loadExtensionContext:ctx error:&loadErr];
@@ -869,6 +885,39 @@ API_AVAILABLE(macos(15.4))
     [self saveRegistry];
     [self postDidChange];
   }
+}
+
+- (void)applyHostPermission:(BOOL)allowed forHost:(NSString*)host onContext:(WKWebExtensionContext*)ctx API_AVAILABLE(macos(15.4)) {
+  if (!ctx || !host.length) return;
+  NSString* clean = host.lowercaseString;
+  WKWebExtensionContextPermissionStatus status = allowed
+    ? WKWebExtensionContextPermissionStatusGrantedExplicitly
+    : WKWebExtensionContextPermissionStatusDeniedExplicitly;
+  WKWebExtensionMatchPattern* exact = [WKWebExtensionMatchPattern matchPatternWithScheme:@"*" host:clean path:@"/*"];
+  if (exact) [ctx setPermissionStatus:status forMatchPattern:exact];
+  NSString* subHost = [@"*." stringByAppendingString:clean];
+  WKWebExtensionMatchPattern* sub = [WKWebExtensionMatchPattern matchPatternWithScheme:@"*" host:subHost path:@"/*"];
+  if (sub) [ctx setPermissionStatus:status forMatchPattern:sub];
+}
+
+- (BOOL)extensionId:(NSString*)identifier isAllowedOnHost:(NSString*)host {
+  SlateExtensionRecord* rec = [self recordForId:identifier];
+  if (!rec || !host.length) return YES;
+  return ![rec.deniedHosts containsObject:host.lowercaseString];
+}
+
+- (void)setExtensionId:(NSString*)identifier allowed:(BOOL)allowed onHost:(NSString*)host {
+  SlateExtensionRecord* rec = [self recordForId:identifier];
+  if (!rec || !host.length) return;
+  NSString* clean = host.lowercaseString;
+  if (allowed) [rec.deniedHosts removeObject:clean];
+  else [rec.deniedHosts addObject:clean];
+  if (@available(macOS 15.4, *)) {
+    WKWebExtensionContext* ctx = (WKWebExtensionContext*)rec.webExtensionContext;
+    if (ctx) [self applyHostPermission:allowed forHost:clean onContext:ctx];
+  }
+  [self saveRegistry];
+  [self postDidChange];
 }
 
 - (void)setExtensionId:(NSString*)identifier allowInPrivate:(BOOL)allowInPrivate {
