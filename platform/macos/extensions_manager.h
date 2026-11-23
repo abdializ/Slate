@@ -49,6 +49,8 @@ extern NSNotificationName const SlateExtensionsDidChangeNotification;
 
 + (instancetype)sharedManager;
 + (BOOL)isSupported;
++ (NSString* _Nullable)chromeStoreExtensionIdFromURL:(NSURL* _Nullable)url;
++ (NSString* _Nullable)chromeStoreExtensionIdFromInput:(NSString* _Nullable)input;
 
 @property (nonatomic, weak, nullable) id<SlateExtensionHostDelegate> hostDelegate;
 @property (nonatomic, readonly) NSArray<SlateExtensionRecord*>* extensions;
@@ -70,6 +72,9 @@ extern NSNotificationName const SlateExtensionsDidChangeNotification;
                           completion:(void (^)(SlateExtensionRecord* _Nullable record, NSError* _Nullable error))completion;
 - (void)installFromArchiveURL:(NSURL*)archiveURL
                    completion:(void (^)(SlateExtensionRecord* _Nullable record, NSError* _Nullable error))completion;
+- (void)installFromChromeWebStoreId:(NSString*)storeId
+                         completion:(void (^)(SlateExtensionRecord* _Nullable record, NSError* _Nullable error))completion;
+- (BOOL)isExtensionInstalled:(NSString*)identifier;
 - (void)setExtensionId:(NSString*)identifier enabled:(BOOL)enabled;
 - (void)setExtensionId:(NSString*)identifier allowInPrivate:(BOOL)allowInPrivate;
 - (void)removeExtensionId:(NSString*)identifier;

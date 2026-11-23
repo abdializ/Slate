@@ -245,6 +245,42 @@ API_AVAILABLE(macos(15.4))
   return NO;
 }
 
++ (BOOL)isValidChromeStoreId:(NSString*)s {
+  if (s.length != 32) return NO;
+  for (NSUInteger i = 0; i < 32; ++i) {
+    unichar c = [s characterAtIndex:i];
+    if (c < 'a' || c > 'p') return NO;
+  }
+  return YES;
+}
+
++ (NSString*)chromeStoreExtensionIdFromURL:(NSURL*)url {
+  if (!url) return nil;
+  NSString* host = url.host.lowercaseString;
+  BOOL isStore = [host isEqualToString:@"chromewebstore.google.com"] ||
+                 [host isEqualToString:@"chrome.google.com"];
+  if (!isStore) return nil;
+  NSArray<NSString*>* parts = url.pathComponents;
+  for (NSInteger i = (NSInteger)parts.count - 1; i >= 0; --i) {
+    NSString* seg = parts[(NSUInteger)i].lowercaseString;
+    if ([self isValidChromeStoreId:seg]) return seg;
+  }
+  return nil;
+}
+
++ (NSString*)chromeStoreExtensionIdFromInput:(NSString*)input {
+  if (!input.length) return nil;
+  NSString* trimmed = [input stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  if ([self isValidChromeStoreId:trimmed.lowercaseString]) {
+    return trimmed.lowercaseString;
+  }
+  NSURL* url = [NSURL URLWithString:trimmed];
+  if (!url || !url.scheme.length) {
+    url = [NSURL URLWithString:[@"https://" stringByAppendingString:trimmed]];
+  }
+  return [self chromeStoreExtensionIdFromURL:url];
+}
+
 - (instancetype)init {
   if (self = [super init]) {
     _mutableExtensions = [NSMutableArray array];
@@ -564,6 +600,12 @@ API_AVAILABLE(macos(15.4))
 
 - (void)installFromUnpackedDirectory:(NSURL*)dirURL
                           completion:(void (^)(SlateExtensionRecord* _Nullable, NSError* _Nullable))completion {
+  [self installFromUnpackedDirectory:dirURL preferredId:nil completion:completion];
+}
+
+- (void)installFromUnpackedDirectory:(NSURL*)dirURL
+                         preferredId:(NSString* _Nullable)preferredId
+                          completion:(void (^)(SlateExtensionRecord* _Nullable, NSError* _Nullable))completion {
   if (!dirURL) return;
   NSString* manifestDir = [self findManifestDirectoryUnder:dirURL.path];
   if (!manifestDir) {
@@ -571,7 +613,14 @@ API_AVAILABLE(macos(15.4))
     if (completion) completion(nil, err);
     return;
   }
-  NSString* extId = NSUUID.UUID.UUIDString.lowercaseString;
+  NSString* extId = preferredId.length ? preferredId.lowercaseString : NSUUID.UUID.UUIDString.lowercaseString;
+  // Replace existing installation with same Chrome Web Store ID cleanly.
+  SlateExtensionRecord* existing = [self recordForId:extId];
+  BOOL prevAllowPrivate = existing ? existing.allowInPrivate : NO;
+  if (existing) {
+    [self unloadRecordFromController:existing];
+    [_mutableExtensions removeObject:existing];
+  }
   NSString* destDir = [[self extensionsRootDirectory] stringByAppendingPathComponent:extId];
   NSError* copyErr = nil;
   NSFileManager* fm = [NSFileManager defaultManager];
@@ -589,7 +638,7 @@ API_AVAILABLE(macos(15.4))
   rec.summary = @"";
   rec.directoryPath = destDir;
   rec.enabled = YES;
-  rec.allowInPrivate = NO;
+  rec.allowInPrivate = prevAllowPrivate;
   [_mutableExtensions addObject:rec];
   [self saveRegistry];
 
@@ -607,6 +656,12 @@ API_AVAILABLE(macos(15.4))
 }
 
 - (void)installFromArchiveURL:(NSURL*)archiveURL
+                   completion:(void (^)(SlateExtensionRecord* _Nullable, NSError* _Nullable))completion {
+  [self installFromArchiveURL:archiveURL preferredId:nil completion:completion];
+}
+
+- (void)installFromArchiveURL:(NSURL*)archiveURL
+                  preferredId:(NSString* _Nullable)preferredId
                    completion:(void (^)(SlateExtensionRecord* _Nullable, NSError* _Nullable))completion {
   if (!archiveURL) return;
   NSError* readErr = nil;
@@ -642,10 +697,51 @@ API_AVAILABLE(macos(15.4))
     return;
   }
 
-  [self installFromUnpackedDirectory:[NSURL fileURLWithPath:unpackDir isDirectory:YES] completion:^(SlateExtensionRecord* _Nullable rec, NSError* _Nullable err) {
+  [self installFromUnpackedDirectory:[NSURL fileURLWithPath:unpackDir isDirectory:YES] preferredId:preferredId completion:^(SlateExtensionRecord* _Nullable rec, NSError* _Nullable err) {
     [fm removeItemAtPath:stageRoot error:nil];
     if (completion) completion(rec, err);
   }];
+}
+
+- (BOOL)isExtensionInstalled:(NSString*)identifier {
+  if (!identifier.length) return NO;
+  return [self recordForId:identifier.lowercaseString] != nil;
+}
+
+- (void)installFromChromeWebStoreId:(NSString*)storeId
+                         completion:(void (^)(SlateExtensionRecord* _Nullable, NSError* _Nullable))completion {
+  NSString* cleanId = [SlateExtensionsManager chromeStoreExtensionIdFromInput:storeId];
+  if (!cleanId.length) {
+    NSError* err = [NSError errorWithDomain:@"SlateExtensions" code:6 userInfo:@{NSLocalizedDescriptionKey: @"Invalid Chrome Web Store URL or extension ID."}];
+    if (completion) completion(nil, err);
+    return;
+  }
+  NSString* urlStr = [NSString stringWithFormat:
+    @"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=134.0.6998.165&acceptformat=crx2,crx3&x=id%%3D%@%%26installsource%%3Dondemand%%26uc",
+    cleanId];
+  NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
+  req.timeoutInterval = 30.0;
+  [req setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+     forHTTPHeaderField:@"User-Agent"];
+
+  NSURLSessionDataTask* task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData* _Nullable data, NSURLResponse* _Nullable response, NSError* _Nullable error) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSHTTPURLResponse* http = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse*)response : nil;
+      if (error || !data.length || (http && http.statusCode != 200)) {
+        NSString* msg = error.localizedDescription ?: [NSString stringWithFormat:@"Chrome Web Store returned HTTP %ld (extension may be private or unavailable).", (long)(http ? http.statusCode : 0)];
+        NSError* dlErr = [NSError errorWithDomain:@"SlateExtensions" code:7 userInfo:@{NSLocalizedDescriptionKey: msg}];
+        if (completion) completion(nil, dlErr);
+        return;
+      }
+      NSString* tmpCrx = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"slate-store-%@.crx", cleanId]];
+      [data writeToFile:tmpCrx atomically:YES];
+      [self installFromArchiveURL:[NSURL fileURLWithPath:tmpCrx] preferredId:cleanId completion:^(SlateExtensionRecord* _Nullable rec, NSError* _Nullable installErr) {
+        [[NSFileManager defaultManager] removeItemAtPath:tmpCrx error:nil];
+        if (completion) completion(rec, installErr);
+      }];
+    });
+  }];
+  [task resume];
 }
 
 #pragma mark - Controls & Actions

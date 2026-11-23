@@ -517,6 +517,43 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
 // WKScriptMessageHandler: Handle media playing and audible updates from in-page media observer
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+  if ([message.name isEqualToString:@"slateWebStore"]) {
+    if (message.webView != self.webView || ![message.body isKindOfClass:[NSDictionary class]]) return;
+    NSDictionary* dict = (NSDictionary*)message.body;
+    NSString* op = [dict[@"op"] isKindOfClass:[NSString class]] ? dict[@"op"] : @"";
+    NSString* extId = [dict[@"id"] isKindOfClass:[NSString class]] ? dict[@"id"] : @"";
+    if (!extId.length) return;
+    __weak WKWebView* weakWeb = self.webView;
+    auto sendState = ^(NSString* state, NSString* msg) {
+      WKWebView* wv = weakWeb;
+      if (!wv) return;
+      NSDictionary* payload = @{@"id": extId, @"state": state ?: @"", @"message": msg ?: @""};
+      NSData* json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+      NSString* jsonStr = json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"{}";
+      NSString* js = [NSString stringWithFormat:@"window.__slateWebStoreUpdate && window.__slateWebStoreUpdate(%@);", jsonStr];
+      if (@available(macOS 11.0, *)) {
+        [wv evaluateJavaScript:js inFrame:nil inContentWorld:[WKContentWorld defaultClientWorld] completionHandler:nil];
+      }
+    };
+    if ([op isEqualToString:@"query"]) {
+      BOOL installed = [[SlateExtensionsManager sharedManager] isExtensionInstalled:extId];
+      sendState(installed ? @"installed" : @"ready", @"");
+    } else if ([op isEqualToString:@"install"]) {
+      sendState(@"installing", @"");
+      [[SlateExtensionsManager sharedManager] installFromChromeWebStoreId:extId completion:^(SlateExtensionRecord* rec, NSError* err) {
+        if (err || !rec) {
+          sendState(@"error", err.localizedDescription ?: @"Install failed");
+        } else {
+          sendState(@"installed", rec.name ?: @"Installed");
+        }
+      }];
+    } else if ([op isEqualToString:@"remove"]) {
+      [[SlateExtensionsManager sharedManager] removeExtensionId:extId];
+      sendState(@"ready", @"");
+    }
+    return;
+  }
+
   if ([message.name isEqualToString:kSlateSwipeScrollMessageName]) {
     if (message.webView != self.webView || ![message.body isKindOfClass:[NSDictionary class]]) return;
     NSDictionary* dict = (NSDictionary*)message.body;
@@ -1197,6 +1234,98 @@ class WebKitEngine final : public BrowserEngine {
                                                       forMainFrameOnly:NO
                                                         inContentWorld:[WKContentWorld defaultClientWorld]];
       [config.userContentController addUserScript:swipeScript];
+      NSString* webStoreJs = @R"JS(
+        (function() {
+          const h = (location.hostname || '').toLowerCase();
+          if (h !== 'chromewebstore.google.com' && h !== 'chrome.google.com') return;
+          if (window.__slateWebStoreInit) return;
+          window.__slateWebStoreInit = true;
+          let bar = null, btn = null, subBtn = null, label = null, currentId = null;
+          function extractId() {
+            const parts = (location.pathname || '').split('/').filter(Boolean);
+            for (let i = parts.length - 1; i >= 0; i--) {
+              const s = parts[i].toLowerCase();
+              if (/^[a-p]{32}$/.test(s)) return s;
+            }
+            return null;
+          }
+          function ensureBar() {
+            if (bar && bar.isConnected) return bar;
+            bar = document.createElement('div');
+            bar.id = '__slate_cws_bar__';
+            bar.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483647;display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;background:rgba(20,20,22,0.94);color:#f5f5f7;font:500 13px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,0.32);border:1px solid rgba(255,255,255,0.12);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);';
+            label = document.createElement('span');
+            label.style.cssText = 'opacity:0.78;font-weight:400;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            label.textContent = 'Slate Extensions';
+            btn = document.createElement('button');
+            btn.type = 'button';
+            btn.style.cssText = 'border:0;border-radius:8px;padding:6px 12px;background:#ffffff;color:#111113;font:600 12px/1 -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;';
+            btn.textContent = 'Add to Slate';
+            btn.addEventListener('click', function() {
+              if (!currentId || btn.disabled) return;
+              try { window.webkit.messageHandlers.slateWebStore.postMessage({ op: 'install', id: currentId }); } catch (e) {}
+            });
+            subBtn = document.createElement('button');
+            subBtn.type = 'button';
+            subBtn.style.cssText = 'display:none;border:1px solid rgba(255,255,255,0.22);border-radius:8px;padding:6px 10px;background:transparent;color:#f5f5f7;font:500 12px/1 -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;';
+            subBtn.textContent = 'Remove';
+            subBtn.addEventListener('click', function() {
+              if (!currentId) return;
+              try { window.webkit.messageHandlers.slateWebStore.postMessage({ op: 'remove', id: currentId }); } catch (e) {}
+            });
+            bar.appendChild(label);
+            bar.appendChild(btn);
+            bar.appendChild(subBtn);
+            (document.body || document.documentElement).appendChild(bar);
+            return bar;
+          }
+          window.__slateWebStoreUpdate = function(info) {
+            if (!info || info.id !== currentId || !bar) return;
+            if (info.state === 'installing') {
+              btn.disabled = true; btn.textContent = 'Installing…'; subBtn.style.display = 'none';
+              label.textContent = 'Downloading from Chrome Web Store';
+            } else if (info.state === 'installed') {
+              btn.disabled = true; btn.textContent = 'Added to Slate'; subBtn.style.display = 'inline-block';
+              label.textContent = info.message || 'Installed in Slate';
+            } else if (info.state === 'error') {
+              btn.disabled = false; btn.textContent = 'Retry'; subBtn.style.display = 'none';
+              label.textContent = info.message || 'Install failed';
+            } else {
+              btn.disabled = false; btn.textContent = 'Add to Slate'; subBtn.style.display = 'none';
+              label.textContent = 'Slate Extensions';
+            }
+          };
+          function sync() {
+            const id = extractId();
+            if (!id) {
+              currentId = null;
+              if (bar) bar.style.display = 'none';
+              return;
+            }
+            ensureBar();
+            bar.style.display = 'flex';
+            if (id !== currentId) {
+              currentId = id;
+              btn.disabled = false; btn.textContent = 'Add to Slate'; subBtn.style.display = 'none';
+              label.textContent = 'Slate Extensions';
+              try { window.webkit.messageHandlers.slateWebStore.postMessage({ op: 'query', id: currentId }); } catch (e) {}
+            }
+          }
+          let lastHref = location.href;
+          setInterval(function() {
+            if (location.href !== lastHref) { lastHref = location.href; sync(); }
+          }, 500);
+          window.addEventListener('popstate', sync);
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', sync, { once: true });
+          else sync();
+        })();
+      )JS";
+      WKUserScript* webStoreScript = [[WKUserScript alloc] initWithSource:webStoreJs
+                                                            injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                         forMainFrameOnly:YES
+                                                           inContentWorld:[WKContentWorld defaultClientWorld]];
+      [config.userContentController addUserScript:webStoreScript];
+      [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:@"slateWebStore"];
       [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:kSlateSwipeScrollMessageName];
       [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:@"slateMedia"];
       [config.userContentController addScriptMessageHandler:delegate_ contentWorld:[WKContentWorld defaultClientWorld] name:@"slateTheme"];
@@ -1561,6 +1690,7 @@ class WebKitEngine final : public BrowserEngine {
           [web_view_ closeAllMediaPresentationsWithCompletionHandler:nil];
         }
         if (@available(macOS 11.0, *)) {
+          [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateWebStore" contentWorld:[WKContentWorld defaultClientWorld]];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:kSlateSwipeScrollMessageName contentWorld:[WKContentWorld defaultClientWorld]];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateMedia" contentWorld:[WKContentWorld defaultClientWorld]];
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateTheme" contentWorld:[WKContentWorld defaultClientWorld]];

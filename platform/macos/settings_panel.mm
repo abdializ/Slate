@@ -285,6 +285,8 @@
 @property (nonatomic, strong) NSTextField* vpnStatusLabel;
 @property (nonatomic, strong) NSView* vpnStatusDot;
 @property (nonatomic, strong) NSTextField* downloadPathLabel;
+@property (nonatomic, strong) NSTextField* storeInstallField;
+@property (nonatomic, strong) NSTextField* storeInstallStatus;
 @end
 
 @implementation SlateSettingsPanel
@@ -1244,35 +1246,61 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     return;
   }
 
-  // Install Card
-  y = [self addSectionCaptionTo:doc y:y text:@"Add Extension"];
-  SlateSettingsCard* addCard = [self addCardTo:doc y:y height:60];
-  CGFloat cw = NSWidth(addCard.bounds);
+  // Chrome Web Store Card
+  y = [self addSectionCaptionTo:doc y:y text:@"Chrome Web Store"];
+  SlateSettingsCard* storeCard = [self addCardTo:doc y:y height:114];
+  CGFloat cw = NSWidth(storeCard.bounds);
 
-  SlateQuietButton* crxBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(16, 17, 146, 26)
+  NSTextField* storeField = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 14, cw - 122, 26)];
+  storeField.controlSize = NSControlSizeSmall;
+  storeField.font = [NSFont systemFontOfSize:12];
+  storeField.placeholderString = @"Paste Chrome Web Store URL or 32-char extension ID…";
+  storeField.autoresizingMask = NSViewWidthSizable;
+  self.storeInstallField = storeField;
+  [storeCard addSubview:storeField];
+
+  SlateQuietButton* storeInstallBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(cw - 98, 14, 82, 26)
+                                                                        title:@"Install"
+                                                                       target:self
+                                                                       action:@selector(installFromStoreFieldClicked:)
+                                                                      primary:YES];
+  storeInstallBtn.autoresizingMask = NSViewMinXMargin;
+  [storeCard addSubview:storeInstallBtn];
+
+  NSTextField* storeStatus = [NSTextField labelWithString:@"Or browse chromewebstore.google.com and click “Add to Slate” on any extension."];
+  storeStatus.font = [NSFont systemFontOfSize:11];
+  storeStatus.textColor = NSColor.secondaryLabelColor;
+  storeStatus.lineBreakMode = NSLineBreakByTruncatingTail;
+  storeStatus.frame = NSMakeRect(16, 46, cw - 32, 15);
+  storeStatus.autoresizingMask = NSViewWidthSizable;
+  self.storeInstallStatus = storeStatus;
+  [storeCard addSubview:storeStatus];
+
+  [self addDividerToCard:storeCard y:68];
+
+  SlateQuietButton* browseStoreBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(16, 78, 154, 26)
+                                                                       title:@"Open Chrome Web Store"
+                                                                      target:self
+                                                                      action:@selector(openChromeWebStoreClicked:)
+                                                                     primary:NO];
+  [storeCard addSubview:browseStoreBtn];
+
+  SlateQuietButton* crxBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(178, 78, 134, 26)
                                                                title:@"Install .crx / .zip…"
                                                               target:self
                                                               action:@selector(installExtensionArchiveClicked:)
-                                                             primary:YES];
-  [addCard addSubview:crxBtn];
+                                                             primary:NO];
+  [storeCard addSubview:crxBtn];
 
-  SlateQuietButton* unpackedBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(170, 17, 134, 26)
+  SlateQuietButton* unpackedBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(320, 78, 120, 26)
                                                                     title:@"Load Unpacked…"
                                                                    target:self
                                                                    action:@selector(loadUnpackedExtensionClicked:)
                                                                   primary:NO];
-  [addCard addSubview:unpackedBtn];
-
-  NSTextField* hint = [NSTextField labelWithString:@"MV2 & MV3 supported"];
-  hint.font = [NSFont systemFontOfSize:11];
-  hint.textColor = NSColor.tertiaryLabelColor;
-  hint.alignment = NSTextAlignmentRight;
-  hint.frame = NSMakeRect(cw - 146, 23, 130, 14);
-  hint.autoresizingMask = NSViewMinXMargin;
-  [addCard addSubview:hint];
+  [storeCard addSubview:unpackedBtn];
 
   // Installed Extensions Card
-  y += 60 + 20;
+  y += 114 + 20;
   NSArray<SlateExtensionRecord*>* list = [SlateExtensionsManager sharedManager].extensions;
   y = [self addSectionCaptionTo:doc y:y text:[NSString stringWithFormat:@"Installed (%lu)", (unsigned long)list.count]];
 
@@ -1370,6 +1398,38 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   alert.informativeText = error.localizedDescription ?: @"Invalid Chrome extension package.";
   [alert addButtonWithTitle:@"OK"];
   [alert beginSheetModalForWindow:self completionHandler:nil];
+}
+
+- (void)installFromStoreFieldClicked:(id)sender {
+  (void)sender;
+  NSString* input = self.storeInstallField.stringValue ?: @"";
+  NSString* storeId = [SlateExtensionsManager chromeStoreExtensionIdFromInput:input];
+  if (!storeId.length) {
+    self.storeInstallStatus.stringValue = @"Enter a valid Chrome Web Store URL or 32-character extension ID.";
+    return;
+  }
+  self.storeInstallStatus.stringValue = @"Downloading from Chrome Web Store…";
+  __weak SlateSettingsPanel* weakSelf = self;
+  [[SlateExtensionsManager sharedManager] installFromChromeWebStoreId:storeId completion:^(SlateExtensionRecord* rec, NSError* err) {
+    SlateSettingsPanel* strongSelf = weakSelf;
+    if (!strongSelf) return;
+    if (err || !rec) {
+      strongSelf.storeInstallStatus.stringValue = err.localizedDescription ?: @"Could not install extension.";
+    } else {
+      strongSelf.storeInstallField.stringValue = @"";
+      strongSelf.storeInstallStatus.stringValue = [NSString stringWithFormat:@"Installed %@", rec.name ?: @"extension"];
+      [strongSelf renderCurrentPage];
+    }
+  }];
+}
+
+- (void)openChromeWebStoreClicked:(id)sender {
+  (void)sender;
+  id<SlateExtensionHostDelegate> host = [SlateExtensionsManager sharedManager].hostDelegate;
+  if (host) {
+    [host extensionHostOpenURL:[NSURL URLWithString:@"https://chromewebstore.google.com/"] incognito:NO activate:YES];
+    [self.slateDelegate.window makeKeyAndOrderFront:nil];
+  }
 }
 
 - (void)installExtensionArchiveClicked:(id)sender {
