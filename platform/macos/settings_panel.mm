@@ -1,6 +1,6 @@
 #import "app_updater.h"
-// File purpose: Implements the native settings pages and their connection to browser
-// preferences/actions.
+// File purpose: Implements the native minimalist settings window and its connection to browser
+// preferences and actions.
 
 #import "platform/macos/settings_panel.h"
 #import "platform/macos/passwords_panel.h"
@@ -43,6 +43,174 @@
 - (void)refresh;
 @end
 
+#pragma mark - Minimalist UI Primitives
+
+@interface SlateSettingsFlippedView : NSView
+@end
+@implementation SlateSettingsFlippedView
+- (BOOL)isFlipped { return YES; }
+@end
+
+@interface SlateSettingsHairline : NSView
+@end
+@implementation SlateSettingsHairline
+- (instancetype)initWithFrame:(NSRect)frameRect {
+  if (self = [super initWithFrame:frameRect]) {
+    self.wantsLayer = YES;
+  }
+  return self;
+}
+- (void)updateLayer {
+  self.layer.backgroundColor = [NSColor.separatorColor colorWithAlphaComponent:0.42].CGColor;
+}
+- (BOOL)wantsUpdateLayer { return YES; }
+@end
+
+@interface SlateSettingsCard : NSView
+@end
+@implementation SlateSettingsCard
+- (BOOL)isFlipped { return YES; }
+- (instancetype)initWithFrame:(NSRect)frameRect {
+  if (self = [super initWithFrame:frameRect]) {
+    self.wantsLayer = YES;
+    self.layer.cornerRadius = 11.0;
+    if (@available(macOS 11.0, *)) {
+      self.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    self.layer.borderWidth = 1.0;
+  }
+  return self;
+}
+- (BOOL)wantsUpdateLayer { return YES; }
+- (void)updateLayer {
+  BOOL dark = [self.effectiveAppearance.name containsString:@"Dark"];
+  self.layer.backgroundColor = [NSColor.labelColor colorWithAlphaComponent:dark ? 0.045 : 0.026].CGColor;
+  self.layer.borderColor = [NSColor.separatorColor colorWithAlphaComponent:dark ? 0.45 : 0.35].CGColor;
+}
+@end
+
+@interface SlateQuietButton : NSButton
+@property (nonatomic, assign) BOOL hovered;
+@property (nonatomic, assign) BOOL primary;
+@end
+@implementation SlateQuietButton
+- (instancetype)initWithFrame:(NSRect)frameRect title:(NSString*)title target:(id)target action:(SEL)action primary:(BOOL)primary {
+  if (self = [super initWithFrame:frameRect]) {
+    _primary = primary;
+    self.title = title ?: @"";
+    self.target = target;
+    self.action = action;
+    self.bordered = NO;
+    self.bezelStyle = NSBezelStyleRegularSquare;
+    self.font = [NSFont systemFontOfSize:12 weight:primary ? NSFontWeightMedium : NSFontWeightRegular];
+    self.wantsLayer = YES;
+    self.layer.cornerRadius = 7.0;
+    if (@available(macOS 11.0, *)) self.layer.cornerCurve = kCACornerCurveContinuous;
+    self.layer.borderWidth = 1.0;
+    [self syncStyle];
+  }
+  return self;
+}
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  for (NSTrackingArea* a in [self.trackingAreas copy]) [self removeTrackingArea:a];
+  [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds
+                                                     options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+                                                       owner:self
+                                                    userInfo:nil]];
+}
+- (void)mouseEntered:(NSEvent*)event { _hovered = YES; [self syncStyle]; }
+- (void)mouseExited:(NSEvent*)event { _hovered = NO; [self syncStyle]; }
+- (void)setEnabled:(BOOL)enabled { [super setEnabled:enabled]; [self syncStyle]; }
+- (void)viewDidChangeEffectiveAppearance { [super viewDidChangeEffectiveAppearance]; [self syncStyle]; }
+- (void)syncStyle {
+  [self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+    CGFloat alpha = self.enabled ? 1.0 : 0.45;
+    if (_primary) {
+      NSColor* bg = [NSColor.labelColor colorWithAlphaComponent:_hovered ? 0.88 : 0.96];
+      self.layer.backgroundColor = [bg colorWithAlphaComponent:bg.alphaComponent * alpha].CGColor;
+      self.layer.borderColor = NSColor.clearColor.CGColor;
+      NSColor* fg = [NSColor.windowBackgroundColor colorWithAlphaComponent:alpha];
+      self.attributedTitle = [[NSAttributedString alloc] initWithString:self.title attributes:@{
+        NSFontAttributeName: self.font,
+        NSForegroundColorAttributeName: fg
+      }];
+    } else {
+      CGFloat fill = _hovered ? 0.085 : 0.04;
+      self.layer.backgroundColor = [NSColor.labelColor colorWithAlphaComponent:fill].CGColor;
+      self.layer.borderColor = [NSColor.separatorColor colorWithAlphaComponent:0.55].CGColor;
+      NSColor* fg = [NSColor.labelColor colorWithAlphaComponent:alpha];
+      self.attributedTitle = [[NSAttributedString alloc] initWithString:self.title attributes:@{
+        NSFontAttributeName: self.font,
+        NSForegroundColorAttributeName: fg
+      }];
+    }
+  }];
+}
+@end
+
+@interface SlateSettingsRailButton : NSButton
+@property (nonatomic, assign) BOOL selectedItem;
+@property (nonatomic, assign) BOOL hovered;
+@property (nonatomic, copy) NSString* iconName;
+@property (nonatomic, copy) NSString* itemTitle;
+@end
+@implementation SlateSettingsRailButton
+- (instancetype)initWithFrame:(NSRect)frameRect pageId:(NSString*)pageId title:(NSString*)title icon:(NSString*)icon {
+  if (self = [super initWithFrame:frameRect]) {
+    self.identifier = pageId;
+    _itemTitle = [title copy];
+    _iconName = [icon copy];
+    self.bordered = NO;
+    self.bezelStyle = NSBezelStyleInline;
+    self.alignment = NSTextAlignmentLeft;
+    self.imagePosition = NSImageLeading;
+    self.wantsLayer = YES;
+    self.layer.cornerRadius = 8.0;
+    if (@available(macOS 11.0, *)) self.layer.cornerCurve = kCACornerCurveContinuous;
+    [self syncStyle];
+  }
+  return self;
+}
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  for (NSTrackingArea* a in [self.trackingAreas copy]) [self removeTrackingArea:a];
+  [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds
+                                                     options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
+                                                       owner:self
+                                                    userInfo:nil]];
+}
+- (void)mouseEntered:(NSEvent*)event { _hovered = YES; [self syncStyle]; }
+- (void)mouseExited:(NSEvent*)event { _hovered = NO; [self syncStyle]; }
+- (void)setSelectedItem:(BOOL)selectedItem { _selectedItem = selectedItem; [self syncStyle]; }
+- (void)viewDidChangeEffectiveAppearance { [super viewDidChangeEffectiveAppearance]; [self syncStyle]; }
+- (void)syncStyle {
+  [self.effectiveAppearance performAsCurrentDrawingAppearance:^{
+    NSImage* sym = [NSImage imageWithSystemSymbolName:_iconName accessibilityDescription:nil];
+    if (sym) {
+      NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:12.5
+                                                                                        weight:_selectedItem ? NSFontWeightMedium : NSFontWeightRegular];
+      self.image = [sym imageWithSymbolConfiguration:cfg];
+    }
+    NSColor* ink = _selectedItem ? NSColor.labelColor : NSColor.secondaryLabelColor;
+    self.contentTintColor = ink;
+    NSFont* font = [NSFont systemFontOfSize:13 weight:_selectedItem ? NSFontWeightMedium : NSFontWeightRegular];
+    self.attributedTitle = [[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"  %@", _itemTitle ?: @""]
+                                                           attributes:@{
+      NSFontAttributeName: font,
+      NSForegroundColorAttributeName: ink
+    }];
+    if (_selectedItem) {
+      self.layer.backgroundColor = [NSColor.labelColor colorWithAlphaComponent:0.085].CGColor;
+    } else if (_hovered) {
+      self.layer.backgroundColor = [NSColor.labelColor colorWithAlphaComponent:0.04].CGColor;
+    } else {
+      self.layer.backgroundColor = NSColor.clearColor.CGColor;
+    }
+  }];
+}
+@end
+
 @interface SlateThemeSwatchButton : NSButton
 @property (nonatomic, copy) NSString* accentKey;
 @property (nonatomic, copy) NSString* accentTitle;
@@ -64,47 +232,38 @@
   }
   return self;
 }
-
 - (void)setIsSelectedSwatch:(BOOL)sel {
   _isSelectedSwatch = sel;
   [self setNeedsDisplay:YES];
 }
-
 - (void)drawRect:(NSRect)dirtyRect {
   [super drawRect:dirtyRect];
-  NSRect b = NSInsetRect(self.bounds, 2, 2);
-  NSBezierPath* circle = [NSBezierPath bezierPathWithOvalInRect:b];
+  NSRect outer = NSInsetRect(self.bounds, 1.5, 1.5);
+  if (_isSelectedSwatch) {
+    [[NSColor.labelColor colorWithAlphaComponent:0.65] setStroke];
+    NSBezierPath* ring = [NSBezierPath bezierPathWithOvalInRect:outer];
+    ring.lineWidth = 1.5;
+    [ring stroke];
+  }
+  NSRect dot = NSInsetRect(outer, _isSelectedSwatch ? 3.5 : 2.0, _isSelectedSwatch ? 3.5 : 2.0);
+  NSBezierPath* circle = [NSBezierPath bezierPathWithOvalInRect:dot];
   [self.swatchColor setFill];
   [circle fill];
-
-  if (_isSelectedSwatch) {
-    [[NSColor whiteColor] setStroke];
-    NSBezierPath* ring = [NSBezierPath bezierPathWithOvalInRect:NSInsetRect(b, 2.5, 2.5)];
-    ring.lineWidth = 2.0;
-    [ring stroke];
-
-    // Inner checkmark
-    NSImage* check = [NSImage imageWithSystemSymbolName:@"checkmark" accessibilityDescription:nil];
-    if (check) {
-      NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:10 weight:NSFontWeightBold];
-      check = [check imageWithSymbolConfiguration:cfg];
-      NSRect checkRect = NSMakeRect((NSWidth(b) - 12)/2.0 + b.origin.x, (NSHeight(b) - 12)/2.0 + b.origin.y, 12, 12);
-      [check drawInRect:checkRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
-    }
-  } else {
-    [[NSColor colorWithWhite:0 alpha:0.12] setStroke];
-    circle.lineWidth = 1.0;
-    [circle stroke];
-  }
+  [[NSColor.labelColor colorWithAlphaComponent:0.12] setStroke];
+  circle.lineWidth = 0.75;
+  [circle stroke];
 }
 @end
 
+#pragma mark - Settings Panel
+
 @interface SlateSettingsPanel ()
-@property (nonatomic, strong) NSView* railView;
+@property (nonatomic, strong) NSVisualEffectView* railView;
 @property (nonatomic, strong) NSView* containerView;
 @property (nonatomic, copy) NSString* currentPage;
-@property (nonatomic, strong) NSMutableArray<NSButton*>* railButtons;
+@property (nonatomic, strong) NSMutableArray<SlateSettingsRailButton*>* railButtons;
 @property (nonatomic, strong) NSMutableArray<SlateThemeSwatchButton*>* swatchButtons;
+@property (nonatomic, strong) NSTextField* activeAccentLabel;
 @property (nonatomic, strong) NSSegmentedControl* appearanceSegment;
 @property (nonatomic, strong) NSSegmentedControl* tabStyleSegment;
 @property (nonatomic, strong) NSSwitch* switch120Hz;
@@ -122,6 +281,7 @@
 @property (nonatomic, strong) NSSecureTextField* vpnPassField;
 @property (nonatomic, strong) NSButton* vpnFailClosedCheck;
 @property (nonatomic, strong) NSTextField* vpnStatusLabel;
+@property (nonatomic, strong) NSView* vpnStatusDot;
 @property (nonatomic, strong) NSTextField* downloadPathLabel;
 @end
 
@@ -138,11 +298,15 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 }
 
 - (instancetype)init {
-  NSRect contentRect = NSMakeRect(0, 0, 660, 500);
-  NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
+  NSRect contentRect = NSMakeRect(0, 0, 740, 540);
+  NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskResizable | NSWindowStyleMaskFullSizeContentView;
   if (self = [super initWithContentRect:contentRect styleMask:style backing:NSBackingStoreBuffered defer:NO]) {
     self.title = @"Settings";
-    self.minSize = NSMakeSize(600, 440);
+    self.titlebarAppearsTransparent = YES;
+    self.titleVisibility = NSWindowTitleHidden;
+    self.backgroundColor = NSColor.windowBackgroundColor;
+    self.minSize = NSMakeSize(660, 480);
     self.releasedWhenClosed = NO;
     self.hidesOnDeactivate = NO;
     _currentPage = @"appearance";
@@ -157,15 +321,18 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   NSView* root = self.contentView;
   root.wantsLayer = YES;
 
-  // Left rail (sidebar)
-  _railView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 168, 500)];
+  _railView = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, 188, 540)];
   _railView.translatesAutoresizingMaskIntoConstraints = NO;
-  _railView.wantsLayer = YES;
-  _railView.layer.backgroundColor = [NSColor colorWithWhite:0.5 alpha:0.06].CGColor;
+  _railView.material = NSVisualEffectMaterialSidebar;
+  _railView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+  _railView.state = NSVisualEffectStateFollowsWindowActiveState;
   [root addSubview:_railView];
 
-  // Right container
-  _containerView = [[NSView alloc] initWithFrame:NSMakeRect(168, 0, 492, 500)];
+  SlateSettingsHairline* divider = [[SlateSettingsHairline alloc] initWithFrame:NSZeroRect];
+  divider.translatesAutoresizingMaskIntoConstraints = NO;
+  [root addSubview:divider];
+
+  _containerView = [[NSView alloc] initWithFrame:NSMakeRect(189, 0, 551, 540)];
   _containerView.translatesAutoresizingMaskIntoConstraints = NO;
   _containerView.wantsLayer = YES;
   [root addSubview:_containerView];
@@ -174,9 +341,14 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     [_railView.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
     [_railView.topAnchor constraintEqualToAnchor:root.topAnchor],
     [_railView.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
-    [_railView.widthAnchor constraintEqualToConstant:168],
+    [_railView.widthAnchor constraintEqualToConstant:188],
 
-    [_containerView.leadingAnchor constraintEqualToAnchor:_railView.trailingAnchor],
+    [divider.leadingAnchor constraintEqualToAnchor:_railView.trailingAnchor],
+    [divider.topAnchor constraintEqualToAnchor:root.topAnchor],
+    [divider.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+    [divider.widthAnchor constraintEqualToConstant:1],
+
+    [_containerView.leadingAnchor constraintEqualToAnchor:divider.trailingAnchor],
     [_containerView.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
     [_containerView.topAnchor constraintEqualToAnchor:root.topAnchor],
     [_containerView.bottomAnchor constraintEqualToAnchor:root.bottomAnchor]
@@ -190,68 +362,54 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   for (NSView* v in [_railView.subviews copy]) [v removeFromSuperview];
   [_railButtons removeAllObjects];
 
-  NSTextField* header = [NSTextField labelWithString:@"Settings"];
-  header.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-  header.textColor = [NSColor labelColor];
-  header.frame = NSMakeRect(16, 458, 136, 22);
-  header.autoresizingMask = NSViewMinYMargin;
-  [_railView addSubview:header];
+  SlateSettingsFlippedView* railDoc = [[SlateSettingsFlippedView alloc] initWithFrame:_railView.bounds];
+  railDoc.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  [_railView addSubview:railDoc];
+
+  NSTextField* caption = [NSTextField labelWithString:@"SETTINGS"];
+  caption.attributedStringValue = [[NSAttributedString alloc] initWithString:@"SETTINGS" attributes:@{
+    NSFontAttributeName: [NSFont systemFontOfSize:10.5 weight:NSFontWeightSemibold],
+    NSForegroundColorAttributeName: NSColor.tertiaryLabelColor,
+    NSKernAttributeName: @1.1
+  }];
+  caption.frame = NSMakeRect(18, 48, 150, 14);
+  [railDoc addSubview:caption];
 
   NSArray<NSDictionary*>* items = @[
-    @{@"id":@"appearance", @"title":@"Appearance", @"icon":@"paintbrush"},
-    @{@"id":@"search", @"title":@"Search", @"icon":@"magnifyingglass"},
-    @{@"id":@"general",    @"title":@"General",    @"icon":@"macwindow"},
+    @{@"id":@"appearance", @"title":@"Appearance", @"icon":@"circle.lefthalf.filled"},
+    @{@"id":@"search",     @"title":@"Search",     @"icon":@"magnifyingglass"},
+    @{@"id":@"general",    @"title":@"General",    @"icon":@"slider.horizontal.3"},
     @{@"id":@"tabs",       @"title":@"Tabs",       @"icon":@"rectangle.split.3x1"},
     @{@"id":@"downloads",  @"title":@"Downloads",  @"icon":@"arrow.down.circle"},
     @{@"id":@"passwords",  @"title":@"Passwords",  @"icon":@"key"},
-    @{@"id":@"privacy",    @"title":@"Privacy",    @"icon":@"hand.raised"},
+    @{@"id":@"privacy",    @"title":@"Privacy",    @"icon":@"shield"},
     @{@"id":@"about",      @"title":@"About",      @"icon":@"info.circle"}
   ];
 
-  CGFloat y = 416;
+  CGFloat y = 72;
   for (NSDictionary* it in items) {
-    NSString* pageId = it[@"id"];
-    NSString* title = it[@"title"];
-    NSString* iconName = it[@"icon"];
-
-    NSButton* btn = [[NSButton alloc] initWithFrame:NSMakeRect(10, y, 148, 30)];
-    btn.autoresizingMask = NSViewMinYMargin;
-    btn.bezelStyle = NSBezelStyleInline;
-    btn.bordered = NO;
-    btn.alignment = NSTextAlignmentLeft;
-    btn.imagePosition = NSImageLeading;
-    btn.wantsLayer = YES;
-    btn.layer.cornerRadius = 6.0;
-
-    NSImage* sym = [NSImage imageWithSystemSymbolName:iconName accessibilityDescription:nil];
-    if (sym) {
-      NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightMedium];
-      btn.image = [sym imageWithSymbolConfiguration:cfg];
-    }
-    btn.title = [NSString stringWithFormat:@"  %@", title];
-    btn.font = [NSFont systemFontOfSize:13 weight:NSFontWeightRegular];
+    SlateSettingsRailButton* btn = [[SlateSettingsRailButton alloc] initWithFrame:NSMakeRect(10, y, 168, 30)
+                                                                           pageId:it[@"id"]
+                                                                            title:it[@"title"]
+                                                                             icon:it[@"icon"]];
     btn.target = self;
     btn.action = @selector(railButtonClicked:);
-    btn.identifier = pageId;
-
-    [_railView addSubview:btn];
+    [railDoc addSubview:btn];
     [_railButtons addObject:btn];
-    y -= 34;
+    y += 33;
   }
 
   [self updateRailSelection];
 }
 
 - (void)updateRailSelection {
-  for (NSButton* b in _railButtons) {
-    BOOL on = [b.identifier isEqualToString:_currentPage];
-    b.font = [NSFont systemFontOfSize:13 weight:on ? NSFontWeightSemibold : NSFontWeightRegular];
-    b.contentTintColor = on ? [NSColor labelColor] : [NSColor secondaryLabelColor];
-    b.layer.backgroundColor = on ? [NSColor colorWithWhite:0.5 alpha:0.18].CGColor : [NSColor clearColor].CGColor;
+  for (SlateSettingsRailButton* b in _railButtons) {
+    b.selectedItem = [b.identifier isEqualToString:_currentPage];
   }
 }
 
-- (void)railButtonClicked:(NSButton*)sender {
+- (void)railButtonClicked:(SlateSettingsRailButton*)sender {
+  if ([_currentPage isEqualToString:sender.identifier]) return;
   _currentPage = sender.identifier;
   [self updateRailSelection];
   [self renderCurrentPage];
@@ -271,12 +429,9 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   [self makeKeyAndOrderFront:nil];
 }
 
-// Slate note: Refresh visible settings from the browser state so reopening the panel reflects current
-// preferences.
 - (void)updateFromDelegate {
   if (!self.slateDelegate) return;
 
-  // Appearance
   if (_appearanceSegment) {
     _appearanceSegment.selectedSegment = MAX(0, MIN(2, self.slateDelegate.themeMode));
   }
@@ -285,14 +440,12 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   }
   [self updateSwatches];
 
-  // Switches
   if (_switch120Hz) _switch120Hz.state = self.slateDelegate.pages120Hz ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchVerticalTabs) _switchVerticalTabs.state = self.slateDelegate.verticalTabs ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchCollapseTabs) _switchCollapseTabs.state = self.slateDelegate.tabsCollapsed ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchBookmarks) _switchBookmarks.state = self.slateDelegate.showBookmarksBar ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchShields) _switchShields.state = slate::WebKitShields::Shared().IsEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
 
-  // Downloads path
   if (_downloadPathLabel) {
     NSString* dir = [SlateDownloadManager sharedManager].downloadsDirectory ?: [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
     _downloadPathLabel.stringValue = [dir stringByReplacingOccurrencesOfString:NSHomeDirectory() withString:@"~"];
@@ -301,16 +454,149 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
 - (void)updateSwatches {
   NSString* currentAccent = self.slateDelegate.accentId ?: @"slate";
+  NSString* activeName = @"Custom";
   for (SlateThemeSwatchButton* b in _swatchButtons) {
-    [b setIsSelectedSwatch:[b.accentKey isEqualToString:currentAccent]];
+    BOOL match = [b.accentKey isEqualToString:currentAccent];
+    [b setIsSelectedSwatch:match];
+    if (match) activeName = b.accentTitle;
+  }
+  if (_activeAccentLabel) {
+    _activeAccentLabel.stringValue = activeName;
   }
 }
 
-#pragma mark - Page Rendering
+#pragma mark - Page Canvas Helpers
+
+- (SlateSettingsFlippedView*)makePageCanvasWithScroll:(NSScrollView**)outScroll {
+  NSScrollView* scroll = [[NSScrollView alloc] initWithFrame:_containerView.bounds];
+  scroll.hasVerticalScroller = YES;
+  scroll.autohidesScrollers = YES;
+  scroll.drawsBackground = NO;
+  scroll.borderType = NSNoBorder;
+  scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+  CGFloat w = MAX(480.0, NSWidth(_containerView.bounds));
+  SlateSettingsFlippedView* doc = [[SlateSettingsFlippedView alloc] initWithFrame:NSMakeRect(0, 0, w, NSHeight(_containerView.bounds))];
+  doc.autoresizingMask = NSViewWidthSizable;
+  scroll.documentView = doc;
+  [_containerView addSubview:scroll];
+  if (outScroll) *outScroll = scroll;
+  return doc;
+}
+
+- (void)finishCanvas:(SlateSettingsFlippedView*)doc scroll:(NSScrollView*)scroll contentHeight:(CGFloat)h {
+  CGFloat finalH = MAX(NSHeight(_containerView.bounds), h + 32.0);
+  NSRect f = doc.frame;
+  f.size.height = finalH;
+  doc.frame = f;
+  [scroll.contentView scrollToPoint:NSMakePoint(0, 0)];
+  [scroll reflectScrolledClipView:scroll.contentView];
+}
+
+- (CGFloat)addPageHeaderTo:(NSView*)doc title:(NSString*)title subtitle:(NSString*)subtitle {
+  NSTextField* h = [NSTextField labelWithString:title];
+  h.font = [NSFont systemFontOfSize:19 weight:NSFontWeightSemibold];
+  h.textColor = NSColor.labelColor;
+  h.frame = NSMakeRect(32, 34, NSWidth(doc.bounds) - 64, 24);
+  h.autoresizingMask = NSViewWidthSizable;
+  [doc addSubview:h];
+
+  if (subtitle.length) {
+    NSTextField* s = [NSTextField labelWithString:subtitle];
+    s.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
+    s.textColor = NSColor.secondaryLabelColor;
+    s.frame = NSMakeRect(32, 60, NSWidth(doc.bounds) - 64, 16);
+    s.autoresizingMask = NSViewWidthSizable;
+    [doc addSubview:s];
+    return 94.0;
+  }
+  return 74.0;
+}
+
+- (CGFloat)addSectionCaptionTo:(NSView*)doc y:(CGFloat)y text:(NSString*)text {
+  NSTextField* cap = [NSTextField labelWithString:text];
+  cap.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightMedium];
+  cap.textColor = NSColor.secondaryLabelColor;
+  cap.frame = NSMakeRect(34, y, NSWidth(doc.bounds) - 68, 15);
+  cap.autoresizingMask = NSViewWidthSizable;
+  [doc addSubview:cap];
+  return y + 22.0;
+}
+
+- (SlateSettingsCard*)addCardTo:(NSView*)doc y:(CGFloat)y height:(CGFloat)h {
+  SlateSettingsCard* card = [[SlateSettingsCard alloc] initWithFrame:NSMakeRect(32, y, NSWidth(doc.bounds) - 64, h)];
+  card.autoresizingMask = NSViewWidthSizable;
+  [doc addSubview:card];
+  return card;
+}
+
+- (void)addDividerToCard:(SlateSettingsCard*)card y:(CGFloat)y {
+  SlateSettingsHairline* line = [[SlateSettingsHairline alloc] initWithFrame:NSMakeRect(16, y, NSWidth(card.bounds) - 32, 1)];
+  line.autoresizingMask = NSViewWidthSizable;
+  [card addSubview:line];
+}
+
+- (NSSwitch*)addSwitchRowToCard:(SlateSettingsCard*)card y:(CGFloat)y title:(NSString*)title subtitle:(NSString*)sub on:(BOOL)on action:(SEL)action {
+  CGFloat w = NSWidth(card.bounds);
+  NSTextField* t = [NSTextField labelWithString:title];
+  t.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  t.textColor = NSColor.labelColor;
+  t.frame = NSMakeRect(16, y + 10, w - 82, 17);
+  t.autoresizingMask = NSViewWidthSizable;
+  [card addSubview:t];
+
+  NSTextField* s = [NSTextField labelWithString:sub];
+  s.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightRegular];
+  s.textColor = NSColor.secondaryLabelColor;
+  s.lineBreakMode = NSLineBreakByTruncatingTail;
+  s.frame = NSMakeRect(16, y + 29, w - 82, 15);
+  s.autoresizingMask = NSViewWidthSizable;
+  [card addSubview:s];
+
+  NSSwitch* sw = [[NSSwitch alloc] initWithFrame:NSMakeRect(w - 52, y + 16, 36, 22)];
+  sw.controlSize = NSControlSizeSmall;
+  sw.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+  sw.target = self;
+  sw.action = action;
+  sw.autoresizingMask = NSViewMinXMargin;
+  [card addSubview:sw];
+  return sw;
+}
+
+- (SlateQuietButton*)addActionRowToCard:(SlateSettingsCard*)card y:(CGFloat)y title:(NSString*)title subtitle:(NSString*)sub buttonTitle:(NSString*)btnTitle buttonWidth:(CGFloat)btnW action:(SEL)action subtitleOut:(NSTextField**)subOut {
+  CGFloat w = NSWidth(card.bounds);
+  NSTextField* t = [NSTextField labelWithString:title];
+  t.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  t.textColor = NSColor.labelColor;
+  t.frame = NSMakeRect(16, y + 10, w - btnW - 44, 17);
+  t.autoresizingMask = NSViewWidthSizable;
+  [card addSubview:t];
+
+  NSTextField* s = [NSTextField labelWithString:sub];
+  s.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightRegular];
+  s.textColor = NSColor.secondaryLabelColor;
+  s.lineBreakMode = NSLineBreakByTruncatingMiddle;
+  s.frame = NSMakeRect(16, y + 29, w - btnW - 44, 15);
+  s.autoresizingMask = NSViewWidthSizable;
+  [card addSubview:s];
+  if (subOut) *subOut = s;
+
+  SlateQuietButton* btn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(w - btnW - 16, y + 14, btnW, 26)
+                                                            title:btnTitle
+                                                           target:self
+                                                           action:action
+                                                          primary:NO];
+  btn.autoresizingMask = NSViewMinXMargin;
+  [card addSubview:btn];
+  return btn;
+}
+
+#pragma mark - Page Routing
 
 - (void)renderCurrentPage {
   for (NSView* v in [_containerView.subviews copy]) [v removeFromSuperview];
   [_swatchButtons removeAllObjects];
+  _activeAccentLabel = nil;
   _appearanceSegment = nil;
   _tabStyleSegment = nil;
   _switch120Hz = nil;
@@ -318,14 +604,25 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   _switchCollapseTabs = nil;
   _switchBookmarks = nil;
   _switchShields = nil;
+  _switchStrictPrivacy = nil;
+  _switchHttpsOnly = nil;
+  _switchWebRTCBlock = nil;
+  _vpnModePopup = nil;
+  _vpnHostField = nil;
+  _vpnPortField = nil;
+  _vpnUserField = nil;
+  _vpnPassField = nil;
+  _vpnFailClosedCheck = nil;
+  _vpnStatusLabel = nil;
+  _vpnStatusDot = nil;
   _downloadPathLabel = nil;
 
   if ([_currentPage isEqualToString:@"appearance"]) {
     [self renderAppearancePage];
   } else if ([_currentPage isEqualToString:@"search"]) {
-    NSView* search=[SlateSearchServices settingsViewWithProfile:self.slateDelegate.spacesManager.currentSpaceId ?: @"default"];
-    search.frame=_containerView.bounds;
-    search.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+    NSView* search = [SlateSearchServices settingsViewWithProfile:self.slateDelegate.spacesManager.currentSpaceId ?: @"default"];
+    search.frame = NSInsetRect(_containerView.bounds, 8, 12);
+    search.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [_containerView addSubview:search];
   } else if ([_currentPage isEqualToString:@"general"]) {
     [self renderGeneralPage];
@@ -343,54 +640,58 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   [self updateFromDelegate];
 }
 
-#pragma mark - Appearance Page (Simpler Themes)
+#pragma mark - Appearance Page
 
 - (void)renderAppearancePage {
-  CGFloat top = 456;
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = [self addPageHeaderTo:doc title:@"Appearance" subtitle:@"Quiet chrome, adaptive light & dark modes, and subtle accents."];
 
-  NSTextField* title = [NSTextField labelWithString:@"Appearance & Themes"];
-  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
-  title.frame = NSMakeRect(24, top, 300, 24);
-  title.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:title];
+  // Mode Card
+  y = [self addSectionCaptionTo:doc y:y text:@"Theme"];
+  SlateSettingsCard* modeCard = [self addCardTo:doc y:y height:58];
+  CGFloat cw = NSWidth(modeCard.bounds);
 
-  // Card 1: Theme Mode (System, Light, Dark)
-  top -= 48;
-  NSTextField* modeLabel = [NSTextField labelWithString:@"Mode"];
-  modeLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  modeLabel.frame = NSMakeRect(24, top, 200, 18);
-  modeLabel.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:modeLabel];
+  NSTextField* modeTitle = [NSTextField labelWithString:@"Appearance Mode"];
+  modeTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  modeTitle.frame = NSMakeRect(16, 11, cw - 240, 17);
+  modeTitle.autoresizingMask = NSViewWidthSizable;
+  [modeCard addSubview:modeTitle];
 
-  NSTextField* modeSub = [NSTextField labelWithString:@"Follow your Mac's system setting, or lock to Light or Dark"];
-  modeSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  modeSub.textColor = [NSColor secondaryLabelColor];
-  modeSub.frame = NSMakeRect(24, top - 18, 420, 16);
-  modeSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:modeSub];
+  NSTextField* modeSub = [NSTextField labelWithString:@"Match macOS or lock to Light or Dark"];
+  modeSub.font = [NSFont systemFontOfSize:11.5];
+  modeSub.textColor = NSColor.secondaryLabelColor;
+  modeSub.frame = NSMakeRect(16, 30, cw - 240, 15);
+  modeSub.autoresizingMask = NSViewWidthSizable;
+  [modeCard addSubview:modeSub];
 
   _appearanceSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"System", @"Light", @"Dark"]
                                                          trackingMode:NSSegmentSwitchTrackingSelectOne
                                                                target:self
                                                                action:@selector(appearanceSegmentChanged:)];
-  _appearanceSegment.frame = NSMakeRect(24, top - 52, 240, 26);
-  _appearanceSegment.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:_appearanceSegment];
+  _appearanceSegment.controlSize = NSControlSizeSmall;
+  _appearanceSegment.frame = NSMakeRect(cw - 210, 17, 194, 24);
+  _appearanceSegment.autoresizingMask = NSViewMinXMargin;
+  [modeCard addSubview:_appearanceSegment];
 
-  // Card 2: Accent Theme Swatches
-  top -= 96;
-  NSTextField* themeLabel = [NSTextField labelWithString:@"Theme Color"];
-  themeLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  themeLabel.frame = NSMakeRect(24, top, 200, 18);
-  themeLabel.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:themeLabel];
+  // Accent Swatches Card
+  y += 58 + 20;
+  y = [self addSectionCaptionTo:doc y:y text:@"Accent"];
+  SlateSettingsCard* accentCard = [self addCardTo:doc y:y height:102];
+  cw = NSWidth(accentCard.bounds);
 
-  NSTextField* themeSub = [NSTextField labelWithString:@"Pick a color for browser chrome, tabs, and buttons"];
-  themeSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  themeSub.textColor = [NSColor secondaryLabelColor];
-  themeSub.frame = NSMakeRect(24, top - 18, 420, 16);
-  themeSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:themeSub];
+  NSTextField* accentTitle = [NSTextField labelWithString:@"Browser Tint"];
+  accentTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  accentTitle.frame = NSMakeRect(16, 12, 160, 17);
+  [accentCard addSubview:accentTitle];
+
+  _activeAccentLabel = [NSTextField labelWithString:@"Slate"];
+  _activeAccentLabel.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightRegular];
+  _activeAccentLabel.textColor = NSColor.secondaryLabelColor;
+  _activeAccentLabel.alignment = NSTextAlignmentRight;
+  _activeAccentLabel.frame = NSMakeRect(cw - 140, 13, 124, 15);
+  _activeAccentLabel.autoresizingMask = NSViewMinXMargin;
+  [accentCard addSubview:_activeAccentLabel];
 
   NSArray* palette = @[
     @{@"id":@"slate",    @"title":@"Slate",      @"color":[NSColor colorWithSRGBRed:0.39 green:0.45 blue:0.55 alpha:1]},
@@ -405,31 +706,28 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     @{@"id":@"marigold", @"title":@"Ochre",      @"color":[NSColor colorWithSRGBRed:0.77 green:0.64 blue:0.33 alpha:1]}
   ];
 
-  CGFloat sx = 24;
-  CGFloat sy = top - 58;
+  CGFloat sx = 16;
   for (NSDictionary* item in palette) {
-    SlateThemeSwatchButton* b = [[SlateThemeSwatchButton alloc] initWithFrame:NSMakeRect(sx, sy, 32, 32)
+    SlateThemeSwatchButton* b = [[SlateThemeSwatchButton alloc] initWithFrame:NSMakeRect(sx, 48, 28, 28)
                                                                           key:item[@"id"]
                                                                         title:item[@"title"]
                                                                         color:item[@"color"]];
     b.target = self;
     b.action = @selector(swatchClicked:);
-    b.autoresizingMask = NSViewMinYMargin;
-    [_containerView addSubview:b];
+    [accentCard addSubview:b];
     [_swatchButtons addObject:b];
-    sx += 40;
-    if (sx > 400) {
-      sx = 24;
-      sy -= 38;
-    }
+    sx += 34;
   }
 
-  // Custom Color button
-  NSButton* customColorBtn = [NSButton buttonWithTitle:@"Custom Color…" target:self action:@selector(chooseCustomColor:)];
-  customColorBtn.bezelStyle = NSBezelStyleRounded;
-  customColorBtn.frame = NSMakeRect(24, sy - 44, 130, 28);
-  customColorBtn.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:customColorBtn];
+  SlateQuietButton* customBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(cw - 92, 49, 76, 26)
+                                                                  title:@"Custom…"
+                                                                 target:self
+                                                                 action:@selector(chooseCustomColor:)
+                                                                primary:NO];
+  customBtn.autoresizingMask = NSViewMinXMargin;
+  [accentCard addSubview:customBtn];
+
+  [self finishCanvas:doc scroll:scroll contentHeight:y + 102];
 }
 
 - (void)appearanceSegmentChanged:(NSSegmentedControl*)sender {
@@ -475,55 +773,27 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 #pragma mark - General Page
 
 - (void)renderGeneralPage {
-  CGFloat top = 456;
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = [self addPageHeaderTo:doc title:@"General" subtitle:@"Performance and system defaults."];
 
-  NSTextField* title = [NSTextField labelWithString:@"General"];
-  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
-  title.frame = NSMakeRect(24, top, 300, 24);
-  title.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:title];
+  y = [self addSectionCaptionTo:doc y:y text:@"Browser"];
+  SlateSettingsCard* card = [self addCardTo:doc y:y height:111];
+  _switch120Hz = [self addSwitchRowToCard:card y:0
+                                    title:@"Pages at 120 Hz"
+                                 subtitle:@"Render scrolling and animations up to 120 fps on ProMotion displays"
+                                       on:self.slateDelegate.pages120Hz
+                                   action:@selector(toggle120HzClicked:)];
+  [self addDividerToCard:card y:55];
+  [self addActionRowToCard:card y:56
+                     title:@"Default Web Browser"
+                  subtitle:@"Open web links from other apps in Slate"
+               buttonTitle:@"Set Default"
+               buttonWidth:92
+                    action:@selector(makeDefaultClicked:)
+               subtitleOut:nil];
 
-  // 120Hz Row
-  top -= 50;
-  NSTextField* hzTitle = [NSTextField labelWithString:@"Pages at 120 Hz"];
-  hzTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  hzTitle.frame = NSMakeRect(24, top, 250, 18);
-  hzTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:hzTitle];
-
-  NSTextField* hzSub = [NSTextField labelWithString:@"Render animations and scrolling at up to 120 fps on ProMotion displays"];
-  hzSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  hzSub.textColor = [NSColor secondaryLabelColor];
-  hzSub.frame = NSMakeRect(24, top - 18, 380, 16);
-  hzSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:hzSub];
-
-  _switch120Hz = [[NSSwitch alloc] initWithFrame:NSMakeRect(420, top - 10, 40, 22)];
-  _switch120Hz.target = self;
-  _switch120Hz.action = @selector(toggle120HzClicked:);
-  _switch120Hz.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:_switch120Hz];
-
-  // Default browser
-  top -= 60;
-  NSTextField* defTitle = [NSTextField labelWithString:@"Default Web Browser"];
-  defTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  defTitle.frame = NSMakeRect(24, top, 250, 18);
-  defTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:defTitle];
-
-  NSTextField* defSub = [NSTextField labelWithString:@"Make Slate the default app for opening web links"];
-  defSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  defSub.textColor = [NSColor secondaryLabelColor];
-  defSub.frame = NSMakeRect(24, top - 18, 380, 16);
-  defSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:defSub];
-
-  NSButton* makeDefaultBtn = [NSButton buttonWithTitle:@"Set as Default" target:self action:@selector(makeDefaultClicked:)];
-  makeDefaultBtn.bezelStyle = NSBezelStyleRounded;
-  makeDefaultBtn.frame = NSMakeRect(380, top - 12, 100, 28);
-  makeDefaultBtn.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:makeDefaultBtn];
+  [self finishCanvas:doc scroll:scroll contentHeight:y + 111];
 }
 
 - (void)toggle120HzClicked:(id)sender {
@@ -541,99 +811,58 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 #pragma mark - Tabs Page
 
 - (void)renderTabsPage {
-  CGFloat top = 456;
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = [self addPageHeaderTo:doc title:@"Tabs" subtitle:@"Layout, sidebar behavior, and bookmarks bar."];
 
-  NSTextField* title = [NSTextField labelWithString:@"Tabs"];
-  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
-  title.frame = NSMakeRect(24, top, 300, 24);
-  title.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:title];
+  y = [self addSectionCaptionTo:doc y:y text:@"Style"];
+  SlateSettingsCard* styleCard = [self addCardTo:doc y:y height:58];
+  CGFloat cw = NSWidth(styleCard.bounds);
 
-  // Tab Style: Pill Tabs vs Regular Tabs
-  top -= 48;
-  NSTextField* styleTitle = [NSTextField labelWithString:@"Tab Style"];
-  styleTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  styleTitle.frame = NSMakeRect(24, top, 250, 18);
-  styleTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:styleTitle];
+  NSTextField* stTitle = [NSTextField labelWithString:@"Tab Shape"];
+  stTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  stTitle.frame = NSMakeRect(16, 11, cw - 230, 17);
+  stTitle.autoresizingMask = NSViewWidthSizable;
+  [styleCard addSubview:stTitle];
 
-  NSTextField* styleSub = [NSTextField labelWithString:@"Choose between floating pill capsules (default) or classic rounded tabs"];
-  styleSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  styleSub.textColor = [NSColor secondaryLabelColor];
-  styleSub.frame = NSMakeRect(24, top - 18, 420, 16);
-  styleSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:styleSub];
+  NSTextField* stSub = [NSTextField labelWithString:@"Floating capsules or classic tabs"];
+  stSub.font = [NSFont systemFontOfSize:11.5];
+  stSub.textColor = NSColor.secondaryLabelColor;
+  stSub.frame = NSMakeRect(16, 30, cw - 230, 15);
+  stSub.autoresizingMask = NSViewWidthSizable;
+  [styleCard addSubview:stSub];
 
-  _tabStyleSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"Pill Tabs", @"Regular Tabs"]
+  _tabStyleSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"Pill", @"Regular"]
                                                        trackingMode:NSSegmentSwitchTrackingSelectOne
                                                              target:self
                                                              action:@selector(tabStyleSegmentChanged:)];
-  _tabStyleSegment.frame = NSMakeRect(24, top - 52, 220, 26);
-  _tabStyleSegment.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:_tabStyleSegment];
+  _tabStyleSegment.controlSize = NSControlSizeSmall;
+  _tabStyleSegment.frame = NSMakeRect(cw - 166, 17, 150, 24);
+  _tabStyleSegment.autoresizingMask = NSViewMinXMargin;
+  [styleCard addSubview:_tabStyleSegment];
 
-  // Vertical tabs
-  top -= 92;
-  NSTextField* vertTitle = [NSTextField labelWithString:@"Tabs in a Sidebar"];
-  vertTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  vertTitle.frame = NSMakeRect(24, top, 250, 18);
-  vertTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:vertTitle];
+  y += 58 + 20;
+  y = [self addSectionCaptionTo:doc y:y text:@"Layout"];
+  SlateSettingsCard* layoutCard = [self addCardTo:doc y:y height:167];
+  _switchVerticalTabs = [self addSwitchRowToCard:layoutCard y:0
+                                           title:@"Sidebar Tabs"
+                                        subtitle:@"Show tabs vertically along the left edge (⇧⌘S)"
+                                              on:self.slateDelegate.verticalTabs
+                                          action:@selector(toggleVerticalTabsClicked:)];
+  [self addDividerToCard:layoutCard y:55];
+  _switchCollapseTabs = [self addSwitchRowToCard:layoutCard y:56
+                                           title:@"Fold Tabs Away"
+                                        subtitle:@"Hide the tab strip until you hover the edge (⌘S)"
+                                              on:self.slateDelegate.tabsCollapsed
+                                          action:@selector(toggleCollapseTabsClicked:)];
+  [self addDividerToCard:layoutCard y:111];
+  _switchBookmarks = [self addSwitchRowToCard:layoutCard y:112
+                                        title:@"Bookmarks Bar"
+                                     subtitle:@"Show bookmarks below the address bar (⇧⌘B)"
+                                           on:self.slateDelegate.showBookmarksBar
+                                       action:@selector(toggleBookmarksClicked:)];
 
-  NSTextField* vertSub = [NSTextField labelWithString:@"Show tabs vertically down the left edge instead of across the top (⇧⌘S)"];
-  vertSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  vertSub.textColor = [NSColor secondaryLabelColor];
-  vertSub.frame = NSMakeRect(24, top - 18, 380, 16);
-  vertSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:vertSub];
-
-  _switchVerticalTabs = [[NSSwitch alloc] initWithFrame:NSMakeRect(420, top - 10, 40, 22)];
-  _switchVerticalTabs.target = self;
-  _switchVerticalTabs.action = @selector(toggleVerticalTabsClicked:);
-  _switchVerticalTabs.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:_switchVerticalTabs];
-
-  // Collapse tabs
-  top -= 60;
-  NSTextField* colTitle = [NSTextField labelWithString:@"Fold Tabs Away"];
-  colTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  colTitle.frame = NSMakeRect(24, top, 250, 18);
-  colTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:colTitle];
-
-  NSTextField* colSub = [NSTextField labelWithString:@"Hide the tab strip for a distraction-free, full-window view (⌘S)"];
-  colSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  colSub.textColor = [NSColor secondaryLabelColor];
-  colSub.frame = NSMakeRect(24, top - 18, 380, 16);
-  colSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:colSub];
-
-  _switchCollapseTabs = [[NSSwitch alloc] initWithFrame:NSMakeRect(420, top - 10, 40, 22)];
-  _switchCollapseTabs.target = self;
-  _switchCollapseTabs.action = @selector(toggleCollapseTabsClicked:);
-  _switchCollapseTabs.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:_switchCollapseTabs];
-
-  // Bookmarks bar
-  top -= 60;
-  NSTextField* bmkTitle = [NSTextField labelWithString:@"Show Bookmarks Bar"];
-  bmkTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  bmkTitle.frame = NSMakeRect(24, top, 250, 18);
-  bmkTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:bmkTitle];
-
-  NSTextField* bmkSub = [NSTextField labelWithString:@"Always show your bookmarks bar underneath the address bar (⇧⌘B)"];
-  bmkSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  bmkSub.textColor = [NSColor secondaryLabelColor];
-  bmkSub.frame = NSMakeRect(24, top - 18, 380, 16);
-  bmkSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:bmkSub];
-
-  _switchBookmarks = [[NSSwitch alloc] initWithFrame:NSMakeRect(420, top - 10, 40, 22)];
-  _switchBookmarks.target = self;
-  _switchBookmarks.action = @selector(toggleBookmarksClicked:);
-  _switchBookmarks.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:_switchBookmarks];
+  [self finishCanvas:doc scroll:scroll contentHeight:y + 167];
 }
 
 - (void)tabStyleSegmentChanged:(NSSegmentedControl*)sender {
@@ -648,11 +877,9 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 - (void)toggleVerticalTabsClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleVerticalTabs:sender];
 }
-
 - (void)toggleCollapseTabsClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleTabsReveal:sender];
 }
-
 - (void)toggleBookmarksClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleBookmarksBar:sender];
 }
@@ -660,33 +887,23 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 #pragma mark - Downloads Page
 
 - (void)renderDownloadsPage {
-  CGFloat top = 456;
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = [self addPageHeaderTo:doc title:@"Downloads" subtitle:@"Where Slate saves downloaded files."];
 
-  NSTextField* title = [NSTextField labelWithString:@"Downloads"];
-  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
-  title.frame = NSMakeRect(24, top, 300, 24);
-  title.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:title];
+  y = [self addSectionCaptionTo:doc y:y text:@"Destination"];
+  SlateSettingsCard* card = [self addCardTo:doc y:y height:56];
+  NSTextField* pathSub = nil;
+  [self addActionRowToCard:card y:0
+                     title:@"Download Folder"
+                  subtitle:@"~/Downloads"
+               buttonTitle:@"Change…"
+               buttonWidth:84
+                    action:@selector(changeDownloadFolder:)
+               subtitleOut:&pathSub];
+  _downloadPathLabel = pathSub;
 
-  top -= 50;
-  NSTextField* locTitle = [NSTextField labelWithString:@"Download Location"];
-  locTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  locTitle.frame = NSMakeRect(24, top, 250, 18);
-  locTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:locTitle];
-
-  _downloadPathLabel = [NSTextField labelWithString:@"~/Downloads"];
-  _downloadPathLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  _downloadPathLabel.textColor = [NSColor secondaryLabelColor];
-  _downloadPathLabel.frame = NSMakeRect(24, top - 18, 330, 16);
-  _downloadPathLabel.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:_downloadPathLabel];
-
-  NSButton* changeBtn = [NSButton buttonWithTitle:@"Change Folder…" target:self action:@selector(changeDownloadFolder:)];
-  changeBtn.bezelStyle = NSBezelStyleRounded;
-  changeBtn.frame = NSMakeRect(360, top - 12, 115, 28);
-  changeBtn.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:changeBtn];
+  [self finishCanvas:doc scroll:scroll contentHeight:y + 56];
 }
 
 - (void)changeDownloadFolder:(id)sender {
@@ -707,63 +924,42 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 #pragma mark - Passwords Page
 
 - (void)renderPasswordsPage {
-  CGFloat top = 456;
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = [self addPageHeaderTo:doc title:@"Passwords" subtitle:@"Encrypted locally in your macOS Keychain."];
 
-  NSTextField* title = [NSTextField labelWithString:@"Passwords"];
-  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
-  title.frame = NSMakeRect(24, top, 300, 24);
-  title.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:title];
+  y = [self addSectionCaptionTo:doc y:y text:@"Vault"];
+  SlateSettingsCard* card = [self addCardTo:doc y:y height:111];
+  [self addActionRowToCard:card y:0
+                     title:@"Saved Passwords"
+                  subtitle:@"View, edit, and generate strong passwords"
+               buttonTitle:@"Open Vault"
+               buttonWidth:94
+                    action:@selector(openPasswordsClicked:)
+               subtitleOut:nil];
+  [self addDividerToCard:card y:55];
+  [self addActionRowToCard:card y:56
+                     title:@"Import Browser Data"
+                  subtitle:@"Import logins, bookmarks, and history from other browsers"
+               buttonTitle:@"Import…"
+               buttonWidth:84
+                    action:@selector(importDataClicked:)
+               subtitleOut:nil];
 
-  top -= 50;
-  NSTextField* passTitle = [NSTextField labelWithString:@"Saved Passwords"];
-  passTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  passTitle.frame = NSMakeRect(24, top, 250, 18);
-  passTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:passTitle];
+  y += 111 + 20;
+  y = [self addSectionCaptionTo:doc y:y text:@"Autofill"];
+  SlateSettingsCard* servicesCard = [self addCardTo:doc y:y height:228];
+  NSView* services = [SlatePasswordServices.shared settingsView];
+  services.frame = NSMakeRect(8, 6, NSWidth(servicesCard.bounds) - 16, 216);
+  services.autoresizingMask = NSViewWidthSizable;
+  [servicesCard addSubview:services];
 
-  NSTextField* passSub = [NSTextField labelWithString:@"Manage logins, usernames, and passwords saved securely in Slate"];
-  passSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  passSub.textColor = [NSColor secondaryLabelColor];
-  passSub.frame = NSMakeRect(24, top - 18, 330, 16);
-  passSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:passSub];
-
-  NSButton* openPassBtn = [NSButton buttonWithTitle:@"Open Passwords" target:self action:@selector(openPasswordsClicked:)];
-  openPassBtn.bezelStyle = NSBezelStyleRounded;
-  openPassBtn.frame = NSMakeRect(350, top - 12, 125, 28);
-  openPassBtn.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:openPassBtn];
-
-  top -= 60;
-  NSTextField* impTitle = [NSTextField labelWithString:@"Import Passwords"];
-  impTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  impTitle.frame = NSMakeRect(24, top, 250, 18);
-  impTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:impTitle];
-
-  NSTextField* impSub = [NSTextField labelWithString:@"Import logins and history from Chrome, Safari, Arc, or Brave"];
-  impSub.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-  impSub.textColor = [NSColor secondaryLabelColor];
-  impSub.frame = NSMakeRect(24, top - 18, 330, 16);
-  impSub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:impSub];
-
-  NSButton* impBtn = [NSButton buttonWithTitle:@"Import Data…" target:self action:@selector(importDataClicked:)];
-  impBtn.bezelStyle = NSBezelStyleRounded;
-  impBtn.frame = NSMakeRect(350, top - 12, 125, 28);
-  impBtn.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:impBtn];
-  NSView* services=[SlatePasswordServices.shared settingsView];
-  services.frame=NSMakeRect(20,48,450,218);
-  services.autoresizingMask=NSViewMinYMargin;
-  [_containerView addSubview:services];
+  [self finishCanvas:doc scroll:scroll contentHeight:y + 228];
 }
 
 - (void)openPasswordsClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate showPasswordsPanel:sender];
 }
-
 - (void)importDataClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate showImportBrowserData:sender];
 }
@@ -771,104 +967,63 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 #pragma mark - Privacy Page
 
 - (void)renderPrivacyPage {
-  NSScrollView* scroll = [[NSScrollView alloc] initWithFrame:_containerView.bounds];
-  scroll.hasVerticalScroller = YES;
-  scroll.drawsBackground = NO;
-  scroll.borderType = NSNoBorder;
-  scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = [self addPageHeaderTo:doc title:@"Privacy" subtitle:@"Content blocking, tracking defense, and private network routing."];
 
-  auto sites = slate::WebKitShields::Shared().DisabledSites();
-  std::sort(sites.begin(), sites.end());
-  CGFloat docH = MAX(NSHeight(_containerView.bounds), 660.0 + sites.size() * 30.0);
-  NSView* doc = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(_containerView.bounds), docH)];
-  scroll.documentView = doc;
-  [_containerView addSubview:scroll];
-
-  CGFloat y = docH - 36;
-  NSTextField* title = [NSTextField labelWithString:@"Privacy & Security"];
-  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
-  title.frame = NSMakeRect(24, y, 320, 24);
-  [doc addSubview:title];
-
-  auto addToggleRow = ^(CGFloat rowY, NSString* heading, NSString* sub, BOOL on, SEL action, NSSwitch** outSwitch) {
-    NSTextField* h = [NSTextField labelWithString:heading];
-    h.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    h.frame = NSMakeRect(24, rowY, 370, 18);
-    [doc addSubview:h];
-
-    NSTextField* s = [NSTextField labelWithString:sub];
-    s.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-    s.textColor = NSColor.secondaryLabelColor;
-    s.frame = NSMakeRect(24, rowY - 17, 380, 15);
-    [doc addSubview:s];
-
-    NSSwitch* sw = [[NSSwitch alloc] initWithFrame:NSMakeRect(420, rowY - 9, 40, 22)];
-    sw.state = on ? NSControlStateValueOn : NSControlStateValueOff;
-    sw.target = self;
-    sw.action = action;
-    [doc addSubview:sw];
-    if (outSwitch) *outSwitch = sw;
-  };
-
-  y -= 44;
-  NSSwitch* s1 = nil;
-  addToggleRow(y, @"Ad & Tracker Blocker (High Alert)",
-               @"Native WebKit filter (EasyList + EasyPrivacy + Slate rules)",
-               slate::WebKitShields::Shared().IsEnabled(),
-               @selector(toggleShieldsClicked:), &s1);
-  self.switchShields = s1;
-
-  y -= 48;
-  NSSwitch* s2 = nil;
-  addToggleRow(y, @"Strict Tracking & Fingerprint Protection",
-               @"Strip utm/fbclid/gclid trackers, send Global Privacy Control & DNT",
-               [SlatePrivacySecurity strictTrackingProtectionEnabled],
-               @selector(toggleStrictPrivacyClicked:), &s2);
-  self.switchStrictPrivacy = s2;
-
-  y -= 48;
-  NSSwitch* s3 = nil;
-  addToggleRow(y, @"HTTPS-Only Mode",
-               @"Automatically upgrade insecure http:// connections to https://",
-               [SlatePrivacySecurity httpsOnlyEnabled],
-               @selector(toggleHttpsOnlyClicked:), &s3);
-  self.switchHttpsOnly = s3;
-
-  y -= 48;
-  NSSwitch* s4 = nil;
-  addToggleRow(y, @"Block WebRTC IP Leaks in Incognito",
-               @"Disable RTCPeerConnection in Private tabs to prevent real-IP leaks",
-               [SlatePrivacySecurity blockWebRTCInIncognito],
-               @selector(toggleWebRTCBlockClicked:), &s4);
-  self.switchWebRTCBlock = s4;
+  // Protection Card
+  y = [self addSectionCaptionTo:doc y:y text:@"Protection"];
+  SlateSettingsCard* shieldCard = [self addCardTo:doc y:y height:223];
+  _switchShields = [self addSwitchRowToCard:shieldCard y:0
+                                      title:@"Ad & Tracker Blocker"
+                                   subtitle:@"Native WebKit filter (EasyList, EasyPrivacy, and Slate rules)"
+                                         on:slate::WebKitShields::Shared().IsEnabled()
+                                     action:@selector(toggleShieldsClicked:)];
+  [self addDividerToCard:shieldCard y:55];
+  _switchStrictPrivacy = [self addSwitchRowToCard:shieldCard y:56
+                                            title:@"Strict Tracking Protection"
+                                         subtitle:@"Strip URL tracking parameters and send GPC & Do Not Track"
+                                               on:[SlatePrivacySecurity strictTrackingProtectionEnabled]
+                                           action:@selector(toggleStrictPrivacyClicked:)];
+  [self addDividerToCard:shieldCard y:111];
+  _switchHttpsOnly = [self addSwitchRowToCard:shieldCard y:112
+                                        title:@"HTTPS-Only Mode"
+                                     subtitle:@"Upgrade insecure http:// requests to https:// automatically"
+                                           on:[SlatePrivacySecurity httpsOnlyEnabled]
+                                       action:@selector(toggleHttpsOnlyClicked:)];
+  [self addDividerToCard:shieldCard y:167];
+  _switchWebRTCBlock = [self addSwitchRowToCard:shieldCard y:168
+                                          title:@"Block WebRTC IP Leaks in Incognito"
+                                       subtitle:@"Disable RTCPeerConnection in Private tabs"
+                                             on:[SlatePrivacySecurity blockWebRTCInIncognito]
+                                         action:@selector(toggleWebRTCBlockClicked:)];
 
   // Incognito VPN / Proxy Tunnel Card
-  y -= 36;
-  NSView* vpnCard = [[NSView alloc] initWithFrame:NSMakeRect(24, y - 246, 438, 246)];
-  vpnCard.wantsLayer = YES;
-  vpnCard.layer.cornerRadius = 11;
-  if (@available(macOS 11.0, *)) vpnCard.layer.cornerCurve = kCACornerCurveContinuous;
-  vpnCard.layer.backgroundColor = [NSColor.labelColor colorWithAlphaComponent:0.04].CGColor;
-  vpnCard.layer.borderWidth = 1;
-  vpnCard.layer.borderColor = [NSColor.separatorColor colorWithAlphaComponent:0.5].CGColor;
-  [doc addSubview:vpnCard];
+  y += 223 + 20;
+  y = [self addSectionCaptionTo:doc y:y text:@"Incognito Tunnel"];
+  SlateSettingsCard* vpnCard = [self addCardTo:doc y:y height:234];
+  CGFloat cw = NSWidth(vpnCard.bounds);
 
-  NSTextField* vpnTitle = [NSTextField labelWithString:@"Incognito VPN / Proxy Tunnel"];
-  vpnTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  vpnTitle.frame = NSMakeRect(14, 214, 300, 18);
+  NSTextField* vpnTitle = [NSTextField labelWithString:@"VPN / Proxy Routing"];
+  vpnTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  vpnTitle.frame = NSMakeRect(16, 12, cw - 32, 17);
+  vpnTitle.autoresizingMask = NSViewWidthSizable;
   [vpnCard addSubview:vpnTitle];
 
-  NSTextField* vpnSub = [NSTextField labelWithString:@"Route all Private tabs through Tor or your VPN’s SOCKS5 / HTTP proxy"];
-  vpnSub.font = [NSFont systemFontOfSize:11];
+  NSTextField* vpnSub = [NSTextField labelWithString:@"Route Private tabs through Tor or a SOCKS5 / HTTP proxy"];
+  vpnSub.font = [NSFont systemFontOfSize:11.5];
   vpnSub.textColor = NSColor.secondaryLabelColor;
-  vpnSub.frame = NSMakeRect(14, 196, 410, 15);
+  vpnSub.frame = NSMakeRect(16, 30, cw - 32, 15);
+  vpnSub.autoresizingMask = NSViewWidthSizable;
   [vpnCard addSubview:vpnSub];
 
-  NSPopUpButton* modePop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(14, 162, 410, 26) pullsDown:NO];
+  NSPopUpButton* modePop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(16, 54, cw - 32, 25) pullsDown:NO];
+  modePop.controlSize = NSControlSizeSmall;
+  modePop.autoresizingMask = NSViewWidthSizable;
   [modePop addItemsWithTitles:@[
     @"Off (Direct)",
     @"Tor Local Tunnel (SOCKS5 127.0.0.1:9050)",
-    @"Custom SOCKS5 VPN / Proxy (Mullvad, Proton, SSH…)",
+    @"Custom SOCKS5 VPN / Proxy",
     @"Custom HTTP CONNECT Proxy"
   ]];
   [modePop selectItemAtIndex:(NSInteger)[SlatePrivacySecurity incognitoProxyMode]];
@@ -877,80 +1032,118 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   self.vpnModePopup = modePop;
   [vpnCard addSubview:modePop];
 
-  self.vpnHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 128, 294, 24)];
-  self.vpnHostField.placeholderString = @"Host (e.g. 10.64.0.1 or us-nyc.socks5.mullvad.net)";
+  self.vpnHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 88, cw - 134, 24)];
+  self.vpnHostField.controlSize = NSControlSizeSmall;
+  self.vpnHostField.font = [NSFont systemFontOfSize:12];
+  self.vpnHostField.placeholderString = @"Host (e.g. 10.64.0.1)";
   self.vpnHostField.stringValue = [SlatePrivacySecurity incognitoProxyHost];
+  self.vpnHostField.autoresizingMask = NSViewWidthSizable;
   [vpnCard addSubview:self.vpnHostField];
 
-  self.vpnPortField = [[NSTextField alloc] initWithFrame:NSMakeRect(316, 128, 108, 24)];
-  self.vpnPortField.placeholderString = @"Port (1080)";
+  self.vpnPortField = [[NSTextField alloc] initWithFrame:NSMakeRect(cw - 110, 88, 94, 24)];
+  self.vpnPortField.controlSize = NSControlSizeSmall;
+  self.vpnPortField.font = [NSFont systemFontOfSize:12];
+  self.vpnPortField.placeholderString = @"Port";
   NSInteger portVal = [SlatePrivacySecurity incognitoProxyPort];
   self.vpnPortField.stringValue = portVal > 0 ? [NSString stringWithFormat:@"%ld", (long)portVal] : @"";
+  self.vpnPortField.autoresizingMask = NSViewMinXMargin;
   [vpnCard addSubview:self.vpnPortField];
 
-  self.vpnUserField = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 96, 200, 24)];
+  CGFloat half = floor((cw - 40) / 2.0);
+  self.vpnUserField = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 120, half, 24)];
+  self.vpnUserField.controlSize = NSControlSizeSmall;
+  self.vpnUserField.font = [NSFont systemFontOfSize:12];
   self.vpnUserField.placeholderString = @"Username (optional)";
   self.vpnUserField.stringValue = [SlatePrivacySecurity incognitoProxyUsername];
+  self.vpnUserField.autoresizingMask = NSViewWidthSizable | NSViewMaxXMargin;
   [vpnCard addSubview:self.vpnUserField];
 
-  self.vpnPassField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(222, 96, 202, 24)];
+  self.vpnPassField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(24 + half, 120, cw - 40 - half, 24)];
+  self.vpnPassField.controlSize = NSControlSizeSmall;
+  self.vpnPassField.font = [NSFont systemFontOfSize:12];
   self.vpnPassField.placeholderString = @"Password (Keychain)";
   self.vpnPassField.stringValue = [SlatePrivacySecurity incognitoProxyPassword];
+  self.vpnPassField.autoresizingMask = NSViewWidthSizable | NSViewMinXMargin;
   [vpnCard addSubview:self.vpnPassField];
 
   self.vpnFailClosedCheck = [NSButton checkboxWithTitle:@"Kill Switch: block Incognito if tunnel is unreachable" target:nil action:nil];
+  self.vpnFailClosedCheck.controlSize = NSControlSizeSmall;
   self.vpnFailClosedCheck.state = [SlatePrivacySecurity incognitoProxyFailClosed] ? NSControlStateValueOn : NSControlStateValueOff;
   self.vpnFailClosedCheck.font = [NSFont systemFontOfSize:11.5];
-  self.vpnFailClosedCheck.frame = NSMakeRect(14, 66, 410, 20);
+  self.vpnFailClosedCheck.frame = NSMakeRect(16, 152, cw - 32, 18);
+  self.vpnFailClosedCheck.autoresizingMask = NSViewWidthSizable;
   [vpnCard addSubview:self.vpnFailClosedCheck];
 
-  NSButton* saveVpn = [NSButton buttonWithTitle:@"Save Tunnel" target:self action:@selector(saveVpnClicked:)];
-  saveVpn.frame = NSMakeRect(14, 34, 106, 26);
+  SlateQuietButton* saveVpn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(16, 180, 92, 26)
+                                                                title:@"Save"
+                                                               target:self
+                                                               action:@selector(saveVpnClicked:)
+                                                              primary:YES];
   [vpnCard addSubview:saveVpn];
 
-  NSButton* testVpn = [NSButton buttonWithTitle:@"Test Tunnel" target:self action:@selector(testVpnClicked:)];
-  testVpn.frame = NSMakeRect(126, 34, 100, 26);
+  SlateQuietButton* testVpn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(116, 180, 96, 26)
+                                                                title:@"Test Tunnel"
+                                                               target:self
+                                                               action:@selector(testVpnClicked:)
+                                                              primary:NO];
   [vpnCard addSubview:testVpn];
 
-  self.vpnStatusLabel = [NSTextField labelWithString:[SlatePrivacySecurity isIncognitoTunnelActive] ? @"Active for new Incognito tabs" : @"Tunnel off"];
+  BOOL tunnelOn = [SlatePrivacySecurity isIncognitoTunnelActive];
+  self.vpnStatusDot = [[NSView alloc] initWithFrame:NSMakeRect(18, 214, 6, 6)];
+  self.vpnStatusDot.wantsLayer = YES;
+  self.vpnStatusDot.layer.cornerRadius = 3;
+  self.vpnStatusDot.layer.backgroundColor = (tunnelOn ? NSColor.labelColor : NSColor.tertiaryLabelColor).CGColor;
+  [vpnCard addSubview:self.vpnStatusDot];
+
+  self.vpnStatusLabel = [NSTextField labelWithString:tunnelOn ? @"Active on new Incognito tabs" : @"Tunnel off"];
   self.vpnStatusLabel.font = [NSFont systemFontOfSize:11];
-  self.vpnStatusLabel.textColor = [SlatePrivacySecurity isIncognitoTunnelActive] ? NSColor.systemGreenColor : NSColor.secondaryLabelColor;
+  self.vpnStatusLabel.textColor = NSColor.secondaryLabelColor;
   self.vpnStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-  self.vpnStatusLabel.frame = NSMakeRect(14, 10, 410, 16);
+  self.vpnStatusLabel.frame = NSMakeRect(30, 210, cw - 46, 14);
+  self.vpnStatusLabel.autoresizingMask = NSViewWidthSizable;
   [vpnCard addSubview:self.vpnStatusLabel];
   [self updateVpnFieldStates];
 
-  // Allowed Sites
-  y -= 274;
-  NSTextField* allowedTitle = [NSTextField labelWithString:@"Allowed Sites (Ad Blocker Paused)"];
-  allowedTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  allowedTitle.frame = NSMakeRect(24, y, 320, 20);
-  [doc addSubview:allowedTitle];
-
-  y -= 26;
+  // Allowed Sites Card
+  auto sites = slate::WebKitShields::Shared().DisabledSites();
+  std::sort(sites.begin(), sites.end());
+  y += 234 + 20;
+  y = [self addSectionCaptionTo:doc y:y text:@"Allowed Sites"];
+  CGFloat sitesH = sites.empty() ? 48.0 : (CGFloat)(sites.size() * 44.0);
+  SlateSettingsCard* sitesCard = [self addCardTo:doc y:y height:sitesH];
+  cw = NSWidth(sitesCard.bounds);
   if (sites.empty()) {
-    NSTextField* empty = [NSTextField labelWithString:@"No allowed sites — all sites protected at maximum level."];
-    empty.font = [NSFont systemFontOfSize:11.5];
+    NSTextField* empty = [NSTextField labelWithString:@"No exceptions — all sites are protected."];
+    empty.font = [NSFont systemFontOfSize:12];
     empty.textColor = NSColor.secondaryLabelColor;
-    empty.frame = NSMakeRect(24, y, 420, 18);
-    [doc addSubview:empty];
+    empty.frame = NSMakeRect(16, 16, cw - 32, 16);
+    empty.autoresizingMask = NSViewWidthSizable;
+    [sitesCard addSubview:empty];
   } else {
-    for (const auto& site : sites) {
-      NSString* name = [NSString stringWithUTF8String:site.c_str()];
+    CGFloat ry = 0;
+    for (size_t i = 0; i < sites.size(); ++i) {
+      NSString* name = [NSString stringWithUTF8String:sites[i].c_str()];
       NSTextField* label = [NSTextField labelWithString:name];
-      label.frame = NSMakeRect(24, y, 330, 18);
+      label.font = [NSFont systemFontOfSize:12.5];
+      label.frame = NSMakeRect(16, ry + 14, cw - 110, 16);
       label.lineBreakMode = NSLineBreakByTruncatingMiddle;
-      [doc addSubview:label];
-      NSButton* remove = [NSButton buttonWithTitle:@"Remove" target:self action:@selector(removeAllowedSiteClicked:)];
+      label.autoresizingMask = NSViewWidthSizable;
+      [sitesCard addSubview:label];
+
+      SlateQuietButton* remove = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(cw - 84, ry + 9, 68, 26)
+                                                                   title:@"Remove"
+                                                                  target:self
+                                                                  action:@selector(removeAllowedSiteClicked:)
+                                                                 primary:NO];
       remove.identifier = name;
-      remove.frame = NSMakeRect(368, y - 4, 82, 26);
-      [doc addSubview:remove];
-      y -= 30;
+      remove.autoresizingMask = NSViewMinXMargin;
+      [sitesCard addSubview:remove];
+      if (i + 1 < sites.size()) [self addDividerToCard:sitesCard y:ry + 43];
+      ry += 44;
     }
   }
 
-  [scroll.contentView scrollToPoint:NSMakePoint(0, MAX(0, docH - NSHeight(scroll.contentView.bounds)))];
-  [scroll reflectScrolledClipView:scroll.contentView];
+  [self finishCanvas:doc scroll:scroll contentHeight:y + sitesH];
 }
 
 - (void)updateVpnFieldStates {
@@ -986,40 +1179,35 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   }
   [SlatePrivacySecurity setIncognitoProxyFailClosed:(self.vpnFailClosedCheck.state == NSControlStateValueOn)];
   BOOL active = [SlatePrivacySecurity isIncognitoTunnelActive];
-  self.vpnStatusLabel.stringValue = active ? @"Saved — active on new Incognito tabs" : (mode == SlateProxyModeOff ? @"Tunnel off" : @"Enter valid host & port");
-  self.vpnStatusLabel.textColor = active ? NSColor.systemGreenColor : NSColor.secondaryLabelColor;
+  self.vpnStatusLabel.stringValue = active ? @"Saved — active on new Incognito tabs" : (mode == SlateProxyModeOff ? @"Tunnel off" : @"Enter a valid host and port");
+  self.vpnStatusDot.layer.backgroundColor = (active ? NSColor.labelColor : NSColor.tertiaryLabelColor).CGColor;
 }
 
 - (void)testVpnClicked:(id)sender {
   [self saveVpnClicked:sender];
   self.vpnStatusLabel.stringValue = @"Testing tunnel…";
-  self.vpnStatusLabel.textColor = NSColor.secondaryLabelColor;
   __weak SlateSettingsPanel* weakSelf = self;
   [SlatePrivacySecurity testIncognitoTunnelWithCompletion:^(BOOL reachable, NSString* message) {
     SlateSettingsPanel* strongSelf = weakSelf;
     if (!strongSelf || !strongSelf.vpnStatusLabel) return;
     strongSelf.vpnStatusLabel.stringValue = message;
-    strongSelf.vpnStatusLabel.textColor = reachable ? NSColor.systemGreenColor : NSColor.systemRedColor;
+    strongSelf.vpnStatusDot.layer.backgroundColor = (reachable ? NSColor.labelColor : NSColor.tertiaryLabelColor).CGColor;
   }];
 }
 
 - (void)toggleStrictPrivacyClicked:(NSSwitch*)sender {
   [SlatePrivacySecurity setStrictTrackingProtectionEnabled:(sender.state == NSControlStateValueOn)];
 }
-
 - (void)toggleHttpsOnlyClicked:(NSSwitch*)sender {
   [SlatePrivacySecurity setHttpsOnlyEnabled:(sender.state == NSControlStateValueOn)];
 }
-
 - (void)toggleWebRTCBlockClicked:(NSSwitch*)sender {
   [SlatePrivacySecurity setBlockWebRTCInIncognito:(sender.state == NSControlStateValueOn)];
 }
-
 - (void)removeAllowedSiteClicked:(NSButton*)sender {
   [self.slateDelegate resumeAdBlockSite:sender.identifier];
   [self renderCurrentPage];
 }
-
 - (void)toggleShieldsClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleShields:sender];
 }
@@ -1027,122 +1215,154 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 #pragma mark - About Page
 
 - (void)renderAboutPage {
-  CGFloat top = 456;
+  NSScrollView* scroll = nil;
+  SlateSettingsFlippedView* doc = [self makePageCanvasWithScroll:&scroll];
+  CGFloat y = 32;
 
-  NSImageView* iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, top - 38, 54, 54)];
+  // Brand Card
+  SlateSettingsCard* hero = [self addCardTo:doc y:y height:82];
+  CGFloat cw = NSWidth(hero.bounds);
+
+  NSImageView* iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(16, 17, 48, 48)];
   NSImage* appIcon = [NSApp applicationIconImage] ?: [NSImage imageNamed:@"AppIcon"];
   if (!appIcon) {
     NSString* iconPath = [[NSBundle mainBundle] pathForResource:@"AppIcon" ofType:@"png"];
-    if (iconPath) {
-      appIcon = [[NSImage alloc] initWithContentsOfFile:iconPath];
-    }
+    if (iconPath) appIcon = [[NSImage alloc] initWithContentsOfFile:iconPath];
   }
   iconView.image = appIcon;
   iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
-  iconView.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:iconView];
+  [hero addSubview:iconView];
 
-  NSTextField* title = [NSTextField labelWithString:@"Slate Browser"];
-  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
-  title.frame = NSMakeRect(90, top - 4, 300, 24);
-  title.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:title];
+  NSTextField* title = [NSTextField labelWithString:@"Slate"];
+  title.font = [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
+  title.frame = NSMakeRect(76, 17, cw - 200, 22);
+  title.autoresizingMask = NSViewWidthSizable;
+  [hero addSubview:title];
 
-  NSDictionary* info=NSBundle.mainBundle.infoDictionary;
-  NSString* version=[NSString stringWithFormat:@"Version %@ (Build %@) — Apple Silicon",info[@"CFBundleShortVersionString"],info[@"CFBundleVersion"]];
+  NSDictionary* info = NSBundle.mainBundle.infoDictionary;
+  NSString* version = [NSString stringWithFormat:@"Version %@ (%@) · Apple Silicon",
+                       info[@"CFBundleShortVersionString"] ?: @"", info[@"CFBundleVersion"] ?: @""];
   NSTextField* ver = [NSTextField labelWithString:version];
-  ver.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
-  ver.textColor = [NSColor secondaryLabelColor];
-  ver.frame = NSMakeRect(90, top - 24, 360, 18);
-  ver.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:ver];
+  ver.font = [NSFont systemFontOfSize:12];
+  ver.textColor = NSColor.secondaryLabelColor;
+  ver.frame = NSMakeRect(76, 40, cw - 200, 16);
+  ver.autoresizingMask = NSViewWidthSizable;
+  [hero addSubview:ver];
 
-  NSTextField* sub = [NSTextField labelWithString:@"A native Mac browser, built for your browsing workspace"];
-  sub.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightRegular];
-  sub.textColor = [NSColor tertiaryLabelColor];
-  sub.frame = NSMakeRect(90, top - 42, 360, 18);
-  sub.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:sub];
+  SlateQuietButton* specsBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(cw - 116, 28, 100, 26)
+                                                                 title:@"System Specs"
+                                                                target:self
+                                                                action:@selector(viewSpecsClicked:)
+                                                               primary:NO];
+  specsBtn.autoresizingMask = NSViewMinXMargin;
+  [hero addSubview:specsBtn];
 
-  SlateAppUpdater* updater=[SlateAppUpdater sharedUpdater];
-  NSButton* check=[NSButton buttonWithTitle:@"Check for Updates…" target:updater action:@selector(checkForUpdates:)];
-  check.bezelStyle=NSBezelStyleRounded;
-  check.frame=NSMakeRect(24,top-88,170,28); check.autoresizingMask=NSViewMinYMargin;
-  [check bind:NSEnabledBinding toObject:updater withKeyPath:@"canCheckForUpdates" options:nil];
-  [_containerView addSubview:check];
-  NSButton* automatic=[NSButton checkboxWithTitle:@"Automatically check for updates" target:self action:@selector(updateChecksChanged:)];
-  automatic.state=updater.automaticallyChecksForUpdates ? NSControlStateValueOn : NSControlStateValueOff;
-  automatic.frame=NSMakeRect(24,top-120,340,24); automatic.autoresizingMask=NSViewMinYMargin;
-  [_containerView addSubview:automatic];
-  NSButton* downloads=[NSButton checkboxWithTitle:@"Automatically download updates" target:self action:@selector(updateDownloadsChanged:)];
-  downloads.state=updater.automaticallyDownloadsUpdates ? NSControlStateValueOn : NSControlStateValueOff;
-  downloads.enabled=updater.automaticallyChecksForUpdates;
-  downloads.frame=NSMakeRect(24,top-148,340,24); downloads.autoresizingMask=NSViewMinYMargin;
-  [_containerView addSubview:downloads];
-  NSTextField* updateNote=[NSTextField wrappingLabelWithString:updater.status];
+  // Updates Card
+  y += 82 + 20;
+  y = [self addSectionCaptionTo:doc y:y text:@"Updates"];
+  SlateSettingsCard* updCard = [self addCardTo:doc y:y height:146];
+  cw = NSWidth(updCard.bounds);
+  SlateAppUpdater* updater = [SlateAppUpdater sharedUpdater];
+
+  NSTextField* updTitle = [NSTextField labelWithString:@"Software Updates"];
+  updTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  updTitle.frame = NSMakeRect(16, 12, cw - 170, 17);
+  updTitle.autoresizingMask = NSViewWidthSizable;
+  [updCard addSubview:updTitle];
+
+  NSTextField* updateNote = [NSTextField wrappingLabelWithString:updater.status ?: @""];
   [updateNote bind:NSValueBinding toObject:updater withKeyPath:@"status" options:nil];
-  updateNote.font=[NSFont systemFontOfSize:11]; updateNote.textColor=NSColor.secondaryLabelColor;
-  updateNote.frame=NSMakeRect(24,top-187,430,32); updateNote.autoresizingMask=NSViewMinYMargin;
-  [_containerView addSubview:updateNote];
+  updateNote.font = [NSFont systemFontOfSize:11.5];
+  updateNote.textColor = NSColor.secondaryLabelColor;
+  updateNote.frame = NSMakeRect(16, 31, cw - 170, 30);
+  updateNote.autoresizingMask = NSViewWidthSizable;
+  [updCard addSubview:updateNote];
 
-  // Button to view hardware specs
-  NSButton* specsBtn = [NSButton buttonWithTitle:@"View System Hardware Specs" target:self action:@selector(viewSpecsClicked:)];
-  specsBtn.bezelStyle = NSBezelStyleRounded;
-  specsBtn.frame = NSMakeRect(250, top - 88, 210, 28);
-  specsBtn.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:specsBtn];
+  SlateQuietButton* check = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(cw - 146, 16, 130, 26)
+                                                              title:@"Check for Updates…"
+                                                             target:updater
+                                                             action:@selector(checkForUpdates:)
+                                                            primary:NO];
+  check.autoresizingMask = NSViewMinXMargin;
+  [check bind:NSEnabledBinding toObject:updater withKeyPath:@"canCheckForUpdates" options:nil];
+  [updCard addSubview:check];
 
-  // Keyboard Shortcuts Cheat Sheet
-  top -= 220;
-  NSTextField* scTitle = [NSTextField labelWithString:@"Keyboard Shortcuts"];
-  scTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  scTitle.frame = NSMakeRect(24, top, 200, 18);
-  scTitle.autoresizingMask = NSViewMinYMargin;
-  [_containerView addSubview:scTitle];
+  [self addDividerToCard:updCard y:70];
 
+  NSButton* automatic = [NSButton checkboxWithTitle:@"Automatically check for updates" target:self action:@selector(updateChecksChanged:)];
+  automatic.controlSize = NSControlSizeSmall;
+  automatic.font = [NSFont systemFontOfSize:12];
+  automatic.state = updater.automaticallyChecksForUpdates ? NSControlStateValueOn : NSControlStateValueOff;
+  automatic.frame = NSMakeRect(16, 84, cw - 32, 18);
+  [updCard addSubview:automatic];
+
+  NSButton* downloads = [NSButton checkboxWithTitle:@"Automatically download updates" target:self action:@selector(updateDownloadsChanged:)];
+  downloads.controlSize = NSControlSizeSmall;
+  downloads.font = [NSFont systemFontOfSize:12];
+  downloads.state = updater.automaticallyDownloadsUpdates ? NSControlStateValueOn : NSControlStateValueOff;
+  downloads.enabled = updater.automaticallyChecksForUpdates;
+  downloads.frame = NSMakeRect(16, 110, cw - 32, 18);
+  [updCard addSubview:downloads];
+
+  // Keyboard Shortcuts Card
+  y += 146 + 20;
+  y = [self addSectionCaptionTo:doc y:y text:@"Shortcuts"];
   NSArray* shortcuts = @[
     @[@"⌘ T", @"New Tab"],
     @[@"⌘ W", @"Close Tab"],
-    @[@"⌥ ⌘ P", @"Toggle Picture-in-Picture"],
-    @[@"⌘ L", @"Focus Address Bar / Search"],
-    @[@"⌘ 1–9", @"Switch to Tab by Index"],
-    @[@"⇧ ⌘ S", @"Toggle Sidebar (Vertical Tabs)"],
+    @[@"⌘ L", @"Focus Address Bar"],
+    @[@"⌘ 1–9", @"Switch Tab"],
+    @[@"⇧ ⌘ S", @"Toggle Sidebar Tabs"],
     @[@"⌘ S", @"Fold / Unfold Tab Strip"],
     @[@"⇧ ⌘ B", @"Toggle Bookmarks Bar"],
+    @[@"⌥ ⌘ P", @"Picture-in-Picture"],
     @[@"⌘ ,", @"Open Settings"]
   ];
+  CGFloat scH = shortcuts.count * 32.0;
+  SlateSettingsCard* scCard = [self addCardTo:doc y:y height:scH];
+  cw = NSWidth(scCard.bounds);
+  CGFloat sy = 0;
+  for (NSUInteger i = 0; i < shortcuts.count; ++i) {
+    NSArray* sc = shortcuts[i];
+    NSTextField* descField = [NSTextField labelWithString:sc[1]];
+    descField.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
+    descField.textColor = NSColor.labelColor;
+    descField.frame = NSMakeRect(16, sy + 8, cw - 110, 16);
+    descField.autoresizingMask = NSViewWidthSizable;
+    [scCard addSubview:descField];
 
-  CGFloat sy = top - 24;
-  for (NSArray* sc in shortcuts) {
     NSTextField* keyField = [NSTextField labelWithString:sc[0]];
     keyField.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightMedium];
-    keyField.frame = NSMakeRect(24, sy, 80, 16);
-    keyField.autoresizingMask = NSViewMinYMargin;
-    [_containerView addSubview:keyField];
+    keyField.textColor = NSColor.secondaryLabelColor;
+    keyField.alignment = NSTextAlignmentRight;
+    keyField.frame = NSMakeRect(cw - 88, sy + 8, 72, 16);
+    keyField.autoresizingMask = NSViewMinXMargin;
+    [scCard addSubview:keyField];
 
-    NSTextField* descField = [NSTextField labelWithString:sc[1]];
-    descField.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightRegular];
-    descField.textColor = [NSColor secondaryLabelColor];
-    descField.frame = NSMakeRect(110, sy, 320, 16);
-    descField.autoresizingMask = NSViewMinYMargin;
-    [_containerView addSubview:descField];
-
-    sy -= 20;
+    if (i + 1 < shortcuts.count) [self addDividerToCard:scCard y:sy + 31];
+    sy += 32;
   }
+
+  [self finishCanvas:doc scroll:scroll contentHeight:y + scH];
 }
 
 #if defined(SLATE_ENABLE_VERIFY)
 - (void)prepareUpdaterVerification:(SlateDelegate*)delegate {
- self.slateDelegate=delegate; self.currentPage=@"about"; [self renderCurrentPage];
+  self.slateDelegate = delegate;
+  self.currentPage = @"about";
+  [self renderCurrentPage];
 }
 #endif
+
 - (void)updateChecksChanged:(NSButton*)sender {
- [SlateAppUpdater sharedUpdater].automaticallyChecksForUpdates=sender.state==NSControlStateValueOn;
- [self renderCurrentPage];
+  [SlateAppUpdater sharedUpdater].automaticallyChecksForUpdates = (sender.state == NSControlStateValueOn);
+  [self renderCurrentPage];
 }
+
 - (void)updateDownloadsChanged:(NSButton*)sender {
- [SlateAppUpdater sharedUpdater].automaticallyDownloadsUpdates=sender.state==NSControlStateValueOn;
+  [SlateAppUpdater sharedUpdater].automaticallyDownloadsUpdates = (sender.state == NSControlStateValueOn);
 }
+
 - (void)viewSpecsClicked:(id)sender {
   [[SlateSpecsPanel sharedPanel] showForWindow:self];
 }
