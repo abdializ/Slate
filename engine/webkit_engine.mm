@@ -332,6 +332,17 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 }
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+  if ([navigationResponse.response isKindOfClass:[NSHTTPURLResponse class]]) {
+    NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)navigationResponse.response;
+    NSString *disposition = [httpResponse valueForHTTPHeaderField:@"Content-Disposition"];
+    if (disposition && [disposition localizedCaseInsensitiveContainsString:@"attachment"]) {
+      fprintf(stderr, "SLATE_DOWNLOAD_ATTACHMENT url=%s disposition=%s\n",
+              navigationResponse.response.URL.absoluteString.UTF8String ?: "nil",
+              disposition.UTF8String ?: "nil");
+      decisionHandler(WKNavigationResponsePolicyDownload);
+      return;
+    }
+  }
   NSString* mime = navigationResponse.response.MIMEType.lowercaseString;
   if ([mime isEqualToString:@"application/pdf"] || [mime isEqualToString:@"text/pdf"] || [navigationResponse.response.URL.path.lowercaseString hasSuffix:@".pdf"]) {
     decisionHandler(WKNavigationResponsePolicyAllow);
@@ -344,52 +355,43 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     decisionHandler(WKNavigationResponsePolicyDownload);
     return;
   }
-  if ([navigationResponse.response isKindOfClass:[NSHTTPURLResponse class]]) {
-    NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)navigationResponse.response;
-    NSString *disposition = httpResponse.allHeaderFields[@"Content-Disposition"] ?: httpResponse.allHeaderFields[@"content-disposition"];
-    if (disposition && [disposition localizedCaseInsensitiveContainsString:@"attachment"]) {
-      fprintf(stderr, "SLATE_DOWNLOAD_ATTACHMENT url=%s disposition=%s\n",
-              navigationResponse.response.URL.absoluteString.UTF8String ?: "nil",
-              disposition.UTF8String ?: "nil");
-      decisionHandler(WKNavigationResponsePolicyDownload);
-      return;
-    }
-  }
   decisionHandler(WKNavigationResponsePolicyAllow);
+}
+
+- (void)attachDownload:(WKDownload *)download forWebView:(WKWebView *)webView source:(const char *)source {
+  if (!download) return;
+  fprintf(stderr, "SLATE_DOWNLOAD_STARTED %s url=%s\n",
+          source ?: "unknown",
+          download.originalRequest.URL.absoluteString.UTF8String ?: "nil");
+  SlateDownloadManager *manager = [SlateDownloadManager sharedManager];
+  // Register BEFORE assigning delegate so decideDestinationUsingResponse: always finds the item
+  // even when WebKit invokes the delegate synchronously upon assignment.
+  [manager registerDownload:download forWebView:webView];
+  download.delegate = manager;
+  if (self.events && self.events->protection_changed) {
+    slate::ProtectionSignals signals;
+    signals.observed = true;
+    signals.loading = false;
+    signals.download = true;
+    signals.uncertain = false;
+    signals.observed_at = std::chrono::steady_clock::now();
+    self.events->protection_changed(signals);
+  }
 }
 
 - (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)navigationResponse didBecomeDownload:(WKDownload *)download {
   (void)navigationResponse;
-  fprintf(stderr, "SLATE_DOWNLOAD_STARTED response url=%s\n",
-          download.originalRequest.URL.absoluteString.UTF8String ?: "nil");
-  download.delegate = [SlateDownloadManager sharedManager];
-  [[SlateDownloadManager sharedManager] registerDownload:download forWebView:webView];
-  if (self.events && self.events->protection_changed) {
-    slate::ProtectionSignals signals;
-    signals.observed = true;
-    signals.loading = false;
-    signals.download = true;
-    signals.uncertain = false;
-    signals.observed_at = std::chrono::steady_clock::now();
-    self.events->protection_changed(signals);
-  }
+  [self attachDownload:download forWebView:webView source:"response"];
 }
 
 - (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)navigationAction didBecomeDownload:(WKDownload *)download {
   (void)navigationAction;
-  fprintf(stderr, "SLATE_DOWNLOAD_STARTED action url=%s\n",
-          download.originalRequest.URL.absoluteString.UTF8String ?: "nil");
-  download.delegate = [SlateDownloadManager sharedManager];
-  [[SlateDownloadManager sharedManager] registerDownload:download forWebView:webView];
-  if (self.events && self.events->protection_changed) {
-    slate::ProtectionSignals signals;
-    signals.observed = true;
-    signals.loading = false;
-    signals.download = true;
-    signals.uncertain = false;
-    signals.observed_at = std::chrono::steady_clock::now();
-    self.events->protection_changed(signals);
-  }
+  [self attachDownload:download forWebView:webView source:"action"];
+}
+
+// Private WebKit delegate hook for "Download Linked File" from the native context menu.
+- (void)_webView:(WKWebView *)webView contextMenuDidCreateDownload:(WKDownload *)download {
+  [self attachDownload:download forWebView:webView source:"context_menu"];
 }
 
 
@@ -399,10 +401,21 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         windowFeatures:(WKWindowFeatures *)windowFeatures {
   NSURL* url = navigationAction.request.URL;
   NSString* urlStr = url.absoluteString;
-  fprintf(stderr, "SLATE_CREATE_WEBVIEW targetFrame=%p url=%s navType=%ld\n",
+  fprintf(stderr, "SLATE_CREATE_WEBVIEW targetFrame=%p url=%s navType=%ld download=%d\n",
           navigationAction.targetFrame,
           urlStr.UTF8String ?: "nil",
-          (long)navigationAction.navigationType);
+          (long)navigationAction.navigationType,
+          navigationAction.shouldPerformDownload ? 1 : 0);
+
+  if (navigationAction.shouldPerformDownload) {
+    if (@available(macOS 11.3, *)) {
+      __weak SlateWebNavigationDelegate* weakSelf = self;
+      [webView startDownloadUsingRequest:navigationAction.request completionHandler:^(WKDownload *download) {
+        [weakSelf attachDownload:download forWebView:webView source:"popup_action"];
+      }];
+      return nil;
+    }
+  }
 
   // Return the actual tab-owned view so WebKit retains window.opener, POST
   // requests, and script-populated about:blank windows.

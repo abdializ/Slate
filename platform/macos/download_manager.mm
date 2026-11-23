@@ -133,7 +133,15 @@ static BOOL PublishDownload(SlateDownloadItem* item, NSString* directory, NSErro
  return NO;
 }
 static NSURL* DownloadStagingURL(NSString* directory) {
- return [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:[NSString stringWithFormat:@".slate-%@.slatedownload",NSUUID.UUID.UUIDString]]];
+ NSString* dir = directory;
+ if (dir.length) {
+  [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+  char realDirBuf[PATH_MAX];
+  if (realpath(dir.fileSystemRepresentation, realDirBuf)) {
+   dir = [NSString stringWithUTF8String:realDirBuf];
+  }
+ }
+ return [NSURL fileURLWithPath:[dir stringByAppendingPathComponent:[NSString stringWithFormat:@".slate-%@.slatedownload",NSUUID.UUID.UUIDString]]];
 }
 static BOOL IsUnfinished(SlateDownloadItem* item) {
  return item.state==SlateDownloadStateInProgress || item.state==SlateDownloadStatePaused || item.state==SlateDownloadStateFinishing;
@@ -508,8 +516,9 @@ static BOOL IsUnfinished(SlateDownloadItem* item) {
   NSData* data=item.resumeData; item.resumeData=nil;
   [item.sourceWebView resumeDownloadFromResumeData:data completionHandler:^(WKDownload* download) {
    if(item.state!=SlateDownloadStateInProgress) { [download cancel:^(NSData* data) {}]; return; }
-   download.delegate=self; item.activeDownload=download;
+   item.activeDownload=download;
    [self->_downloadMap setObject:item forKey:download];
+   download.delegate=self;
    [self notifyChanged];
   }];
  }
@@ -603,12 +612,26 @@ static BOOL IsUnfinished(SlateDownloadItem* item) {
 
 #pragma mark - WKDownloadDelegate
 
+- (void)download:(WKDownload *)download willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request decisionHandler:(void (^)(WKDownloadRedirectPolicy))decisionHandler {
+ (void)download; (void)response;
+ NSString* scheme = request.URL.scheme.lowercaseString;
+ BOOL allow = [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
+ fprintf(stderr, "SLATE_DOWNLOAD_REDIRECT allow=%d url=%s\n",
+         allow ? 1 : 0, request.URL.absoluteString.UTF8String ?: "nil");
+ decisionHandler(allow ? WKDownloadRedirectPolicyAllow : WKDownloadRedirectPolicyCancel);
+}
+
 - (void)download:(WKDownload *)download decideDestinationUsingResponse:(NSURLResponse *)response suggestedFilename:(NSString *)suggestedFilename completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
  NSString* name = suggestedFilename.length ? suggestedFilename : download.originalRequest.URL.lastPathComponent;
  if (!name.length) name = @"download";
  SlateDownloadItem* item = [self itemForDownload:download];
+ if (!item) {
+  [self registerDownload:download forWebView:download.webView];
+  item = [self itemForDownload:download];
+ }
  if(!item) { completionHandler(nil); return; }
- NSURL* dest = DownloadStagingURL(item.targetDirectory ?: self.downloadsDirectory);
+ NSString* targetDir = item.targetDirectory.length ? item.targetDirectory : self.downloadsDirectory;
+ NSURL* dest = DownloadStagingURL(targetDir);
  if([response isKindOfClass:NSHTTPURLResponse.class] && ((NSHTTPURLResponse*)response).statusCode>=400) {
   if(item) { item.state=SlateDownloadStateFailed; item.errorDescription=[NSString stringWithFormat:@"The website returned HTTP %ld.",(long)((NSHTTPURLResponse*)response).statusCode]; item.activeDownload=nil; [self notifyChanged]; }
   completionHandler(nil); return;
