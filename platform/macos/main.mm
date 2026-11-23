@@ -5116,7 +5116,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.bookmarkButton.image=[NSImage imageWithSystemSymbolName:saved ? @"star.fill" : @"star" accessibilityDescription:@"Bookmark"];
  self.bookmarkButton.enabled=tab->url.rfind("http",0)==0;
  const auto host=slate::host_from_url(tab->url);
- const BOOL blocking=slate::WebKitShields::Shared().IsEnabled() &&
+ const BOOL blocking=slate::WebKitShields::Shared().IsEnabledForIncognito(tab->incognito) &&
   (host.empty() || slate::WebKitShields::Shared().IsSiteEnabled(host));
  self.shieldsButton.image=[NSImage imageWithSystemSymbolName:blocking ? @"checkmark.shield" : @"shield.slash"
                                     accessibilityDescription:@"Slate Shields"];
@@ -11237,7 +11237,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)updateShieldsChrome {
  if(!self.shieldsButton) return;
  const auto host=[self currentPageHost];
- const BOOL off=!slate::WebKitShields::Shared().IsEnabled();
+ const auto* curTab=model.find(model.selected());
+ const BOOL curIncog=curTab && curTab->incognito;
+ const BOOL off=!slate::WebKitShields::Shared().IsEnabledForIncognito(curIncog);
  const BOOL paused=!host.empty() && !slate::WebKitShields::Shared().IsSiteEnabled(host);
  NSString* symbol=off || paused ? @"shield.slash" : @"checkmark.shield";
  NSImage* image=[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"Slate Shields"]

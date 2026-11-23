@@ -1069,7 +1069,28 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
         },
         @"action": @{
           @"type": @"css-display-none",
-          @"selector": @".ytp-ad-overlay-container, .ytp-ad-message-container, .ytp-ad-progress-list, ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ytd-banner-promo-renderer, ytd-promoted-video-renderer, ytd-display-ad-renderer, ytd-statement-banner-renderer, #masthead-ad, ytd-companion-ad-renderer"
+          @"selector": @".ytp-ad-overlay-container, .ytp-ad-message-container, .ytp-ad-progress-list, ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ytd-banner-promo-renderer, ytd-promoted-video-renderer, ytd-promoted-sparkles-web-renderer, ytd-action-companion-ad-renderer, ytd-display-ad-renderer, ytd-statement-banner-renderer, #masthead-ad, #player-ads, ytd-companion-ad-renderer"
+        }
+      },
+      // Group 7: Google Search sponsored ads & Reddit promoted posts
+      @{
+        @"trigger": @{
+          @"url-filter": @".*",
+          @"if-domain": @[ @"*google.com" ]
+        },
+        @"action": @{
+          @"type": @"css-display-none",
+          @"selector": @"#tads, #tadsb, [data-text-ad], .commercial-unit-desktop-top, .commercial-unit-desktop-rhs, .cu-container"
+        }
+      },
+      @{
+        @"trigger": @{
+          @"url-filter": @".*",
+          @"if-domain": @[ @"*reddit.com" ]
+        },
+        @"action": @{
+          @"type": @"css-display-none",
+          @"selector": @"shreddit-ad-post, shreddit-comments-page-ad, faceplate-tracker[noun='ad']"
         }
       }
     ];
@@ -1167,6 +1188,48 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                      forMainFrameOnly:NO];
     [controller addUserScript:twitchScript];
+  }
+
+  // Attach document-start YouTube ytInitialPlayerResponse ad stripper so pre-roll ads are pruned
+  // before YouTube's player initializes (especially critical in Incognito when extensions are off).
+  if (active && ![disabled_sites_ containsObject:@"youtube.com"]) {
+    static NSString* const kYtDocStartJs = @R"JS(
+      (function() {
+        'use strict';
+        const h = (location && location.hostname || '').toLowerCase();
+        if (h !== 'youtube.com' && !h.endsWith('.youtube.com')) return;
+        if (window.__slateYtDocStart) return;
+        window.__slateYtDocStart = true;
+        function strip(obj) {
+          if (!obj || typeof obj !== 'object') return obj;
+          try {
+            delete obj.adPlacements;
+            delete obj.playerAds;
+            delete obj.adSlots;
+            delete obj.adBreakHeartbeatParams;
+            if (obj.playerResponse && typeof obj.playerResponse === 'object') {
+              delete obj.playerResponse.adPlacements;
+              delete obj.playerResponse.playerAds;
+              delete obj.playerResponse.adSlots;
+              delete obj.playerResponse.adBreakHeartbeatParams;
+            }
+          } catch (e) {}
+          return obj;
+        }
+        let val = strip(window.ytInitialPlayerResponse);
+        try {
+          Object.defineProperty(window, 'ytInitialPlayerResponse', {
+            configurable: true,
+            get: function() { return val; },
+            set: function(v) { val = strip(v); }
+          });
+        } catch (e) {}
+      })();
+    )JS";
+    WKUserScript* ytScript = [[WKUserScript alloc] initWithSource:kYtDocStartJs
+                                                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                 forMainFrameOnly:YES];
+    [controller addUserScript:ytScript];
   }
 
   // Attach compiled rule list immediately if already available
