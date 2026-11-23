@@ -884,6 +884,16 @@ class WebKitEngine final : public BrowserEngine {
     if ([config.preferences respondsToSelector:setFsSel]) {
       reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(config.preferences, setFsSel, YES);
     }
+    // Disable legacy macOS WebKit Backspace/Delete -> Go Back navigation so web apps and games
+    // (e.g. Wordle) receive Backspace without accidentally navigating to the previous page.
+    SEL setBackspaceNavSel = NSSelectorFromString(@"_setBackspaceKeyNavigationEnabled:");
+    if ([config.preferences respondsToSelector:setBackspaceNavSel]) {
+      reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(config.preferences, setBackspaceNavSel, NO);
+    } else {
+      @try {
+        [config.preferences setValue:@NO forKey:@"backspaceKeyNavigationEnabled"];
+      } @catch (id ex) {}
+    }
     [SlateFrameRate applyToPreferences:config.preferences];
 
     // Attach shields (ad blocking, stream ad defusers, and anti-fingerprinting)
