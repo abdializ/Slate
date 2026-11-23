@@ -75,6 +75,7 @@ target_link_libraries(Slate PRIVATE
   "-framework SecurityInterface"
   "-framework LocalAuthentication"
   "-framework Network"
+  "-framework UserNotifications"
   "-framework UniformTypeIdentifiers"
   "-framework PDFKit"
   "-framework CoreImage"

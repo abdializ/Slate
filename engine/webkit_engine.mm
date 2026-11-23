@@ -8,6 +8,7 @@
 #import "platform/macos/extensions_manager.h"
 #include "engine/page_theme_js.h"
 #include "engine/image_download_js.h"
+#include "engine/extension_shims_js.h"
 #include "engine/pip_state.h"
 #import "platform/macos/download_manager.h"
 #import "platform/macos/form_relay.h"
@@ -517,6 +518,12 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
 // WKScriptMessageHandler: Handle media playing and audible updates from in-page media observer
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+  if ([message.name isEqualToString:@"slateExtShim"]) {
+    if (message.webView != self.webView || ![message.body isKindOfClass:[NSDictionary class]]) return;
+    [[SlateExtensionsManager sharedManager] handleShimMessage:(NSDictionary*)message.body fromWebView:self.webView];
+    return;
+  }
+
   if ([message.name isEqualToString:@"slateWebStore"]) {
     if (message.webView != self.webView || ![message.body isKindOfClass:[NSDictionary class]]) return;
     NSDictionary* dict = (NSDictionary*)message.body;
@@ -1354,6 +1361,14 @@ class WebKitEngine final : public BrowserEngine {
       [config.userContentController addScriptMessageHandler:delegate_ name:@"slateConsole"];
     }
     [config.userContentController addScriptMessageHandler:delegate_ name:@"omidJsSessionService"];
+    {
+      NSString* extShimJs = [NSString stringWithUTF8String:slate::kExtensionShimsJs];
+      WKUserScript* extShimScript = [[WKUserScript alloc] initWithSource:extShimJs
+                                                           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                        forMainFrameOnly:NO];
+      [config.userContentController addUserScript:extShimScript];
+      [config.userContentController addScriptMessageHandler:delegate_ name:@"slateExtShim"];
+    }
 
     NSRect frame = parent.bounds;
     // Slate note: Construct the actual native page view after configuration; this is where a saved logical
@@ -1708,6 +1723,7 @@ class WebKitEngine final : public BrowserEngine {
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateAutofill"];
         }
         [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"omidJsSessionService"];
+        [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateExtShim"];
         if (getenv("SLATE_DEBUG_CONSOLE")) {
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateConsole"];
         }

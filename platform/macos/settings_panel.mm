@@ -1373,8 +1373,9 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     removeBtn.autoresizingMask = NSViewMinXMargin;
     [listCard addSubview:removeBtn];
 
+    CGFloat nextBtnX = btnX - 68;
     if (rec.hasOptionsPage && rec.enabled) {
-      SlateQuietButton* optBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(btnX - 68, ry + 49, 62, 22)
+      SlateQuietButton* optBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(nextBtnX, ry + 49, 62, 22)
                                                                    title:@"Options"
                                                                   target:self
                                                                   action:@selector(openExtensionOptions:)
@@ -1382,6 +1383,17 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
       optBtn.identifier = rec.identifier;
       optBtn.autoresizingMask = NSViewMinXMargin;
       [listCard addSubview:optBtn];
+      nextBtnX -= 84;
+    }
+    if (rec.sidePanelPath.length && rec.enabled) {
+      SlateQuietButton* spBtn = [[SlateQuietButton alloc] initWithFrame:NSMakeRect(nextBtnX - 16, ry + 49, 78, 22)
+                                                                  title:@"Side Panel"
+                                                                 target:self
+                                                                 action:@selector(openExtensionSidePanel:)
+                                                                primary:NO];
+      spBtn.identifier = rec.identifier;
+      spBtn.autoresizingMask = NSViewMinXMargin;
+      [listCard addSubview:spBtn];
     }
 
     if (i + 1 < list.count) [self addDividerToCard:listCard y:ry + rowH - 1];
@@ -1485,6 +1497,11 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 - (void)openExtensionOptions:(NSButton*)sender {
   if (!sender.identifier.length) return;
   [[SlateExtensionsManager sharedManager] openOptionsPageForExtensionId:sender.identifier];
+}
+
+- (void)openExtensionSidePanel:(NSButton*)sender {
+  if (!sender.identifier.length) return;
+  [[SlateExtensionsManager sharedManager] openSidePanelForExtensionId:sender.identifier path:nil];
 }
 
 - (void)removeExtensionClicked:(NSButton*)sender {

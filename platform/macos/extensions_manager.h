@@ -19,6 +19,7 @@ extern NSNotificationName const SlateExtensionsDidChangeNotification;
 @property (nonatomic, assign) BOOL enabled;
 @property (nonatomic, assign) BOOL allowInPrivate;
 @property (nonatomic, assign) BOOL hasOptionsPage;
+@property (nonatomic, copy, nullable) NSString* sidePanelPath;
 @property (nonatomic, strong, nullable) NSImage* icon;
 @property (nonatomic, copy, nullable) NSString* loadError;
 @property (nonatomic, copy, nullable) NSString* badgeText;
@@ -79,6 +80,8 @@ extern NSNotificationName const SlateExtensionsDidChangeNotification;
 - (void)setExtensionId:(NSString*)identifier allowInPrivate:(BOOL)allowInPrivate;
 - (void)removeExtensionId:(NSString*)identifier;
 - (void)openOptionsPageForExtensionId:(NSString*)identifier;
+- (void)openSidePanelForExtensionId:(NSString*)identifier path:(NSString* _Nullable)overridePath;
+- (void)handleShimMessage:(NSDictionary*)body fromWebView:(WKWebView*)webView;
 
 // Toolbar action invocation
 - (void)performActionForExtensionId:(NSString*)identifier anchorView:(NSView* _Nullable)anchorView;

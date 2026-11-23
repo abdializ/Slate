@@ -12133,6 +12133,24 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSString* badge = [mgr actionBadgeForExtensionId:rec.identifier];
   NSString* tip = [mgr actionTooltipForExtensionId:rec.identifier] ?: rec.name;
   btn.toolTip = badge.length ? [NSString stringWithFormat:@"%@ (%@)", tip, badge] : tip;
+  NSMenu* ctxMenu = [[NSMenu alloc] initWithTitle:rec.name ?: @"Extension"];
+  NSMenuItem* hdr = [ctxMenu addItemWithTitle:rec.name ?: @"Extension" action:nil keyEquivalent:@""];
+  hdr.enabled = NO;
+  [ctxMenu addItem:[NSMenuItem separatorItem]];
+  if(rec.sidePanelPath.length) {
+   NSMenuItem* sp = [ctxMenu addItemWithTitle:@"Open Side Panel" action:@selector(extensionMenuOpenSidePanel:) keyEquivalent:@""];
+   sp.target = self; sp.representedObject = rec.identifier;
+  }
+  if(rec.hasOptionsPage) {
+   NSMenuItem* opt = [ctxMenu addItemWithTitle:@"Options" action:@selector(extensionMenuOpenOptions:) keyEquivalent:@""];
+   opt.target = self; opt.representedObject = rec.identifier;
+  }
+  NSMenuItem* manage = [ctxMenu addItemWithTitle:@"Manage Extensions…" action:@selector(showExtensions:) keyEquivalent:@""];
+  manage.target = self;
+  [ctxMenu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem* rem = [ctxMenu addItemWithTitle:@"Remove Extension" action:@selector(extensionMenuRemove:) keyEquivalent:@""];
+  rem.target = self; rem.representedObject = rec.identifier;
+  btn.menu = ctxMenu;
   [NSLayoutConstraint activateConstraints:@[
    [btn.widthAnchor constraintEqualToConstant:22],
    [btn.heightAnchor constraintEqualToConstant:22]
@@ -12144,6 +12162,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)extensionToolbarButtonClicked:(NSButton*)sender {
  if(!sender.identifier.length) return;
  [[SlateExtensionsManager sharedManager] performActionForExtensionId:sender.identifier anchorView:sender];
+}
+- (void)extensionMenuOpenSidePanel:(NSMenuItem*)sender {
+ NSString* extId = sender.representedObject;
+ if(extId.length) [[SlateExtensionsManager sharedManager] openSidePanelForExtensionId:extId path:nil];
+}
+- (void)extensionMenuOpenOptions:(NSMenuItem*)sender {
+ NSString* extId = sender.representedObject;
+ if(extId.length) [[SlateExtensionsManager sharedManager] openOptionsPageForExtensionId:extId];
+}
+- (void)extensionMenuRemove:(NSMenuItem*)sender {
+ NSString* extId = sender.representedObject;
+ if(extId.length) [[SlateExtensionsManager sharedManager] removeExtensionId:extId];
 }
 #pragma mark - SlateExtensionHostDelegate
 - (NSWindow*)extensionHostWindow { return self.window; }

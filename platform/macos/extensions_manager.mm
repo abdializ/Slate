@@ -2,7 +2,9 @@
 // Chrome extension installer, and WKWebExtensionWindow/WKWebExtensionTab adapters.
 
 #import "platform/macos/extensions_manager.h"
+#include "engine/extension_shims_js.h"
 #import <objc/runtime.h>
+#import <UserNotifications/UserNotifications.h>
 
 NSNotificationName const SlateExtensionsDidChangeNotification = @"SlateExtensionsDidChangeNotification";
 
@@ -22,9 +24,62 @@ API_AVAILABLE(macos(15.4))
 @property (nonatomic, assign) uint64_t tabId;
 @end
 
-@interface SlateExtensionsManager () <WKWebExtensionControllerDelegate>
+@interface SlateExtAuthPanel : NSPanel <WKNavigationDelegate, NSWindowDelegate>
+@property (nonatomic, strong) WKWebView* webView;
+@property (nonatomic, copy) void (^completion)(NSString* _Nullable redirectURL, NSString* _Nullable error);
+@property (nonatomic, assign) BOOL finished;
+@end
+
+@implementation SlateExtAuthPanel
+- (instancetype)initWithURL:(NSURL*)url completion:(void (^)(NSString* _Nullable, NSString* _Nullable))completion {
+  NSRect rect = NSMakeRect(0, 0, 520, 660);
+  NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
+  if (self = [super initWithContentRect:rect styleMask:style backing:NSBackingStoreBuffered defer:NO]) {
+    self.title = @"Sign In";
+    self.releasedWhenClosed = NO;
+    self.delegate = self;
+    _completion = [completion copy];
+    WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
+    cfg.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    _webView = [[WKWebView alloc] initWithFrame:self.contentView.bounds configuration:cfg];
+    _webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _webView.navigationDelegate = self;
+    [self.contentView addSubview:_webView];
+    if (url) [_webView loadRequest:[NSURLRequest requestWithURL:url]];
+  }
+  return self;
+}
+- (void)finishWithURL:(NSString*)redirectURL error:(NSString*)err {
+  if (_finished) return;
+  _finished = YES;
+  auto cb = _completion;
+  _completion = nil;
+  [self orderOut:nil];
+  if (cb) cb(redirectURL, err);
+}
+- (void)windowWillClose:(NSNotification*)notification {
+  (void)notification;
+  [self finishWithURL:nil error:@"User cancelled authentication."];
+}
+- (void)webView:(WKWebView*)webView decidePolicyForNavigationAction:(WKNavigationAction*)action decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+  (void)webView;
+  NSURL* u = action.request.URL;
+  if (u && [u.host.lowercaseString hasSuffix:@".chromiumapp.org"]) {
+    decisionHandler(WKNavigationActionPolicyCancel);
+    [self finishWithURL:u.absoluteString error:nil];
+    return;
+  }
+  decisionHandler(WKNavigationActionPolicyAllow);
+}
+@end
+
+@interface SlateExtensionsManager () <WKWebExtensionControllerDelegate, WKScriptMessageHandler>
 @property (nonatomic, strong) NSMutableArray<SlateExtensionRecord*>* mutableExtensions;
 @property (nonatomic, strong) NSMutableDictionary<NSNumber*, id>* tabAdapters;
+@property (nonatomic, strong) NSMutableDictionary<NSString*, WKWebView*>* offscreenWebViews;
+@property (nonatomic, strong) NSPanel* sidePanelWindow;
+@property (nonatomic, strong) WKWebView* sidePanelWebView;
+@property (nonatomic, strong) SlateExtAuthPanel* activeAuthPanel;
 @property (nonatomic, strong) id windowAdapter;
 @property (nonatomic, strong) id webExtensionController;
 @property (nonatomic, weak) NSView* pendingPopupAnchor;
@@ -285,6 +340,7 @@ API_AVAILABLE(macos(15.4))
   if (self = [super init]) {
     _mutableExtensions = [NSMutableArray array];
     _tabAdapters = [NSMutableDictionary dictionary];
+    _offscreenWebViews = [NSMutableDictionary dictionary];
     if (@available(macOS 15.4, *)) {
       if (NSClassFromString(@"WKWebExtensionController")) {
         WKWebExtensionControllerConfiguration* cfg = [WKWebExtensionControllerConfiguration defaultConfiguration];
@@ -348,6 +404,7 @@ API_AVAILABLE(macos(15.4))
       @"version": rec.version ?: @"",
       @"summary": rec.summary ?: @"",
       @"path": rec.directoryPath ?: @"",
+      @"sidePanelPath": rec.sidePanelPath ?: @"",
       @"enabled": @(rec.enabled),
       @"allowInPrivate": @(rec.allowInPrivate)
     }];
@@ -386,6 +443,8 @@ API_AVAILABLE(macos(15.4))
     rec.version = row[@"version"] ?: @"";
     rec.summary = row[@"summary"] ?: @"";
     rec.directoryPath = path;
+    NSString* sp = row[@"sidePanelPath"];
+    rec.sidePanelPath = ([sp isKindOfClass:[NSString class]] && sp.length) ? sp : nil;
     rec.enabled = [row[@"enabled"] boolValue];
     rec.allowInPrivate = [row[@"allowInPrivate"] boolValue];
     [_mutableExtensions addObject:rec];
@@ -528,6 +587,13 @@ API_AVAILABLE(macos(15.4))
     if (ctrl && ctx) {
       [ctrl unloadExtensionContext:ctx error:nil];
     }
+    if (rec.identifier.length) {
+      WKWebView* off = _offscreenWebViews[rec.identifier];
+      if (off) {
+        [off loadHTMLString:@"" baseURL:nil];
+        [_offscreenWebViews removeObjectForKey:rec.identifier];
+      }
+    }
     rec.webExtensionContext = nil;
     rec.badgeText = nil;
   }
@@ -535,19 +601,34 @@ API_AVAILABLE(macos(15.4))
 
 #pragma mark - Manifest Normalization & CRX3/CRX2/ZIP Unpacking
 
-- (void)normalizeManifestAtDirectory:(NSString*)dirPath {
+- (NSString*)normalizeManifestAtDirectory:(NSString*)dirPath {
   NSString* manifestPath = [dirPath stringByAppendingPathComponent:@"manifest.json"];
   NSData* data = [NSData dataWithContentsOfFile:manifestPath];
-  if (!data) return;
+  if (!data) return nil;
   id obj = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil];
-  if (![obj isKindOfClass:[NSMutableDictionary class]]) return;
+  if (![obj isKindOfClass:[NSMutableDictionary class]]) return nil;
   NSMutableDictionary* manifest = (NSMutableDictionary*)obj;
-  // Strip Chrome Web Store signing/update metadata that WebKit doesn't use.
-  [manifest removeObjectForKey:@"update_url"];
-  [manifest removeObjectForKey:@"key"];
-  [manifest removeObjectForKey:@"differential_fingerprint"];
+
+  NSString* sidePanelPath = nil;
+  NSDictionary* sp = [manifest[@"side_panel"] isKindOfClass:[NSDictionary class]] ? manifest[@"side_panel"] : nil;
+  if ([sp[@"default_path"] isKindOfClass:[NSString class]] && [sp[@"default_path"] length]) {
+    sidePanelPath = [sp[@"default_path"] copy];
+  }
+
+  // Strip Chrome-only manifest keys that WebKit rejects or does not use.
+  for (NSString* k in @[@"update_url", @"key", @"differential_fingerprint",
+                        @"minimum_chrome_version", @"cross_origin_embedder_policy",
+                        @"cross_origin_opener_policy"]) {
+    [manifest removeObjectForKey:k];
+  }
+  if ([manifest[@"manifest_version"] integerValue] == 3 &&
+      [manifest[@"background"] isKindOfClass:[NSMutableDictionary class]]) {
+    [manifest[@"background"] removeObjectForKey:@"persistent"];
+  }
+
   NSData* out = [NSJSONSerialization dataWithJSONObject:manifest options:NSJSONWritingPrettyPrinted error:nil];
   if (out) [out writeToFile:manifestPath atomically:YES];
+  return sidePanelPath;
 }
 
 - (NSString*)findManifestDirectoryUnder:(NSString*)root {
@@ -629,7 +710,7 @@ API_AVAILABLE(macos(15.4))
     if (completion) completion(nil, copyErr);
     return;
   }
-  [self normalizeManifestAtDirectory:destDir];
+  NSString* sidePanelPath = [self normalizeManifestAtDirectory:destDir];
 
   SlateExtensionRecord* rec = [[SlateExtensionRecord alloc] init];
   rec.identifier = extId;
@@ -637,6 +718,7 @@ API_AVAILABLE(macos(15.4))
   rec.version = @"";
   rec.summary = @"";
   rec.directoryPath = destDir;
+  rec.sidePanelPath = sidePanelPath;
   rec.enabled = YES;
   rec.allowInPrivate = prevAllowPrivate;
   [_mutableExtensions addObject:rec];
@@ -801,6 +883,184 @@ API_AVAILABLE(macos(15.4))
   }
 }
 
+- (WKWebViewConfiguration*)makeExtensionShimWebViewConfiguration {
+  WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
+  cfg.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+  if (@available(macOS 15.4, *)) {
+    if (self.controller) cfg.webExtensionController = self.controller;
+  }
+  NSString* shimJs = [NSString stringWithUTF8String:slate::kExtensionShimsJs];
+  WKUserScript* script = [[WKUserScript alloc] initWithSource:shimJs
+                                                injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                             forMainFrameOnly:NO];
+  [cfg.userContentController addUserScript:script];
+  [cfg.userContentController addScriptMessageHandler:self name:@"slateExtShim"];
+  return cfg;
+}
+
+- (void)openSidePanelForExtensionId:(NSString*)identifier path:(NSString*)overridePath {
+  SlateExtensionRecord* rec = [self recordForId:identifier];
+  if (!rec || !rec.enabled) return;
+  if (@available(macOS 15.4, *)) {
+    WKWebExtensionContext* ctx = (WKWebExtensionContext*)rec.webExtensionContext;
+    if (!ctx || !ctx.baseURL) return;
+    NSString* relPath = overridePath.length ? overridePath : rec.sidePanelPath;
+    if (!relPath.length) return;
+    while ([relPath hasPrefix:@"/"]) relPath = [relPath substringFromIndex:1];
+    NSURL* panelURL = [ctx.baseURL URLByAppendingPathComponent:relPath];
+    if (!panelURL) return;
+
+    if (!_sidePanelWindow) {
+      NSRect rect = NSMakeRect(0, 0, 380, 680);
+      NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
+      _sidePanelWindow = [[NSPanel alloc] initWithContentRect:rect styleMask:style backing:NSBackingStoreBuffered defer:NO];
+      _sidePanelWindow.releasedWhenClosed = NO;
+      _sidePanelWindow.hidesOnDeactivate = NO;
+      _sidePanelWindow.minSize = NSMakeSize(300, 420);
+      _sidePanelWebView = [[WKWebView alloc] initWithFrame:_sidePanelWindow.contentView.bounds
+                                             configuration:[self makeExtensionShimWebViewConfiguration]];
+      _sidePanelWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      [_sidePanelWindow.contentView addSubview:_sidePanelWebView];
+    }
+    _sidePanelWindow.title = rec.name ?: @"Side Panel";
+    [_sidePanelWebView loadRequest:[NSURLRequest requestWithURL:panelURL]];
+
+    NSWindow* hostWin = [self.hostDelegate extensionHostWindow];
+    if (hostWin) {
+      NSRect hf = hostWin.frame;
+      NSRect pf = _sidePanelWindow.frame;
+      pf.origin.x = NSMaxX(hf) - NSWidth(pf) - 18;
+      pf.origin.y = NSMaxY(hf) - NSHeight(pf) - 56;
+      [_sidePanelWindow setFrame:pf display:YES];
+    } else {
+      [_sidePanelWindow center];
+    }
+    [_sidePanelWindow makeKeyAndOrderFront:nil];
+  }
+}
+
+- (SlateExtensionRecord*)recordForExtensionOrigin:(NSString*)origin {
+  if (!origin.length) return nil;
+  if (@available(macOS 15.4, *)) {
+    NSURL* u = [NSURL URLWithString:origin];
+    if (u && self.controller) {
+      WKWebExtensionContext* ctx = [self.controller extensionContextForURL:u];
+      if (ctx) return [self recordForId:ctx.uniqueIdentifier];
+    }
+  }
+  return nil;
+}
+
+- (void)replyShimToWebView:(WKWebView*)webView reqId:(NSString*)reqId result:(id)result error:(NSString*)error {
+  if (!webView || !reqId.length) return;
+  NSMutableDictionary* payload = [NSMutableDictionary dictionaryWithObject:reqId forKey:@"reqId"];
+  if (error.length) payload[@"error"] = error;
+  else if (result) payload[@"result"] = result;
+  NSData* json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+  NSString* jsonStr = json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"{}";
+  NSString* js = [NSString stringWithFormat:@"window.__slateExtShimReply && window.__slateExtShimReply(%@);", jsonStr];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [webView evaluateJavaScript:js completionHandler:nil];
+  });
+}
+
+- (void)userContentController:(WKUserContentController*)userContentController didReceiveScriptMessage:(WKScriptMessage*)message {
+  (void)userContentController;
+  if ([message.name isEqualToString:@"slateExtShim"] && [message.body isKindOfClass:[NSDictionary class]]) {
+    [self handleShimMessage:(NSDictionary*)message.body fromWebView:message.webView];
+  }
+}
+
+- (void)handleShimMessage:(NSDictionary*)body fromWebView:(WKWebView*)webView {
+  NSString* reqId = [body[@"reqId"] isKindOfClass:[NSString class]] ? body[@"reqId"] : @"";
+  NSString* op = [body[@"op"] isKindOfClass:[NSString class]] ? body[@"op"] : @"";
+  NSString* extOrigin = [body[@"extOrigin"] isKindOfClass:[NSString class]] ? body[@"extOrigin"] : @"";
+  NSDictionary* params = [body[@"params"] isKindOfClass:[NSDictionary class]] ? body[@"params"] : @{};
+  SlateExtensionRecord* rec = [self recordForExtensionOrigin:extOrigin];
+
+  if ([op isEqualToString:@"offscreen.create"]) {
+    if (!rec) { [self replyShimToWebView:webView reqId:reqId result:nil error:@"Extension context not found"]; return; }
+    NSString* relUrl = [params[@"url"] isKindOfClass:[NSString class]] ? params[@"url"] : @"";
+    if (!relUrl.length) { [self replyShimToWebView:webView reqId:reqId result:nil error:@"Missing offscreen url"]; return; }
+    if (@available(macOS 15.4, *)) {
+      WKWebExtensionContext* ctx = (WKWebExtensionContext*)rec.webExtensionContext;
+      while ([relUrl hasPrefix:@"/"]) relUrl = [relUrl substringFromIndex:1];
+      NSURL* fullURL = [ctx.baseURL URLByAppendingPathComponent:relUrl];
+      WKWebView* off = _offscreenWebViews[rec.identifier];
+      if (!off) {
+        off = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)
+                                 configuration:[self makeExtensionShimWebViewConfiguration]];
+        _offscreenWebViews[rec.identifier] = off;
+      }
+      if (fullURL) [off loadRequest:[NSURLRequest requestWithURL:fullURL]];
+      [self replyShimToWebView:webView reqId:reqId result:@YES error:nil];
+      return;
+    }
+  } else if ([op isEqualToString:@"offscreen.close"]) {
+    if (rec && _offscreenWebViews[rec.identifier]) {
+      [_offscreenWebViews[rec.identifier] loadHTMLString:@"" baseURL:nil];
+      [_offscreenWebViews removeObjectForKey:rec.identifier];
+    }
+    [self replyShimToWebView:webView reqId:reqId result:@YES error:nil];
+    return;
+  } else if ([op isEqualToString:@"offscreen.has"]) {
+    BOOL has = (rec != nil) && (_offscreenWebViews[rec.identifier] != nil);
+    [self replyShimToWebView:webView reqId:reqId result:@(has) error:nil];
+    return;
+  } else if ([op isEqualToString:@"sidePanel.open"]) {
+    if (rec) {
+      NSString* path = [params[@"path"] isKindOfClass:[NSString class]] ? params[@"path"] : nil;
+      [self openSidePanelForExtensionId:rec.identifier path:path];
+    }
+    [self replyShimToWebView:webView reqId:reqId result:@YES error:nil];
+    return;
+  } else if ([op isEqualToString:@"sidePanel.setOptions"]) {
+    if (rec && [params[@"path"] isKindOfClass:[NSString class]] && [params[@"path"] length]) {
+      rec.sidePanelPath = params[@"path"];
+      [self saveRegistry];
+    }
+    [self replyShimToWebView:webView reqId:reqId result:@YES error:nil];
+    return;
+  } else if ([op isEqualToString:@"identity.launchWebAuthFlow"]) {
+    NSString* authUrlStr = [params[@"url"] isKindOfClass:[NSString class]] ? params[@"url"] : @"";
+    NSURL* authURL = [NSURL URLWithString:authUrlStr];
+    if (!authURL) {
+      [self replyShimToWebView:webView reqId:reqId result:nil error:@"Invalid auth URL"];
+      return;
+    }
+    __weak SlateExtensionsManager* weakSelf = self;
+    __weak WKWebView* weakWeb = webView;
+    _activeAuthPanel = [[SlateExtAuthPanel alloc] initWithURL:authURL completion:^(NSString* _Nullable redirectURL, NSString* _Nullable err) {
+      SlateExtensionsManager* strongSelf = weakSelf;
+      if (strongSelf) strongSelf.activeAuthPanel = nil;
+      [strongSelf replyShimToWebView:weakWeb reqId:reqId result:redirectURL error:err];
+    }];
+    [_activeAuthPanel center];
+    [_activeAuthPanel makeKeyAndOrderFront:nil];
+    return;
+  } else if ([op isEqualToString:@"notifications.create"]) {
+    NSString* nid = [params[@"id"] isKindOfClass:[NSString class]] ? params[@"id"] : @"slate_notif";
+    NSDictionary* opts = [params[@"options"] isKindOfClass:[NSDictionary class]] ? params[@"options"] : @{};
+    NSString* title = [opts[@"title"] isKindOfClass:[NSString class]] ? opts[@"title"] : (rec.name ?: @"Slate");
+    NSString* message = [opts[@"message"] isKindOfClass:[NSString class]] ? opts[@"message"] : @"";
+    if (@available(macOS 10.14, *)) {
+      UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];
+      [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound) completionHandler:^(BOOL granted, NSError* error) {
+        (void)error;
+        if (!granted) return;
+        UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+        content.title = title;
+        content.body = message;
+        UNNotificationRequest* req = [UNNotificationRequest requestWithIdentifier:nid content:content trigger:nil];
+        [center addNotificationRequest:req withCompletionHandler:nil];
+      }];
+    }
+    [self replyShimToWebView:webView reqId:reqId result:nid error:nil];
+    return;
+  }
+  [self replyShimToWebView:webView reqId:reqId result:nil error:@"Unsupported extension shim operation"];
+}
+
 - (void)performActionForExtensionId:(NSString*)identifier anchorView:(NSView*)anchorView {
   SlateExtensionRecord* rec = [self recordForId:identifier];
   if (!rec || !rec.enabled) return;
@@ -945,6 +1205,20 @@ promptForPermissionMatchPatterns:(NSSet<WKWebExtensionMatchPattern*>*)matchPatte
              completionHandler:(void (^)(NSError* _Nullable))completionHandler API_AVAILABLE(macos(15.4)) {
   (void)controller;
   NSPopover* popover = action.popupPopover;
+  WKWebView* popupWeb = action.popupWebView;
+  if (popupWeb) {
+    static char kShimAttachedKey;
+    if (!objc_getAssociatedObject(popupWeb, &kShimAttachedKey)) {
+      objc_setAssociatedObject(popupWeb, &kShimAttachedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      NSString* shimJs = [NSString stringWithUTF8String:slate::kExtensionShimsJs];
+      WKUserScript* script = [[WKUserScript alloc] initWithSource:shimJs
+                                                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                 forMainFrameOnly:NO];
+      [popupWeb.configuration.userContentController addUserScript:script];
+      @try { [popupWeb.configuration.userContentController addScriptMessageHandler:self name:@"slateExtShim"]; } @catch (id e) {}
+      [popupWeb evaluateJavaScript:shimJs completionHandler:nil];
+    }
+  }
   NSView* anchor = _pendingPopupAnchor ?: [self.hostDelegate extensionHostAnchorViewForExtensionId:context.uniqueIdentifier];
   _pendingPopupAnchor = nil;
   if (!anchor) {
