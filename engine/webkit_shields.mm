@@ -110,6 +110,9 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
   window.__slate_pie_defuser_installed__ = true;
 
   const pageHost = (window.location.hostname || '').toLowerCase();
+  // Twitch is handled by the dedicated IVS Worker ad blocker (twitch_adblock_js.h);
+  // avoid attaching a subtree MutationObserver + 10Hz layout-reflow loop on Twitch's live chat DOM.
+  if (pageHost === 'twitch.tv' || pageHost.endsWith('.twitch.tv')) return;
   const isDisneyPlayer = pageHost === 'disneyplus.com' || pageHost.endsWith('.disneyplus.com');
   // Disney's playback response owns its encrypted audio/video timeline, including
   // insertion metadata. Removing fields cannot remove server-stitched media safely.

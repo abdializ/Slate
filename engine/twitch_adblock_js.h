@@ -157,12 +157,13 @@ inline constexpr char kTwitchAdBlockJs[] = R"JS((function() {
         channels.set(channel, state);
       }
 
-      if (state.backupUrl && (Date.now() - state.lastBackupAt) < 20000) {
+      if (state.backupUrl && (Date.now() - state.lastBackupAt) < 120000) {
         try {
           const r = await realFetch(state.backupUrl);
           if (r.ok) {
             const txt = await r.text();
             if (txt && txt.includes('#EXTM3U') && !hasStitchedAds(txt)) {
+              state.lastBackupAt = Date.now();
               return { text: txt, url: r.url || state.backupUrl };
             }
           }

@@ -1249,10 +1249,9 @@ class WebKitEngine final : public BrowserEngine {
         return selected ? @{@"user":@(selected->first.c_str()),@"password":@(selected->second.c_str())} : nil;
       }];
 
-    // Anti-Flashbang: Configure WebKit backing canvas to prevent white flashes
-    @try {
-      [web_view_ setValue:@NO forKey:@"drawsBackground"];
-    } @catch (id ex) {}
+    // Keep WKWebView opaque (drawsBackground = YES) so hardware-accelerated video layers
+    // (Twitch, YouTube, etc.) never flash the underlying window/layer background white during
+    // re-compositing; use underPageBackgroundColor for initial/overscroll background instead.
     web_view_.wantsLayer = YES;
 
     NSAppearance* curApp = NSApp.effectiveAppearance;
