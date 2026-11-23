@@ -201,10 +201,31 @@ NSString* HexFromColor(NSColor* color) {
  return [NSString stringWithFormat:@"#%02X%02X%02X",
   (int)llround(rgb.redComponent*255),(int)llround(rgb.greenComponent*255),(int)llround(rgb.blueComponent*255)];
 }
+NSColor* AdaptedCustomAccent(NSColor* base, BOOL dark) {
+ if(!base) return nil;
+ NSColor* srgb=[base colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: base;
+ CGFloat h=0, s=0, b=0, a=1;
+ [srgb getHue:&h saturation:&s brightness:&b alpha:&a];
+ if(dark) {
+  // Always produce a deep, rich dark-mode surface preserving the chosen hue.
+  CGFloat darkS = MIN(s, 0.42);
+  CGFloat darkB = 0.11 + MIN(b, 1.0) * 0.08; // 0.11 .. 0.19
+  return [NSColor colorWithHue:h saturation:darkS brightness:darkB alpha:1.0];
+ } else {
+  // If the stored custom color is dark, lift it to a soft light-mode tint;
+  // otherwise keep the user's light color cleanly.
+  if(ColorIsDark(srgb)) {
+   CGFloat lightS = MIN(s, 0.24);
+   CGFloat lightB = 0.90 + MIN(b, 0.5) * 0.12;
+   return [NSColor colorWithHue:h saturation:lightS brightness:MIN(lightB, 0.97) alpha:1.0];
+  }
+  return srgb;
+ }
+}
 NSColor* ChromeAccent(NSString* ident, NSString* hex, BOOL dark) {
  if([ident isEqualToString:@"custom"]) {
   NSColor* custom=ColorFromHex(hex);
-  if(custom) return custom;
+  if(custom) return AdaptedCustomAccent(custom, dark);
  }
  if([ident isEqualToString:@"slate"])
   return dark ? ColorSRGB(0.106,0.122,0.149) : ColorSRGB(0.914,0.929,0.949);
@@ -6640,17 +6661,19 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)applyPlateChrome {
  const auto* tab=model.find(model.selected());
  const BOOL isIncog=tab && tab->incognito;
+ // Apply app-wide appearance first so Settings, panels, and System mode match immediately.
+ NSAppearance* appAppearance = (self.themeMode==1)
+  ? [NSAppearance appearanceNamed:NSAppearanceNameAqua]
+  : ((self.themeMode==2) ? [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua] : nil);
+ if(NSApp.appearance != appAppearance) {
+  NSApp.appearance = appAppearance;
+ }
  const BOOL systemDark=[[NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua,NSAppearanceNameAqua]]
   isEqualToString:NSAppearanceNameDarkAqua];
  const BOOL isDark=isIncog ? YES : ((self.themeMode==1) ? NO : ((self.themeMode==2) ? YES : systemDark));
- NSAppearance* targetAppearance=nil;
- if(isIncog) {
-  targetAppearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
- } else if(self.themeMode==1) {
-  targetAppearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
- } else if(self.themeMode==2) {
-  targetAppearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
- }
+ NSAppearance* targetAppearance = isIncog
+  ? [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]
+  : appAppearance;
  if(self.window.appearance!=targetAppearance) {
   self.window.appearance=targetAppearance;
  }
@@ -6700,7 +6723,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  static BOOL lastFs = NO;
  const BOOL fsChanged = (isFs != lastFs);
  lastFs = isFs;
- const BOOL fillChanged=!self.window.backgroundColor || !ColorsEqual(self.window.backgroundColor, fill) || hex2Changed || homeChanged || incogChanged || stripChanged || fsChanged;
+ static BOOL lastDark = NO;
+ const BOOL darkChanged = (isDark != lastDark);
+ lastDark = isDark;
+ const BOOL fillChanged=!self.window.backgroundColor || !ColorsEqual(self.window.backgroundColor, fill) || hex2Changed || homeChanged || incogChanged || stripChanged || fsChanged || darkChanged;
  self.barColor=bar;
  if(self.graniteIntensity<=0.005 || home) {
   self.graniteView.hidden=YES;
@@ -6763,7 +6789,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   } else {
    if(self.homePlateGradientLayer) self.homePlateGradientLayer.hidden = YES;
    // Both tab layouts use the same inset browser plate and page-colored chrome.
-   NSColor* fill2 = (self.accentHex2.length > 0) ? (ColorFromHex(self.accentHex2) ?: fill) : fill;
+   NSColor* rawFill2 = (self.accentHex2.length > 0) ? ColorFromHex(self.accentHex2) : nil;
+   NSColor* fill2 = rawFill2 ? AdaptedCustomAccent(rawFill2, isDark) : fill;
    if(self.accentHex2.length > 0 && ![self.accentHex2 isEqualToString:self.accentHex]) {
     if(!self.chromeGradientLayer) {
      self.chromeGradientLayer = [CAGradientLayer layer];
