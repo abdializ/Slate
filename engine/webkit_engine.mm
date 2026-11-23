@@ -21,65 +21,32 @@
 
 
 
-static NSString* const kSlateSafariUserAgent = @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
-static NSString* const kSlateChromeUserAgent = @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
-
-// Docs chooses its canvas renderer from the advertised Safari version. Keep
-// that version aligned with the system WebKit rather than claiming Safari 18.
-static NSString* SafariUserAgentForHost(NSString* host) {
-  if (![host.lowercaseString isEqualToString:@"docs.google.com"]) return kSlateSafariUserAgent;
-  static NSString* docsUserAgent;
+// Match WebKit's genuine macOS Safari User-Agent to the installed Safari version
+// so TLS/JA4, HTTP/2, JavaScriptCore, and User-Agent are 100% consistent across
+// all pages, iframes (e.g. Cloudflare Turnstile), and Web Workers.
+static NSString* SlateSafariApplicationName() {
+  static NSString* appName;
   static dispatch_once_t once;
   dispatch_once(&once, ^{
-    NSURL* safariURL = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
-    NSString* version = safariURL ? [[NSBundle bundleWithURL:safariURL] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] : nil;
-    docsUserAgent = version.length ? [kSlateSafariUserAgent stringByReplacingOccurrencesOfString:@"Version/18.0"
-      withString:[@"Version/" stringByAppendingString:version]] : kSlateSafariUserAgent;
-  });
-  return docsUserAgent;
-}
-
-static BOOL IsStreamingOrDrmHost(NSString* host) {
-  if (!host.length) return NO;
-  NSString* h = host.lowercaseString;
-  static NSArray<NSString*>* s_streamingDomains = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    s_streamingDomains = @[
-      // Authentication & Identity Providers (Clean native Safari identity avoids botguard / security blocks)
-      @"google.com", @"accounts.google.com", @"gstatic.com", @"googleusercontent.com", @"googleapis.com",
-      @"apple.com", @"icloud.com", @"appleid.apple.com",
-      @"microsoft.com", @"live.com", @"login.microsoftonline.com", @"office.com",
-      @"x.com", @"twitter.com", @"twimg.com",
-      // Streaming / DRM (Requires pure Safari for FairPlay DRM)
-      @"max.com", @"hbomax.com", @"hbo.com", @"discomax.com", @"h264.io", @"warnermediacdn.com", @"warnermedia.com", @"wbd.com",
-      @"netflix.com", @"nflxvideo.net", @"nflximg.net", @"nflxext.com",
-      @"disneyplus.com", @"bamgrid.com", @"disney-plus.net",
-      @"hulu.com", @"hulustream.com",
-      @"peacocktv.com",
-      @"paramountplus.com",
-      @"primevideo.com", @"amazon.com", @"amazonvideo.com", @"aiv-cdn.net",
-      @"spotify.com",
-      @"crunchyroll.com",
-      @"tubitv.com",
-      @"pluto.tv",
-      @"fubo.tv",
-      @"sling.com",
-      @"starz.com",
-      @"mgmplus.com",
-      @"directv.com",
-      @"sho.com", @"showtime.com",
-      // Video streaming & Livestreaming (Requires native Safari UA & clean environment)
-      @"youtube.com", @"youtu.be", @"ytimg.com", @"googlevideo.com",
-      @"twitch.tv", @"kick.com"
-    ];
-  });
-  for (NSString* domain in s_streamingDomains) {
-    if ([h isEqualToString:domain] || [h hasSuffix:[@"." stringByAppendingString:domain]]) {
-      return YES;
+    NSString* version = nil;
+    for (NSString* path in @[
+      @"/System/Cryptexes/App/System/Applications/Safari.app",
+      @"/Applications/Safari.app"
+    ]) {
+      NSBundle* bundle = [NSBundle bundleWithPath:path];
+      NSString* v = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+      if (v.length) {
+        version = v;
+        break;
+      }
     }
-  }
-  return NO;
+    if (!version.length) {
+      NSURL* safariURL = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
+      version = safariURL ? [[NSBundle bundleWithURL:safariURL] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] : nil;
+    }
+    appName = [NSString stringWithFormat:@"Version/%@ Safari/605.1.15", version.length ? version : @"18.0"];
+  });
+  return appName;
 }
 
 @interface SlateWebNavigationDelegate : NSObject <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler> {
@@ -352,18 +319,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     }
   }
 
-  // Dynamically switch User-Agent to Safari on streaming/DRM domains to unlock Apple FairPlay.
-  // Strictly guard this to genuine main-frame navigations so tracking beacons, iframes,
-  // or popups (targetFrame == nil) do not inadvertently reset the main webView to Chrome.
   if (navigationAction.targetFrame != nil && navigationAction.targetFrame.isMainFrame) {
     slate::WebKitShields::Shared().UpdateControllerForURL(webView.configuration.userContentController, targetUrl);
-    if (targetUrl && targetUrl.host.length) {
-      NSString* desiredUa = IsStreamingOrDrmHost(targetUrl.host) ? SafariUserAgentForHost(targetUrl.host) : kSlateChromeUserAgent;
-      if (![webView.customUserAgent isEqualToString:desiredUa]) {
-        webView.customUserAgent = desiredUa;
-        fprintf(stderr, "SLATE_UA_SWITCH host=%s ua=%s\n", targetUrl.host.UTF8String, IsStreamingOrDrmHost(targetUrl.host) ? "Safari" : "Chrome");
-      }
-    }
   }
 
   decisionHandler(WKNavigationActionPolicyAllow);
@@ -836,6 +793,7 @@ class WebKitEngine final : public BrowserEngine {
     } else {
       config.processPool = GetSharedProcessPool(incognito_);
     }
+    config.applicationNameForUserAgent = SlateSafariApplicationName();
     config.allowsAirPlayForMediaPlayback = YES;
     config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeAudio;
 
@@ -1311,14 +1269,6 @@ class WebKitEngine final : public BrowserEngine {
       parent.layer.backgroundColor = webBg.CGColor;
     }
 
-    // Initialize custom User-Agent: Safari on streaming/DRM domains to enable FairPlay, Chrome for desktop web compatibility elsewhere
-    NSString* initHost = nil;
-    if (!url.empty() && url != "about:blank") {
-      NSURL* initialUrl = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
-      initHost = initialUrl.host;
-    }
-    web_view_.customUserAgent = (initHost && IsStreamingOrDrmHost(initHost)) ? SafariUserAgentForHost(initHost) : kSlateChromeUserAgent;
-
     // Observe KVO properties
     [web_view_ addObserver:delegate_ forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:nil];
     [web_view_ addObserver:delegate_ forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:nil];
@@ -1369,12 +1319,6 @@ class WebKitEngine final : public BrowserEngine {
     if (nsUrl) {
       if (!nsUrl.isFileURL) {
         nsUrl = [SlatePrivacySecurity sanitizedURLForNavigation:nsUrl];
-      }
-      if (nsUrl.host.length) {
-        NSString* desiredUa = IsStreamingOrDrmHost(nsUrl.host) ? SafariUserAgentForHost(nsUrl.host) : kSlateChromeUserAgent;
-        if (![web_view_.customUserAgent isEqualToString:desiredUa]) {
-          web_view_.customUserAgent = desiredUa;
-        }
       }
       if (nsUrl.isFileURL) {
         delegate_.typedFileURL=nsUrl;

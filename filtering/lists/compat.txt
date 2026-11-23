@@ -35,4 +35,7 @@
 @@||ssl.gstatic.com^
 @@||google.com/gsi^
 @@||google.com/recaptcha^
+@@||challenges.cloudflare.com^
+@@||hcaptcha.com^
+@@||recaptcha.net^
 @@||appleid.apple.com^

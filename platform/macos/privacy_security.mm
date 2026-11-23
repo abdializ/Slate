@@ -193,11 +193,18 @@ static NSString* const kProxyKeychainAccount = @"incognito-proxy-password";
   BOOL blockRTC = incognito && [self blockWebRTCInIncognito];
   if (!strict && !blockRTC) return @"";
 
-  NSMutableString* js = [NSMutableString stringWithString:@"(function(){'use strict';if(window.__slateHardening)return;window.__slateHardening=true;"];
+  NSMutableString* js = [NSMutableString stringWithString:
+    @"(function(){'use strict';"
+     "try{var h=(location&&location.hostname||'').toLowerCase();"
+     "if(h==='challenges.cloudflare.com'||h.endsWith('.cloudflare.com')||h==='hcaptcha.com'||h.endsWith('.hcaptcha.com')||"
+     "h==='recaptcha.net'||h.endsWith('.recaptcha.net')||h.endsWith('.arkoselabs.com')||h.endsWith('.funcaptcha.com'))return;}catch(e){}"
+     "var sym=Symbol.for('__slateHardening');if(window[sym])return;window[sym]=true;"];
   if (strict) {
     [js appendString:
-     @"try{Object.defineProperty(navigator,'globalPrivacyControl',{get:()=>true,configurable:true});}catch(e){}"
-      "try{Object.defineProperty(navigator,'doNotTrack',{get:()=>'1',configurable:true});}catch(e){}"];
+     @"try{if(window.Navigator&&Navigator.prototype){"
+      "if(!('globalPrivacyControl' in Navigator.prototype))Object.defineProperty(Navigator.prototype,'globalPrivacyControl',{get:function(){return true;},configurable:true,enumerable:true});"
+      "if(!('doNotTrack' in Navigator.prototype))Object.defineProperty(Navigator.prototype,'doNotTrack',{get:function(){return '1';},configurable:true,enumerable:true});"
+      "}}catch(e){}"];
   }
   if (blockRTC) {
     // Prevent STUN/ICE WebRTC real-IP leaks in Incognito mode.

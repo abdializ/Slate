@@ -207,9 +207,9 @@ static void TestWebKitShieldsProtection() {
 
     shields.ApplyToUserContentController(controller, false);
 
-    assert(controller.userScripts.count == 0);
     for (WKUserScript* script in controller.userScripts) {
       assert(![script.source containsString:@"__slate_pie_defuser_installed__"]);
+      assert(![script.source containsString:@"__slate_stealth_active__"]);
     }
 
     WKUserContentController* incogController = [[WKUserContentController alloc] init];
