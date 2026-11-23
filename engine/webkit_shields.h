@@ -26,6 +26,9 @@ class WebKitShields {
   void InjectStreamingProtection(WKWebView* webView) const;
   void SetEnabled(bool enabled);
   bool IsEnabled() const { return enabled_; }
+  void SetAlwaysBlockInIncognito(bool enabled);
+  bool IsAlwaysBlockInIncognito() const { return always_block_in_incognito_; }
+  bool IsEnabledForIncognito(bool incognito) const { return enabled_ || (incognito && always_block_in_incognito_); }
   bool HasCompiledRules() const { return rule_list_ != nil; }
   size_t CompiledRuleCount() const { return compiled_rule_count_; }
   void SetSiteEnabled(const std::string& host, bool enabled);
@@ -42,12 +45,14 @@ class WebKitShields {
   void BroadcastRuleList();
 
   bool enabled_ = true;
+  bool always_block_in_incognito_ = true;
   std::mutex mutex_;
   WKContentRuleListStore* __strong store_ = nil;
   WKContentRuleList* __strong rule_list_ = nil;
   size_t compiled_rule_count_ = 0;
   NSString* __strong rule_identifier_ = nil;
   NSHashTable* __strong registered_controllers_ = nil;
+  NSHashTable* __strong incognito_controllers_ = nil;
   NSMapTable* __strong controller_hosts_ = nil;
   NSMutableSet<NSString*>* __strong disabled_sites_ = nil;
   WKUserScript* __strong stealth_script_ = nil;

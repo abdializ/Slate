@@ -314,7 +314,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
   // Ad & Tracker Blocking: Cancel navigation for third-party ad iframes when shields are active
   if (navigationAction.targetFrame != nil && !navigationAction.targetFrame.isMainFrame) {
-    if (slate::WebKitShields::Shared().IsEnabled()) {
+    if (slate::WebKitShields::Shared().IsEnabledForIncognito(self.incognito)) {
       NSString* reqHost = targetUrl.host.lowercaseString;
       if (slate::WebKitShields::Shared().IsAdOrTrackerHost(reqHost)) {
         fprintf(stderr, "SLATE_BLOCKED_AD_SUBFRAME url=%s\n", urlStr.UTF8String ?: "nil");

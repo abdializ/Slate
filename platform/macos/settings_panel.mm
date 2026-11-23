@@ -981,33 +981,39 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   // Protection Card
   y = [self addSectionCaptionTo:doc y:y text:@"Protection"];
-  SlateSettingsCard* shieldCard = [self addCardTo:doc y:y height:223];
+  SlateSettingsCard* shieldCard = [self addCardTo:doc y:y height:279];
   _switchShields = [self addSwitchRowToCard:shieldCard y:0
                                       title:@"Ad & Tracker Blocker"
                                    subtitle:@"Native WebKit filter (EasyList, EasyPrivacy, and Slate rules)"
                                          on:slate::WebKitShields::Shared().IsEnabled()
                                      action:@selector(toggleShieldsClicked:)];
   [self addDividerToCard:shieldCard y:55];
-  _switchStrictPrivacy = [self addSwitchRowToCard:shieldCard y:56
+  [self addSwitchRowToCard:shieldCard y:56
+                     title:@"Always Block Ads in Incognito"
+                  subtitle:@"Keep native ad blocking on in Private tabs even when off in normal tabs"
+                        on:slate::WebKitShields::Shared().IsAlwaysBlockInIncognito()
+                    action:@selector(toggleAlwaysIncognitoAdsClicked:)];
+  [self addDividerToCard:shieldCard y:111];
+  _switchStrictPrivacy = [self addSwitchRowToCard:shieldCard y:112
                                             title:@"Strict Tracking Protection"
                                          subtitle:@"Strip URL tracking parameters and send GPC & Do Not Track"
                                                on:[SlatePrivacySecurity strictTrackingProtectionEnabled]
                                            action:@selector(toggleStrictPrivacyClicked:)];
-  [self addDividerToCard:shieldCard y:111];
-  _switchHttpsOnly = [self addSwitchRowToCard:shieldCard y:112
+  [self addDividerToCard:shieldCard y:167];
+  _switchHttpsOnly = [self addSwitchRowToCard:shieldCard y:168
                                         title:@"HTTPS-Only Mode"
                                      subtitle:@"Upgrade insecure http:// requests to https:// automatically"
                                            on:[SlatePrivacySecurity httpsOnlyEnabled]
                                        action:@selector(toggleHttpsOnlyClicked:)];
-  [self addDividerToCard:shieldCard y:167];
-  _switchWebRTCBlock = [self addSwitchRowToCard:shieldCard y:168
+  [self addDividerToCard:shieldCard y:223];
+  _switchWebRTCBlock = [self addSwitchRowToCard:shieldCard y:224
                                           title:@"Block WebRTC IP Leaks in Incognito"
                                        subtitle:@"Disable RTCPeerConnection in Private tabs"
                                              on:[SlatePrivacySecurity blockWebRTCInIncognito]
                                          action:@selector(toggleWebRTCBlockClicked:)];
 
   // Incognito VPN / Proxy Tunnel Card
-  y += 223 + 20;
+  y += 279 + 20;
   y = [self addSectionCaptionTo:doc y:y text:@"Incognito Tunnel"];
   SlateSettingsCard* vpnCard = [self addCardTo:doc y:y height:234];
   CGFloat cw = NSWidth(vpnCard.bounds);
@@ -1218,6 +1224,9 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 }
 - (void)toggleShieldsClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleShields:sender];
+}
+- (void)toggleAlwaysIncognitoAdsClicked:(NSSwitch*)sender {
+  slate::WebKitShields::Shared().SetAlwaysBlockInIncognito(sender.state == NSControlStateValueOn);
 }
 
 #pragma mark - Extensions Page

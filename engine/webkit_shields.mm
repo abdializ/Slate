@@ -660,6 +660,7 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
 )JS";
 
 static NSString* const kGlobalBlockerKey = @"SlateAdBlockGlobalEnabled";
+static NSString* const kAlwaysIncognitoBlockerKey = @"SlateAdBlockAlwaysInIncognito";
 static NSString* const kAllowedSitesKey = @"SlateAdBlockAllowedSites";
 
 static NSString* NormalizedSite(NSString* host) {
@@ -685,8 +686,10 @@ WebKitShields& WebKitShields::Shared() {
 WebKitShields::WebKitShields() {
   NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
   enabled_ = [defaults objectForKey:kGlobalBlockerKey] ? [defaults boolForKey:kGlobalBlockerKey] : true;
+  always_block_in_incognito_ = [defaults objectForKey:kAlwaysIncognitoBlockerKey] ? [defaults boolForKey:kAlwaysIncognitoBlockerKey] : true;
   disabled_sites_ = [NSMutableSet setWithArray:[defaults stringArrayForKey:kAllowedSitesKey] ?: @[]];
   controller_hosts_ = [NSMapTable weakToStrongObjectsMapTable];
+  incognito_controllers_ = [NSHashTable weakObjectsHashTable];
   NSString* stealthSource = [NSString stringWithUTF8String:slate::kStealthJs];
   stealth_script_ = [[WKUserScript alloc] initWithSource:stealthSource
                                            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
@@ -1124,7 +1127,8 @@ void WebKitShields::BroadcastRuleList() {
         @try {
           [ctrl removeAllContentRuleLists];
           NSString* site = [this->controller_hosts_ objectForKey:ctrl];
-          if (this->enabled_ && ![this->disabled_sites_ containsObject:site] && this->rule_list_) {
+          bool isIncog = this->incognito_controllers_ && [this->incognito_controllers_ containsObject:ctrl];
+          if (this->IsEnabledForIncognito(isIncog) && ![this->disabled_sites_ containsObject:site] && this->rule_list_) {
             [ctrl addContentRuleList:this->rule_list_];
           }
         } @catch (id ex) {}
@@ -1142,18 +1146,22 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
       registered_controllers_ = [NSHashTable weakObjectsHashTable];
     }
     [registered_controllers_ addObject:controller];
+    if (incognito && incognito_controllers_) {
+      [incognito_controllers_ addObject:controller];
+    }
     [controller_hosts_ setObject:@"" forKey:controller];
   }
 
   // Ad filtering stays in the compiled WebKit list so both switches can detach it.
+  const bool active = IsEnabledForIncognito(incognito);
 
   // Apply stealth / anti-fingerprinting in incognito mode
   if (incognito) {
     [controller addUserScript:stealth_script_];
   }
 
-  // Attach native Twitch HLS Web Worker ad blocker at document start for BOTH Normal and Incognito
-  if (enabled_ && ![disabled_sites_ containsObject:@"twitch.tv"]) {
+  // Attach native Twitch HLS Web Worker ad blocker at document start when active
+  if (active && ![disabled_sites_ containsObject:@"twitch.tv"]) {
     NSString* twitchJs = [NSString stringWithUTF8String:kTwitchAdBlockJs];
     WKUserScript* twitchScript = [[WKUserScript alloc] initWithSource:twitchJs
                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
@@ -1162,7 +1170,7 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
   }
 
   // Attach compiled rule list immediately if already available
-  if (enabled_ && rule_list_) {
+  if (active && rule_list_) {
     @try {
       [controller addContentRuleList:rule_list_];
     } @catch (id ex) {}
@@ -1170,7 +1178,9 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
 }
 
 void WebKitShields::InjectStreamingProtection(WKWebView* webView) const {
-  if (!webView || !enabled_) return;
+  if (!webView) return;
+  const bool isIncog = !webView.configuration.websiteDataStore.isPersistent;
+  if (!IsEnabledForIncognito(isIncog)) return;
   NSString* host = NormalizedSite(webView.URL.host ?: @"");
   if (!host.length || [disabled_sites_ containsObject:host]) return;
   NSArray<NSString*>* domains = @[@"max.com", @"hbomax.com", @"disneyplus.com",
@@ -1194,6 +1204,12 @@ void WebKitShields::InjectStreamingProtection(WKWebView* webView) const {
 void WebKitShields::SetEnabled(bool enabled) {
   enabled_ = enabled;
   [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kGlobalBlockerKey];
+  BroadcastRuleList();
+}
+
+void WebKitShields::SetAlwaysBlockInIncognito(bool enabled) {
+  always_block_in_incognito_ = enabled;
+  [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kAlwaysIncognitoBlockerKey];
   BroadcastRuleList();
 }
 
@@ -1223,7 +1239,8 @@ void WebKitShields::UpdateControllerForURL(WKUserContentController* controller, 
   [controller_hosts_ setObject:site forKey:controller];
   @try {
     [controller removeAllContentRuleLists];
-    if (enabled_ && ![disabled_sites_ containsObject:site] && rule_list_)
+    bool isIncog = incognito_controllers_ && [incognito_controllers_ containsObject:controller];
+    if (IsEnabledForIncognito(isIncog) && ![disabled_sites_ containsObject:site] && rule_list_)
       [controller addContentRuleList:rule_list_];
   } @catch (id ex) {}
 }
