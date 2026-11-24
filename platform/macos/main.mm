@@ -546,6 +546,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 
 @class SlateThemePanel;
 @class SlateDetachedTabWindow;
+@class SlateOmnibox;
 @interface SlateDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,NSTableViewDataSource,NSTableViewDelegate,NSTextFieldDelegate,NSMenuDelegate,SlateBookmarksOwner,SlateOmniboxDelegate,SlateTabSwitcherOwner,SlateExtensionHostDelegate> {
  slate::WorkspaceLayout workspace;
  slate::SplitDragIntent splitIntent;
@@ -647,7 +648,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) WKWebViewConfiguration* pendingPopupConfiguration;
 @property(assign) TabId pendingPopupTab;
 @property(strong) NSMutableDictionary<NSNumber*,NSImage*>* tabIcons;
-@property(strong) NSView* omnibox;
+@property(strong) SlateOmnibox* omnibox;
 @property(strong) NSLayoutConstraint* sidebarWidth;
 @property(strong) NSLayoutConstraint* sidebarLeading;
 @property(strong) NSLayoutConstraint* plateFromRootLeading;
@@ -962,6 +963,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)updateNavChrome;
 - (void)updateLoadChrome;
 - (void)layoutOmnibox;
+- (void)syncAddressDisplay;
 - (void)dismissOmnibox;
 - (void)dismissOmniboxIfClickOutside:(NSEvent*)event;
 - (BOOL)routeChromeClick:(NSEvent*)event;
@@ -4522,12 +4524,35 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 @end
 
+static NSString* SimplifiedDisplayURL(NSString* raw) {
+ if(!raw.length || [raw isEqualToString:@"about:blank"] || [raw isEqualToString:@"about:blank#popup"]) return @"";
+ NSURL* u = [NSURL URLWithString:raw];
+ if(!u) return raw;
+ NSString* scheme = u.scheme.lowercaseString;
+ if([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]) {
+  NSString* host = u.host;
+  if(!host.length) return raw;
+  if([host.lowercaseString hasPrefix:@"www."]) host = [host substringFromIndex:4];
+  if(u.port && u.port.integerValue != 80 && u.port.integerValue != 443) {
+   return [NSString stringWithFormat:@"%@:%@", host, u.port];
+  }
+  return host;
+ }
+ if(u.isFileURL && u.lastPathComponent.length) return u.lastPathComponent;
+ return raw;
+}
+static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
+ if(!raw.length || [raw isEqualToString:@"about:blank"] || [raw isEqualToString:@"about:blank#popup"]) return @"";
+ return revealFull ? raw : SimplifiedDisplayURL(raw);
+}
+
 @interface SlateOmnibox : NSView
 @property(strong) NSView* surface;
 @property(strong) NSTrackingArea* hoverTrackingArea;
 @property(strong) NSColor* barColor;
 @property(nonatomic, assign) BOOL hovered;
 @property(nonatomic, assign) BOOL focused;
+@property(copy) void (^onHoverChanged)(BOOL hovered);
 - (void)applyContrast;
 - (void)shake;
 @end
@@ -4603,7 +4628,13 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
 }
 - (void)accessibilityDisplayChanged:(NSNotification*)notification { [self applyContrast]; }
-- (void)setHovered:(BOOL)hovered { if(_hovered!=hovered) { _hovered=hovered; [self applyContrast]; } }
+- (void)setHovered:(BOOL)hovered {
+ if(_hovered!=hovered) {
+  _hovered=hovered;
+  [self applyContrast];
+  if(self.onHoverChanged) self.onHoverChanged(hovered);
+ }
+}
 - (void)setFocused:(BOOL)focused { if(_focused!=focused) { _focused=focused; [self applyContrast]; } }
 - (void)updateTrackingAreas {
  [super updateTrackingAreas];
@@ -5278,6 +5309,13 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self navigationButton:@"sidebar.left" description:@"Show tabs"
                   frame:NSMakeRect(12,10,30,30) action:@selector(showMainTabs:)];
  self.omnibox=[[SlateOmnibox alloc] initWithFrame:NSZeroRect];
+ {
+  __weak SlateDetachedTabWindow* weakDetached=self;
+  self.omnibox.onHoverChanged=^(BOOL hovered) {
+   (void)hovered;
+   [weakDetached refresh];
+  };
+ }
  [self.toolbar addSubview:self.omnibox];
  self.securityButton=[NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"lock.fill" accessibilityDescription:@"Secure Connection"]
                                              target:self action:@selector(showSiteInformation:)];
@@ -5312,7 +5350,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.window.title=[@"Slate — " stringByAppendingString:TabLabel(*tab)];
  [self layoutChrome];
  self.omnibox.hidden=tab->url=="about:blank";
- if(self.address.currentEditor==nil) self.address.stringValue=tab->url=="about:blank" ? @"" : Text(tab->url);
+ if(self.address.currentEditor==nil) self.address.stringValue=DisplayURLForOmnibox(Text(tab->url), self.omnibox.hovered);
  self.backButton.enabled=runtimes.contains(self.tabId) && runtimes.at(self.tabId).back;
  self.forwardButton.enabled=runtimes.contains(self.tabId) && runtimes.at(self.tabId).forward;
  NSColor* chrome=self.owner.barColor ?: NSColor.windowBackgroundColor;
@@ -5999,6 +6037,13 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self.navCluster.heightAnchor constraintEqualToConstant:kTabHeight]
  ]];
  self.omnibox=[[SlateOmnibox alloc] initWithFrame:NSZeroRect];
+ {
+  __weak SlateDelegate* weakOmniSelf=self;
+  self.omnibox.onHoverChanged=^(BOOL hovered) {
+   (void)hovered;
+   [weakOmniSelf syncAddressDisplay];
+  };
+ }
  self.omnibox.translatesAutoresizingMaskIntoConstraints=NO;
  self.omnibox.wantsLayer=YES; self.omnibox.layerContentsRedrawPolicy=NSViewLayerContentsRedrawOnSetNeedsDisplay;
  self.securityButton=[[NSButton alloc] initWithFrame:NSZeroRect];
@@ -8089,6 +8134,15 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  NSPoint point=[self.omnibox convertPoint:event.locationInWindow fromView:nil];
  return NSPointInRect(point, NSInsetRect(self.omnibox.bounds,-10,-10));
 }
+- (void)syncAddressDisplay {
+ if(self.quitting || !self.address) return;
+ const auto* tab=model.find(model.selected());
+ if(!tab) return;
+ const BOOL editing=self.addressOpen || self.address.currentEditor!=nil;
+ if(editing || self.addressDirty) return;
+ NSString* shown=DisplayURLForOmnibox(Text(tab->url), self.omnibox.hovered);
+ if(![self.address.stringValue isEqualToString:shown]) self.address.stringValue=shown;
+}
 - (void)dismissOmnibox {
  [self hideSuggestions];
  [SlateSiteCardPanel hide];
@@ -8100,9 +8154,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(responder==self.address || ([responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:self.address]))
   [self.window makeFirstResponder:self.content];
  if(tab && !self.addressDirty) {
-  NSString* shown=Text(tab->url);
-  if([shown isEqualToString:@"about:blank"] || [shown isEqualToString:@"about:blank#popup"]) shown=@"";
-  self.address.stringValue=shown;
+  self.address.stringValue=DisplayURLForOmnibox(Text(tab->url), self.omnibox.hovered);
  }
  [self layoutOmnibox];
 }
@@ -10385,8 +10437,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    const BOOL editing=self.addressOpen || self.address.currentEditor!=nil;
    const BOOL keepTyped=self.addressDirty && (blank || editing);
    if(!keepTyped && !editing) {
-    NSString* shown=Text(tab->url);
-    if([shown isEqualToString:@"about:blank"] || [shown isEqualToString:@"about:blank#popup"]) shown=@"";
+    NSString* shown=DisplayURLForOmnibox(Text(tab->url), self.omnibox.hovered);
     if(![self.address.stringValue isEqualToString:shown]) self.address.stringValue=shown;
    }
   }
@@ -10412,9 +10463,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   if(tabChanged) { self.addressDirty=NO; if(!blank) self.addressOpen=NO; }
   const BOOL keepTyped=!tabChanged && self.addressDirty && (blank || editing);
   if(!keepTyped && (tabChanged || !editing)) {
-   NSString* shown=Text(tab->url);
-   if([shown isEqualToString:@"about:blank"] || [shown isEqualToString:@"about:blank#popup"]) shown=@"";
-   self.address.stringValue=shown;
+   self.address.stringValue=DisplayURLForOmnibox(Text(tab->url), self.omnibox.hovered);
    if(!blank) self.addressDirty=NO;
   }
  self.displayedTab=id;
@@ -13383,7 +13432,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  if(notification.object==[self homeSearchField]) return;
  if(notification.object!=self.address) return;
- self.address.stringValue=[SlateSearchServices editable:self.address.stringValue];
+ const auto* activeTab=model.find(model.selected());
+ NSString* fullURL=(activeTab && activeTab->url!="about:blank" && activeTab->url!="about:blank#popup")
+  ? Text(activeTab->url) : (self.address.stringValue ?: @"");
+ self.address.stringValue=[SlateSearchServices editable:fullURL];
  self.addressOpen=YES; self.addressTyped=self.address.stringValue; self.addressEnding=nil;
  [self layoutOmnibox];
  [self fetchSuggestions];
@@ -13400,6 +13452,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const auto* tab=model.find(model.selected());
  if(!(tab && tab->url=="about:blank")) {
   self.addressOpen=NO;
+  self.addressDirty=NO;
+  [self syncAddressDisplay];
   [self layoutOmnibox];
  }
 }
