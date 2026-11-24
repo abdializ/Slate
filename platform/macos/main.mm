@@ -8691,9 +8691,9 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSView* pane=[[NSView alloc] initWithFrame:NSZeroRect];
   pane.wantsLayer=YES;
   pane.clipsToBounds=YES;
-  pane.layer.cornerRadius=10;
+  pane.layer.cornerRadius=0;
   pane.layer.masksToBounds=YES;
-  pane.layer.borderWidth=1.0;
+  pane.layer.borderWidth=0;
   pane.hidden=YES;
   [self.content addSubview:pane positioned:NSWindowBelow relativeTo:self.homeView];
   [panes addObject:pane];
@@ -8731,9 +8731,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.splitDivider=dividers[0];
 
  // Outer focus ring colored with the user's chosen Settings accent adapted to Light/Dark appearance.
+ // Positioned outside the pane frame in the gutter so it never overlaps hardware-decoded video surfaces.
  self.splitFocusRing=[[SlateSplitOverlay alloc] initWithFrame:NSZeroRect];
  self.splitFocusRing.wantsLayer=YES;
- self.splitFocusRing.layer.cornerRadius=10;
+ self.splitFocusRing.layer.cornerRadius=3;
  self.splitFocusRing.layer.borderWidth=2.0;
  self.splitFocusRing.hidden=YES;
  [self.content addSubview:self.splitFocusRing];
@@ -8887,19 +8888,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSTextField* pill=self.splitHostPills[i];
   const BOOL showPane=isSplit && i < paneCount && (!narrowCollapse || activeTabs[i]==selected);
   pane.hidden=!showPane;
-  shadow.hidden=!showPane || narrowCollapse;
+  // Never place shadow layers or rounded masks on WKWebView containers: macOS WindowServer
+  // forces offscreen compositing on remote CALayerHost video surfaces when masked, causing video glitches.
+  shadow.hidden=YES;
   if(showPane) {
    const NSRect r=paneRects[i];
-   pane.frame=r;
-   pane.layer.cornerRadius=narrowCollapse ? 0 : 10;
-   pane.layer.borderWidth=narrowCollapse ? 0 : 1.0;
-   pane.layer.borderColor=inactiveHairline.CGColor;
-   shadow.frame=r;
-   CGPathRef sp=CGPathCreateWithRoundedRect(CGRectMake(0,0,NSWidth(r),NSHeight(r)),10,10,nullptr);
-   shadow.shadowPath=sp;
-   CGPathRelease(sp);
-   shadow.shadowOpacity=dark ? 0.28 : 0.12;
-   shadow.backgroundColor=(dark ? ColorSRGB(0.10,0.10,0.12) : NSColor.whiteColor).CGColor;
+   if(!NSEqualRects(pane.frame, r)) pane.frame=r;
+   if(pane.layer.cornerRadius != 0) pane.layer.cornerRadius=0;
+   if(pane.layer.borderWidth != 0) pane.layer.borderWidth=0;
    const TabId tid=activeTabs[i];
    if(tid==selected) focusedRect=r;
    const auto* t=model.find(tid);
@@ -8975,13 +8971,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(self.splitFocusRing) {
   self.splitFocusRing.hidden=!isSplit || narrowCollapse;
   if(isSplit && !narrowCollapse) {
-   self.splitFocusRing.frame=focusedRect;
-   self.splitFocusRing.layer.cornerRadius=10;
+   const NSRect outerRing=NSInsetRect(focusedRect, -2, -2);
+   if(!NSEqualRects(self.splitFocusRing.frame, outerRing)) self.splitFocusRing.frame=outerRing;
+   self.splitFocusRing.layer.cornerRadius=3;
    self.splitFocusRing.layer.borderWidth=2.0;
    self.splitFocusRing.layer.borderColor=accentOuter.CGColor;
   }
  }
- if(self.splitOverlay) {
+ if(self.splitOverlay && !NSEqualRects(self.splitOverlay.frame, fill)) {
   self.splitOverlay.frame=fill;
   [self layoutSplitOverlay];
  }
