@@ -250,6 +250,24 @@ NSColor* ChromeAccent(NSString* ident, NSString* hex, BOOL dark) {
   return dark ? ColorSRGB(0.145,0.129,0.086) : ColorSRGB(0.961,0.945,0.894);
  return dark ? ColorSRGB(0.106,0.122,0.149) : ColorSRGB(0.914,0.929,0.949);
 }
+// Appearance-adapted outer border color derived directly from the user's chosen Settings accent.
+NSColor* SplitAccentBorderColor(NSString* ident, NSString* hex, BOOL dark) {
+ NSColor* raw = ([ident isEqualToString:@"custom"] && hex.length) ? ColorFromHex(hex) : nil;
+ NSColor* base = raw ?: ChromeAccent(ident, hex, dark);
+ NSColor* srgb = [base colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: base;
+ CGFloat h = 0, s = 0, b = 0, a = 1;
+ [srgb getHue:&h saturation:&s brightness:&b alpha:&a];
+ const BOOL neutral = (s < 0.04);
+ if (dark) {
+  CGFloat outS = neutral ? s : std::clamp(MAX(s, 0.45), 0.35, 0.80);
+  CGFloat outB = neutral ? 0.66 : std::clamp(MAX(b, 0.72), 0.65, 0.90);
+  return [NSColor colorWithHue:h saturation:outS brightness:outB alpha:0.94];
+ } else {
+  CGFloat outS = neutral ? s : std::clamp(MAX(s, 0.50), 0.40, 0.85);
+  CGFloat outB = neutral ? 0.40 : std::clamp(MIN(b, 0.56), 0.38, 0.62);
+  return [NSColor colorWithHue:h saturation:outS brightness:outB alpha:0.90];
+ }
+}
 NSArray<NSDictionary*>* AccentCatalog() {
  return @[
   @{@"id":@"slate",@"title":@"Slate"},
@@ -344,12 +362,28 @@ UiPrefs LoadUiPrefs() {
  if([dict[@"split_groups"] isKindOfClass:NSArray.class]) for(id entry in dict[@"split_groups"]) {
   if(![entry isKindOfClass:NSDictionary.class]) continue;
   NSDictionary* group=entry;
+  if([group[@"tabs"] isKindOfClass:NSArray.class]) {
+   std::vector<TabId> tabs;
+   for(id tid in group[@"tabs"]) if([tid isKindOfClass:NSNumber.class]) {
+    TabId v=[tid unsignedLongLongValue];
+    if(v) tabs.push_back(v);
+   }
+   std::vector<double> sizes;
+   if([group[@"sizes"] isKindOfClass:NSArray.class]) {
+    for(id sz in group[@"sizes"]) if([sz isKindOfClass:NSNumber.class]) sizes.push_back([sz doubleValue]);
+   }
+   TabId focused=[group[@"focused"] isKindOfClass:NSNumber.class] ? [group[@"focused"] unsignedLongLongValue] : 0;
+   if(tabs.size() >= 2) {
+    prefs.splitGroups.emplace_back(std::move(tabs), std::move(sizes), focused);
+    continue;
+   }
+  }
   if(![group[@"left"] isKindOfClass:NSNumber.class] || ![group[@"right"] isKindOfClass:NSNumber.class]) continue;
   const TabId left=[group[@"left"] unsignedLongLongValue], right=[group[@"right"] unsignedLongLongValue];
   if(!left || !right || left==right) continue;
   double ratio=[group[@"ratio"] isKindOfClass:NSNumber.class] ? [group[@"ratio"] doubleValue] : 0.5;
   if(!std::isfinite(ratio)) ratio=0.5;
-  prefs.splitGroups.push_back({left,right,std::clamp(ratio,0.25,0.75),
+  prefs.splitGroups.push_back({left,right,std::clamp(ratio,0.2,0.8),
    [group[@"active_right"] boolValue] ? slate::SplitSide::Right : slate::SplitSide::Left});
  }
  return prefs;
@@ -636,14 +670,26 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) NSView* placeholder;
 @property(strong) NSView* splitLeftPane;
 @property(strong) NSView* splitRightPane;
+@property(strong) NSArray<NSView*>* splitPanes;
+@property(strong) NSArray<CALayer*>* splitPaneShadows;
+@property(strong) NSArray<NSView*>* splitDividers;
+@property(strong) NSArray<NSTextField*>* splitHostPills;
 @property(strong) NSView* splitFocusRing;
 @property(strong) NSView* splitDivider;
 @property(strong) NSView* splitOverlay;
+@property(strong) NSView* splitHintOverlay;
+@property(strong) NSView* splitHintLeft;
+@property(strong) NSView* splitHintRight;
 @property(strong) NSView* splitLeftTarget;
 @property(strong) NSView* splitRightTarget;
+@property(strong) NSArray<NSView*>* splitPreviewCards;
 @property(strong) NSView* splitPreview;
 @property(strong) NSImageView* splitPreviewIcon;
 @property(strong) NSTextField* splitPreviewTitle;
+@property(strong) NSView* splitBlankPicker;
+@property(copy) NSString* displayedSplitSignature;
+@property NSInteger splitHoveredPaneIndex;
+@property BOOL splitDividerSnapped;
 @property TabId splitDraggedTab;
 @property TabId splitSourceTab;
 @property TabId splitDragBaseTab;
@@ -805,10 +851,15 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)rememberOmniboxDraft;
 - (void)restoreOmniboxDraft:(TabId)identifier;
 - (BOOL)openSplitWithTab:(TabId)identifier side:(slate::SplitSide)side base:(TabId)base;
+- (BOOL)addTabToActiveSplit:(TabId)identifier neighbour:(TabId)neighbour before:(BOOL)before;
 - (BOOL)replaceEmptySplitTab:(TabId)empty withTab:(TabId)identifier;
 - (BOOL)isSplitPlaceholderTab:(TabId)identifier;
 - (void)exitSplitView:(id)sender;
 - (void)swapSplitSides:(id)sender;
+- (void)evenSplitPanes:(id)sender;
+- (void)detachSplitPane:(id)sender;
+- (void)addBlankPaneToSplit:(id)sender;
+- (void)addTabToSplitFromMenu:(NSMenuItem*)sender;
 - (void)splitTabFromMenu:(NSMenuItem*)sender;
 - (void)updateSplitDragAtScreenPoint:(NSPoint)screenPoint tab:(TabId)identifier base:(TabId)base;
 - (BOOL)finishSplitDragAtScreenPoint:(NSPoint)screenPoint tab:(TabId)identifier base:(TabId)base;
@@ -819,11 +870,13 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (NSDragOperation)updateSidebarPageDrop:(id<NSDraggingInfo>)info;
 - (void)endSidebarTabGesture:(TabId)identifier;
 - (void)setSplitRatioAtWindowPoint:(NSPoint)point;
+- (void)setSplitDivider:(NSInteger)dividerIndex atWindowPoint:(NSPoint)point;
 - (void)finishSplitResize;
 - (void)setupSplitViews;
 - (NSInteger)splitSideForTab:(TabId)tab;
 - (BOOL)tabInVisibleSplit:(TabId)tab;
 - (void)layoutSplitOverlay;
+- (void)rebuildSplitBlankPicker;
 - (void)finishClose:(TabId)identifier;
 - (void)closeNextForQuit;
 - (void)observePageEvent:(NSEvent*)event;
@@ -1962,7 +2015,9 @@ NSView* SplitChild(NSView* parent, NSString* identifier) {
 @end
 @interface SlateSplitDivider : NSView
 @property(weak) SlateDelegate* owner;
+@property NSInteger dividerIndex;
 @property BOOL hovered;
+@property BOOL dragging;
 @end
 @implementation SlateSplitDivider
 - (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
@@ -1982,24 +2037,60 @@ NSView* SplitChild(NSView* parent, NSString* identifier) {
 - (void)mouseExited:(NSEvent*)event { self.hovered=NO; [self setNeedsDisplay:YES]; }
 - (void)drawRect:(NSRect)dirtyRect {
  [super drawRect:dirtyRect];
- if(!self.hovered) return;
- NSColor* color=[ChromeAccent(self.owner.accentId,self.owner.accentHex,[self.owner isDarkAppearance]) colorWithAlphaComponent:0.55];
- [color setFill];
- NSRectFill(NSMakeRect(floor(NSMidX(self.bounds)),0,1,NSHeight(self.bounds)));
+ const BOOL dark = [self.owner isDarkAppearance];
+ const CGFloat midX = floor(NSMidX(self.bounds));
+ if(self.hovered || self.dragging) {
+  NSColor* accent = SplitAccentBorderColor(self.owner.accentId, self.owner.accentHex, dark);
+  [[accent colorWithAlphaComponent:self.dragging ? 0.92 : 0.72] setFill];
+  NSBezierPath* pill = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(midX - 1.5, 16, 3, MAX(0, NSHeight(self.bounds) - 32))
+                                                       xRadius:1.5 yRadius:1.5];
+  [pill fill];
+ } else {
+  // Subtle grab handle in the 7pt gutter between cards (lovesea PaneStage).
+  NSColor* subtle = [NSColor.labelColor colorWithAlphaComponent:dark ? 0.16 : 0.12];
+  [subtle setFill];
+  const CGFloat handleH = MIN(42, MAX(0, NSHeight(self.bounds) - 24));
+  NSBezierPath* grip = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(midX - 1, floor((NSHeight(self.bounds) - handleH) / 2), 2, handleH)
+                                                       xRadius:1 yRadius:1];
+  [grip fill];
+ }
 }
-- (void)mouseDown:(NSEvent*)event { [self.window makeFirstResponder:self]; }
-- (void)mouseDragged:(NSEvent*)event { [self.owner setSplitRatioAtWindowPoint:event.locationInWindow]; }
-- (void)mouseUp:(NSEvent*)event { [self.owner finishSplitResize]; }
+- (void)mouseDown:(NSEvent*)event {
+ [self.window makeFirstResponder:self];
+ if(event.clickCount >= 2) {
+  [self.owner evenSplitPanes:self];
+  return;
+ }
+ self.dragging = YES;
+ self.owner.splitDividerSnapped = NO;
+ [self setNeedsDisplay:YES];
+}
+- (void)mouseDragged:(NSEvent*)event {
+ [self.owner setSplitDivider:self.dividerIndex atWindowPoint:event.locationInWindow];
+}
+- (void)mouseUp:(NSEvent*)event {
+ self.dragging = NO;
+ self.owner.splitDividerSnapped = NO;
+ [self setNeedsDisplay:YES];
+ [self.owner finishSplitResize];
+}
 - (void)keyDown:(NSEvent*)event {
  if(event.keyCode!=123 && event.keyCode!=124) { [super keyDown:event]; return; }
  NSPoint point=[self.owner.content convertPoint:NSMakePoint(NSMidX(self.frame)+(event.keyCode==123?-12:12),0) toView:nil];
- [self.owner setSplitRatioAtWindowPoint:point];
+ [self.owner setSplitDivider:self.dividerIndex atWindowPoint:point];
  [self.owner finishSplitResize];
 }
 - (NSMenu*)menuForEvent:(NSEvent*)event {
  NSMenu* menu=[[NSMenu alloc] init];
  NSMenuItem* swap=[menu addItemWithTitle:@"Swap Split Sides" action:@selector(swapSplitSides:) keyEquivalent:@""];
  swap.target=self.owner;
+ NSMenuItem* even=[menu addItemWithTitle:@"Make Panes Even" action:@selector(evenSplitPanes:) keyEquivalent:@""];
+ even.target=self.owner;
+ NSMenuItem* add=[menu addItemWithTitle:@"Add Blank Pane to Split" action:@selector(addBlankPaneToSplit:) keyEquivalent:@""];
+ add.target=self.owner;
+ [menu addItem:[NSMenuItem separatorItem]];
+ NSMenuItem* detach=[menu addItemWithTitle:@"Separate Focused Pane" action:@selector(detachSplitPane:) keyEquivalent:@""];
+ detach.target=self.owner;
  NSMenuItem* close=[menu addItemWithTitle:@"Exit Split View" action:@selector(exitSplitView:) keyEquivalent:@""];
  close.target=self.owner;
  return menu;
@@ -5587,10 +5678,22 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(savedPairs.empty() && prefs.splitLeft && prefs.splitRight && prefs.splitLeft!=prefs.splitRight)
   savedPairs.push_back({prefs.splitLeft,prefs.splitRight,prefs.splitRatio,
    prefs.splitRightActive ? slate::SplitSide::Right : slate::SplitSide::Left});
- for(const auto& pair:savedPairs) if(model.find(pair.left) && model.find(pair.right)) {
-  workspace.open(pair.left,pair.right,slate::SplitSide::Right);
-  workspace.ratio=pair.ratio;
-  workspace.active=pair.active;
+ for(const auto& pair:savedPairs) {
+  if(pair.tabs.size() >= 2) {
+   std::vector<TabId> liveTabs;
+   std::vector<double> liveSizes;
+   for(size_t i=0;i<pair.tabs.size();++i) {
+    if(model.find(pair.tabs[i])) {
+     liveTabs.push_back(pair.tabs[i]);
+     liveSizes.push_back(i < pair.sizes.size() ? pair.sizes[i] : 1.0);
+    }
+   }
+   if(liveTabs.size() >= 2) workspace.open_group(liveTabs, liveSizes, pair.focused);
+  } else if(model.find(pair.left) && model.find(pair.right)) {
+   workspace.open(pair.left,pair.right,slate::SplitSide::Right);
+   workspace.ratio=pair.ratio;
+   workspace.active=pair.active;
+  }
  }
  workspace.select(model.selected());
  [SlateFrameRate setFast:self.pages120Hz];
@@ -7016,13 +7119,24 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  lastAccentInk=self.accentInk;
  if(stripInkChanged && [self stripRevealed]) [self paintTabStripAnimated:NO];
  if(sideInkChanged && [self sidebarRevealed] && self.tabList) [self.tabList reloadData];
+ if(workspace.visible_for(model.selected())) {
+  [self syncPageGeometry];
+  [self updateSplitTabShape];
+ }
 }
 - (void)persistUiPrefs {
  NSMutableArray* splitGroups=[NSMutableArray array];
- for(const auto& pair:workspace.pairs()) [splitGroups addObject:@{
-  @"left":@(pair.left), @"right":@(pair.right), @"ratio":@(pair.ratio),
-  @"active_right":@(pair.active==slate::SplitSide::Right)
- }];
+ for(const auto& pair:workspace.pairs()) {
+  NSMutableArray* tabArr=[NSMutableArray arrayWithCapacity:pair.tabs.size()];
+  for(TabId t : pair.tabs) [tabArr addObject:@(t)];
+  NSMutableArray* sizeArr=[NSMutableArray arrayWithCapacity:pair.sizes.size()];
+  for(double s : pair.sizes) [sizeArr addObject:@(s)];
+  [splitGroups addObject:@{
+   @"left":@(pair.left), @"right":@(pair.right), @"ratio":@(pair.ratio),
+   @"active_right":@(pair.active==slate::SplitSide::Right),
+   @"tabs":tabArr, @"sizes":sizeArr, @"focused":@(pair.focused)
+  }];
+ }
  NSMutableDictionary* root=[NSMutableDictionary dictionaryWithDictionary:@{
   @"version":@1,
   @"vertical_tabs":@(self.verticalTabs),
@@ -7323,6 +7437,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  }
  [menu addItem:[NSMenuItem separatorItem]];
  if(!workspace.member(identifier)) {
+  if(workspace.visible_for(model.selected()) && !workspace.is_full()) {
+   NSMenuItem* add=[menu addItemWithTitle:@"Add to Split View"
+    action:@selector(addTabToSplitFromMenu:) keyEquivalent:@""];
+   add.target=self; add.representedObject=@(identifier);
+  }
   NSMenuItem* left=[menu addItemWithTitle:@"Open in New Left Split"
    action:@selector(splitTabFromMenu:) keyEquivalent:@""];
   left.target=self; left.representedObject=@(identifier); left.tag=0;
@@ -7331,8 +7450,17 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   right.target=self; right.representedObject=@(identifier); right.tag=1;
  }
  if(workspace.member(identifier)) {
+  const auto pair=workspace.pair_for(identifier);
+  if(pair && !pair->is_full() && workspace.visible_for(model.selected()) && workspace.contains(identifier)) {
+   NSMenuItem* addBlank=[menu addItemWithTitle:@"Add Blank Pane to Split" action:@selector(addBlankPaneToSplit:) keyEquivalent:@""];
+   addBlank.target=self;
+  }
+  NSMenuItem* even=[menu addItemWithTitle:@"Make Panes Even" action:@selector(evenSplitPanes:) keyEquivalent:@""];
+  even.target=self;
   NSMenuItem* swap=[menu addItemWithTitle:@"Swap Split Sides" action:@selector(swapSplitSides:) keyEquivalent:@""];
   swap.target=self; swap.representedObject=@(identifier);
+  NSMenuItem* detach=[menu addItemWithTitle:@"Separate Pane from Split" action:@selector(detachSplitPane:) keyEquivalent:@""];
+  detach.target=self; detach.representedObject=@(identifier);
   NSMenuItem* exit=[menu addItemWithTitle:@"Exit Split View" action:@selector(exitSplitView:) keyEquivalent:@""];
   exit.target=self; exit.representedObject=@(identifier);
  }
@@ -8379,66 +8507,136 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 }
 - (NSInteger)splitSideForTab:(TabId)tab {
  const auto pair=workspace.pair_for(tab);
- return !pair ? 0 : pair->left==tab ? 1 : 2;
+ if(!pair) return 0;
+ const int idx=pair->index_of(tab);
+ return idx>=0 ? idx+1 : (pair->left==tab ? 1 : 2);
 }
 - (BOOL)tabInVisibleSplit:(TabId)tab { return workspace.visible_for(model.selected()) && workspace.contains(tab); }
+- (NSString*)currentSplitSignature {
+ if(!workspace.split()) return @"";
+ NSMutableString* sig=[NSMutableString string];
+ for(TabId tid : workspace.active_tabs()) [sig appendFormat:@"%llu,",(unsigned long long)tid];
+ return sig;
+}
 - (void)setupSplitViews {
- // Give each live WebKit surface its own clipped pane. Reparenting the existing
- // host preserves page state and prevents one composited surface covering its peer.
- self.splitLeftPane=[[NSView alloc] initWithFrame:NSZeroRect];
- self.splitRightPane=[[NSView alloc] initWithFrame:NSZeroRect];
- for(NSView* pane in @[self.splitLeftPane,self.splitRightPane]) {
+ // Give each live WebKit surface its own rounded card pane (up to 4 panes, lovesea PaneStage parity).
+ self.content.wantsLayer=YES;
+ NSMutableArray<NSView*>* panes=[NSMutableArray arrayWithCapacity:slate::WorkspaceLayout::kMaxPanes];
+ NSMutableArray<CALayer*>* shadows=[NSMutableArray arrayWithCapacity:slate::WorkspaceLayout::kMaxPanes];
+ NSMutableArray<NSTextField*>* hostPills=[NSMutableArray arrayWithCapacity:slate::WorkspaceLayout::kMaxPanes];
+ for(size_t i=0;i<slate::WorkspaceLayout::kMaxPanes;++i) {
+  CALayer* shadow=[CALayer layer];
+  shadow.cornerRadius=10;
+  shadow.backgroundColor=NSColor.windowBackgroundColor.CGColor;
+  shadow.shadowColor=NSColor.blackColor.CGColor;
+  shadow.shadowOpacity=0.14;
+  shadow.shadowRadius=6;
+  shadow.shadowOffset=CGSizeMake(0,-2);
+  shadow.hidden=YES;
+  [self.content.layer insertSublayer:shadow atIndex:0];
+  [shadows addObject:shadow];
+
+  NSView* pane=[[NSView alloc] initWithFrame:NSZeroRect];
   pane.wantsLayer=YES;
   pane.clipsToBounds=YES;
+  pane.layer.cornerRadius=10;
   pane.layer.masksToBounds=YES;
+  pane.layer.borderWidth=1.0;
   pane.hidden=YES;
   [self.content addSubview:pane positioned:NSWindowBelow relativeTo:self.homeView];
- }
- SlateSplitDivider* divider=[[SlateSplitDivider alloc] initWithFrame:NSZeroRect];
- divider.owner=self;
- divider.hidden=YES;
- divider.accessibilityLabel=@"Split divider";
- self.splitDivider=divider;
- [self.content addSubview:divider];
+  [panes addObject:pane];
 
+  NSTextField* pill=[NSTextField labelWithString:@""];
+  pill.wantsLayer=YES;
+  pill.font=[NSFont systemFontOfSize:11.5 weight:NSFontWeightMedium];
+  pill.alignment=NSTextAlignmentCenter;
+  pill.lineBreakMode=NSLineBreakByTruncatingTail;
+  pill.layer.cornerRadius=11;
+  pill.layer.masksToBounds=YES;
+  pill.layer.borderWidth=1.0;
+  pill.hidden=YES;
+  [self.content addSubview:pill];
+  [hostPills addObject:pill];
+ }
+ self.splitPanes=panes;
+ self.splitPaneShadows=shadows;
+ self.splitHostPills=hostPills;
+ self.splitLeftPane=panes[0];
+ self.splitRightPane=panes[1];
+ self.splitHoveredPaneIndex=-1;
+
+ NSMutableArray<NSView*>* dividers=[NSMutableArray arrayWithCapacity:slate::WorkspaceLayout::kMaxPanes - 1];
+ for(size_t i=0;i<slate::WorkspaceLayout::kMaxPanes - 1;++i) {
+  SlateSplitDivider* divider=[[SlateSplitDivider alloc] initWithFrame:NSZeroRect];
+  divider.owner=self;
+  divider.dividerIndex=(NSInteger)i;
+  divider.hidden=YES;
+  divider.accessibilityLabel=@"Split divider";
+  [self.content addSubview:divider];
+  [dividers addObject:divider];
+ }
+ self.splitDividers=dividers;
+ self.splitDivider=dividers[0];
+
+ // Outer focus ring colored with the user's chosen Settings accent adapted to Light/Dark appearance.
  self.splitFocusRing=[[SlateSplitOverlay alloc] initWithFrame:NSZeroRect];
  self.splitFocusRing.wantsLayer=YES;
- self.splitFocusRing.layer.cornerRadius=7;
- self.splitFocusRing.layer.borderWidth=2;
+ self.splitFocusRing.layer.cornerRadius=10;
+ self.splitFocusRing.layer.borderWidth=2.0;
  self.splitFocusRing.hidden=YES;
  [self.content addSubview:self.splitFocusRing];
 
+ // Faint edge drop bands shown when carrying a tab over a page (lovesea SplitDropHint).
+ self.splitHintOverlay=[[SlateSplitOverlay alloc] initWithFrame:NSZeroRect];
+ self.splitHintOverlay.wantsLayer=YES;
+ self.splitHintOverlay.hidden=YES;
+ [self.content addSubview:self.splitHintOverlay];
+ for(NSInteger side=0;side<2;++side) {
+  NSView* band=[[NSView alloc] initWithFrame:NSZeroRect];
+  band.wantsLayer=YES;
+  band.layer.cornerRadius=10;
+  band.layer.borderWidth=1.0;
+  NSImageView* icon=[[NSImageView alloc] initWithFrame:NSZeroRect];
+  icon.identifier=@"hint-icon";
+  icon.image=[NSImage imageWithSystemSymbolName:@"rectangle.split.2x1" accessibilityDescription:nil];
+  icon.imageScaling=NSImageScaleProportionallyDown;
+  [band addSubview:icon];
+  [self.splitHintOverlay addSubview:band];
+  if(side==0) self.splitHintLeft=band;
+  else self.splitHintRight=band;
+ }
+
+ // Multi-pane drop preview overlay (lovesea SplitDropPreview).
  self.splitOverlay=[[SlateSplitOverlay alloc] initWithFrame:NSZeroRect];
  self.splitOverlay.wantsLayer=YES;
  self.splitOverlay.hidden=YES;
  [self.content addSubview:self.splitOverlay];
- NSArray<NSString*>* titles=@[@"New split on left",@"New split on right"];
- for(NSInteger side=0;side<2;++side) {
-  NSView* panel=[[NSView alloc] initWithFrame:NSZeroRect];
-  panel.wantsLayer=YES;
-  panel.layer.cornerRadius=18;
-  panel.layer.masksToBounds=YES;
-  panel.layer.backgroundColor=([self isDarkAppearance]
-   ? [NSColor colorWithCalibratedWhite:0.16 alpha:0.94]
-   : [NSColor colorWithCalibratedWhite:1 alpha:0.94]).CGColor;
-  panel.layer.borderWidth=1;
-  panel.accessibilityLabel=side==0 ? @"Create a new split with this tab on the left"
-   : @"Create a new split with this tab on the right";
-  [self.splitOverlay addSubview:panel];
+ NSMutableArray<NSView*>* previewCards=[NSMutableArray arrayWithCapacity:slate::WorkspaceLayout::kMaxPanes];
+ for(size_t i=0;i<slate::WorkspaceLayout::kMaxPanes;++i) {
+  NSView* card=[[NSView alloc] initWithFrame:NSZeroRect];
+  card.wantsLayer=YES;
+  card.layer.cornerRadius=12;
+  card.layer.masksToBounds=YES;
+  card.layer.borderWidth=1.5;
+  card.hidden=YES;
   NSImageView* icon=[[NSImageView alloc] initWithFrame:NSZeroRect];
   icon.identifier=@"split-icon";
-  icon.image=[NSImage imageWithSystemSymbolName:@"rectangle.split.2x1" accessibilityDescription:nil]
-   ?: [NSImage imageWithSystemSymbolName:@"rectangle.split.1x2" accessibilityDescription:nil];
+  icon.image=[NSImage imageWithSystemSymbolName:@"rectangle.split.2x1" accessibilityDescription:nil];
   icon.imageScaling=NSImageScaleProportionallyDown;
-  [panel addSubview:icon];
-  NSTextField* label=[NSTextField labelWithString:titles[side]];
+  [card addSubview:icon];
+  NSTextField* label=[NSTextField labelWithString:@""];
   label.identifier=@"split-label";
   label.font=[NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
   label.alignment=NSTextAlignmentCenter;
-  [panel addSubview:label];
-  if(side==0) self.splitLeftTarget=panel;
-  else self.splitRightTarget=panel;
+  label.lineBreakMode=NSLineBreakByTruncatingTail;
+  [card addSubview:label];
+  [self.splitOverlay addSubview:card];
+  [previewCards addObject:card];
  }
+ self.splitPreviewCards=previewCards;
+ self.splitLeftTarget=previewCards[0];
+ self.splitRightTarget=previewCards[1];
+
  self.splitPreview=[[NSView alloc] initWithFrame:NSZeroRect];
  self.splitPreview.wantsLayer=YES;
  self.splitPreview.layer.cornerRadius=11;
@@ -8447,6 +8645,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.splitPreview.layer.shadowOpacity=0.14;
  self.splitPreview.layer.shadowRadius=8;
  self.splitPreview.layer.shadowOffset=CGSizeMake(0,-2);
+ self.splitPreview.hidden=YES;
  [self.splitOverlay addSubview:self.splitPreview];
  self.splitPreviewIcon=[[NSImageView alloc] initWithFrame:NSZeroRect];
  self.splitPreviewIcon.imageScaling=NSImageScaleProportionallyDown;
@@ -8455,21 +8654,34 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.splitPreviewTitle.font=[NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
  self.splitPreviewTitle.lineBreakMode=NSLineBreakByTruncatingTail;
  [self.splitPreview addSubview:self.splitPreviewTitle];
+
+ // Blank split pane "Or bring in an open tab" picker (lovesea OpenTabs).
+ self.splitBlankPicker=[[NSView alloc] initWithFrame:NSZeroRect];
+ self.splitBlankPicker.wantsLayer=YES;
+ self.splitBlankPicker.layer.cornerRadius=14;
+ self.splitBlankPicker.layer.borderWidth=1.0;
+ self.splitBlankPicker.hidden=YES;
+ [self.content addSubview:self.splitBlankPicker];
 }
 - (void)layoutSplitOverlay {
  if(!self.splitOverlay) return;
  const NSRect bounds=self.splitOverlay.bounds;
  const CGFloat width=NSWidth(bounds), height=NSHeight(bounds);
- const CGFloat margin=8;
- const CGFloat targetWidth=MAX(0,(width-3*margin)/2);
- const CGFloat targetHeight=MAX(0,height-2*margin);
- self.splitLeftTarget.frame=NSMakeRect(margin,margin,targetWidth,targetHeight);
- self.splitRightTarget.frame=NSMakeRect(width-margin-targetWidth,margin,targetWidth,targetHeight);
- for(NSView* target in @[self.splitLeftTarget,self.splitRightTarget]) {
-  NSImageView* icon=(NSImageView*)SplitChild(target,@"split-icon");
-  NSTextField* label=(NSTextField*)SplitChild(target,@"split-label");
-  icon.frame=NSMakeRect(round((targetWidth-23)/2),round(targetHeight/2+4),23,23);
-  label.frame=NSMakeRect(8,round(targetHeight/2-28),MAX(0,targetWidth-16),20);
+ if(self.splitHintOverlay) {
+  self.splitHintOverlay.frame=bounds;
+  const CGFloat band=MIN(width*0.5, MAX(64.0, width*0.18));
+  const CGFloat pad=8.0;
+  self.splitHintLeft.frame=NSMakeRect(pad, pad, MAX(0, band-pad), MAX(0, height-2*pad));
+  self.splitHintRight.frame=NSMakeRect(width-band, pad, MAX(0, band-pad), MAX(0, height-2*pad));
+  const BOOL dark=[self isDarkAppearance];
+  NSColor* accent=SplitAccentBorderColor(self.accentId, self.accentHex, dark);
+  for(NSView* b in @[self.splitHintLeft, self.splitHintRight]) {
+   b.layer.backgroundColor=[(dark ? [NSColor colorWithCalibratedWhite:0.14 alpha:0.38] : [NSColor colorWithCalibratedWhite:1.0 alpha:0.42]) CGColor];
+   b.layer.borderColor=[accent colorWithAlphaComponent:0.45].CGColor;
+   NSImageView* ic=(NSImageView*)SplitChild(b,@"hint-icon");
+   ic.frame=NSMakeRect(round((NSWidth(b.bounds)-20)/2), round((NSHeight(b.bounds)-20)/2), 20, 20);
+   ic.contentTintColor=[accent colorWithAlphaComponent:0.75];
+  }
  }
  self.splitPreviewIcon.frame=NSMakeRect(14,15,20,20);
  self.splitPreviewTitle.frame=NSMakeRect(44,15,155,20);
@@ -8482,21 +8694,86 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  FreezeWebLayer(self.content);
  const NSRect fill=WebFillRect(self.content);
  const BOOL isSplit=workspace.visible_for(model.selected());
- const CGFloat cut=isSplit ? round(NSWidth(fill)*workspace.clamped_ratio(NSWidth(fill))) : NSWidth(fill);
- const NSRect left=NSMakeRect(0,0,cut,NSHeight(fill));
- const NSRect right=NSMakeRect(cut,0,MAX(0,NSWidth(fill)-cut),NSHeight(fill));
- if(self.splitLeftPane) {
-  self.splitLeftPane.hidden=!isSplit;
-  self.splitRightPane.hidden=!isSplit;
-  if(isSplit) {
-   self.splitLeftPane.frame=left;
-   self.splitRightPane.frame=right;
+ const BOOL dark=[self isDarkAppearance];
+ const auto activeTabs=workspace.active_tabs();
+ const size_t paneCount=isSplit ? activeTabs.size() : 0;
+ const BOOL narrowCollapse=isSplit && workspace.collapsed_for_width(NSWidth(fill));
+ const TabId selected=model.selected();
+ const CGFloat gutter=7.0;
+ const CGFloat inset=6.0;
+ NSColor* accentOuter=SplitAccentBorderColor(self.accentId, self.accentHex, dark);
+ NSColor* inactiveHairline=[NSColor.labelColor colorWithAlphaComponent:dark ? 0.16 : 0.12];
+
+ std::vector<NSRect> paneRects(paneCount, NSZeroRect);
+ if(isSplit && paneCount >= 2) {
+  if(narrowCollapse) {
+   for(size_t i=0;i<paneCount;++i) {
+    paneRects[i]=(activeTabs[i]==selected) ? fill : NSZeroRect;
+   }
+  } else {
+   const auto shares=workspace.clamped_sizes(NSWidth(fill));
+   const CGFloat totalGutters=gutter * static_cast<CGFloat>(paneCount - 1);
+   const CGFloat availW=MAX(0, NSWidth(fill) - 2*inset - totalGutters);
+   const CGFloat cardH=MAX(0, NSHeight(fill) - 2*inset);
+   CGFloat cursorX=inset;
+   for(size_t i=0;i<paneCount;++i) {
+    const CGFloat w=(i + 1 == paneCount)
+     ? MAX(0, NSWidth(fill) - inset - cursorX)
+     : round(availW * shares[i]);
+    paneRects[i]=NSMakeRect(cursorX, inset, w, cardH);
+    cursorX += w + gutter;
+   }
   }
  }
- const TabId selected=model.selected();
- const auto* leftTab=isSplit ? model.find(workspace.left) : nullptr;
- const NSRect homeFrame=isSplit ? ((leftTab && leftTab->url=="about:blank") ? left : right) : fill;
- const NSRect placeholderFrame=isSplit && workspace.active==slate::SplitSide::Right ? right : (isSplit ? left : fill);
+
+ NSRect focusedRect=fill;
+ NSRect blankPaneRect=fill;
+ BOOL foundBlankPane=NO;
+ for(size_t i=0;i<self.splitPanes.count;++i) {
+  NSView* pane=self.splitPanes[i];
+  CALayer* shadow=self.splitPaneShadows[i];
+  NSTextField* pill=self.splitHostPills[i];
+  const BOOL showPane=isSplit && i < paneCount && (!narrowCollapse || activeTabs[i]==selected);
+  pane.hidden=!showPane;
+  shadow.hidden=!showPane || narrowCollapse;
+  if(showPane) {
+   const NSRect r=paneRects[i];
+   pane.frame=r;
+   pane.layer.cornerRadius=narrowCollapse ? 0 : 10;
+   pane.layer.borderWidth=narrowCollapse ? 0 : 1.0;
+   pane.layer.borderColor=inactiveHairline.CGColor;
+   shadow.frame=r;
+   shadow.shadowOpacity=dark ? 0.28 : 0.12;
+   shadow.backgroundColor=(dark ? ColorSRGB(0.10,0.10,0.12) : NSColor.whiteColor).CGColor;
+   const TabId tid=activeTabs[i];
+   if(tid==selected) focusedRect=r;
+   const auto* t=model.find(tid);
+   if(t && t->url=="about:blank" && !foundBlankPane) { blankPaneRect=r; foundBlankPane=YES; }
+   // Unfocused pane hover host pill (lovesea `whose`).
+   const BOOL showPill=!narrowCollapse && tid!=selected && self.splitHoveredPaneIndex==(NSInteger)i && t && t->url!="about:blank";
+   if(showPill) {
+    NSURL* u=[NSURL URLWithString:Text(t->url)];
+    NSString* host=u.host ?: @"";
+    if([host hasPrefix:@"www."]) host=[host substringFromIndex:4];
+    if(host.length) {
+     pill.stringValue=host;
+     pill.textColor=NSColor.secondaryLabelColor;
+     pill.layer.backgroundColor=[(dark ? [NSColor colorWithCalibratedWhite:0.14 alpha:0.92] : [NSColor colorWithCalibratedWhite:0.98 alpha:0.94]) CGColor];
+     pill.layer.borderColor=inactiveHairline.CGColor;
+     const CGFloat pw=MIN(NSWidth(r)-24, MAX(64, [host sizeWithAttributes:@{NSFontAttributeName:pill.font}].width + 22));
+     pill.frame=NSMakeRect(NSMaxX(r)-pw-10, NSMaxY(r)-32, pw, 22);
+     pill.hidden=NO;
+    } else { pill.hidden=YES; }
+   } else {
+    pill.hidden=YES;
+   }
+  } else {
+   pill.hidden=YES;
+  }
+ }
+
+ const NSRect homeFrame=(isSplit && foundBlankPane) ? blankPaneRect : fill;
+ const NSRect placeholderFrame=isSplit ? focusedRect : fill;
  if(self.homeView && !NSEqualRects(self.homeView.frame,homeFrame)) {
   self.homeView.frame=homeFrame;
   if(self.homeBoard) {
@@ -8505,6 +8782,19 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    board.size.height=MAX(NSHeight(homeFrame),NSHeight(board));
    self.homeBoard.frame=board;
    [self.homeBoard setNeedsLayout:YES];
+  }
+ }
+ if(self.splitBlankPicker) {
+  if(isSplit && foundBlankPane && !narrowCollapse) {
+   const CGFloat pw=MIN(300, MAX(180, NSWidth(blankPaneRect) - 32));
+   const CGFloat ph=NSHeight(self.splitBlankPicker.frame);
+   if(ph > 10) {
+    self.splitBlankPicker.frame=NSMakeRect(round(NSMidX(blankPaneRect) - pw/2),
+                                           MAX(24, round(NSMinY(blankPaneRect) + 34)),
+                                           pw, ph);
+   }
+  } else {
+   self.splitBlankPicker.hidden=YES;
   }
  }
  if(self.placeholder && !NSEqualRects(self.placeholder.frame,placeholderFrame)) self.placeholder.frame=placeholderFrame;
@@ -8517,22 +8807,23 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   if(moved) item.host.frame=target;
   if(item.engine && moved) item.engine->host_geometry_changed();
  }
- if(self.splitDivider) {
-  self.splitDivider.hidden=!isSplit;
-  if(isSplit) self.splitDivider.frame=NSMakeRect(cut-4,0,8,NSHeight(fill));
+ for(size_t i=0;i<self.splitDividers.count;++i) {
+  NSView* div=self.splitDividers[i];
+  const BOOL showDiv=isSplit && !narrowCollapse && (i + 1 < paneCount);
+  div.hidden=!showDiv;
+  if(showDiv) {
+   const CGFloat divX=NSMaxX(paneRects[i]);
+   div.frame=NSMakeRect(divX - 1, inset, gutter + 2, MAX(0, NSHeight(fill) - 2*inset));
+   [div setNeedsDisplay:YES];
+  }
  }
  if(self.splitFocusRing) {
-  self.splitFocusRing.hidden=!isSplit;
-  if(isSplit) {
-   const NSRect pane=workspace.active==slate::SplitSide::Left ? left : right;
-   self.splitFocusRing.frame=NSInsetRect(pane,1,1);
-   NSColor* accent=ChromeAccent(self.accentId,self.accentHex,[self isDarkAppearance]);
-   NSColor* rgb=[accent colorUsingColorSpace:NSColorSpace.sRGBColorSpace] ?: accent;
-   CGFloat hue=0,saturation=0,brightness=0,alpha=0;
-   [rgb getHue:&hue saturation:&saturation brightness:&brightness alpha:&alpha];
-   NSColor* ink=[NSColor colorWithHue:hue saturation:MAX(0.52,saturation)
-    brightness:[self isDarkAppearance] ? MAX(0.75,brightness) : MIN(0.55,brightness) alpha:0.95];
-   self.splitFocusRing.layer.borderColor=ink.CGColor;
+  self.splitFocusRing.hidden=!isSplit || narrowCollapse;
+  if(isSplit && !narrowCollapse) {
+   self.splitFocusRing.frame=focusedRect;
+   self.splitFocusRing.layer.cornerRadius=10;
+   self.splitFocusRing.layer.borderWidth=2.0;
+   self.splitFocusRing.layer.borderColor=accentOuter.CGColor;
   }
  }
  if(self.splitOverlay) {
@@ -9555,47 +9846,57 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const auto* activeTab=model.find(model.selected());
  const bool joinsToolbar=!activeTab || activeTab->url!="about:blank";
  NSArray<NSView*>* views=self.tabPills.arrangedSubviews;
- NSMutableArray<NSArray<SlateTabPill*>*>* pairs=[NSMutableArray array];
+ // Group contiguous runs of 2..4 pills belonging to the same split (lovesea SplitTabItem).
+ NSMutableArray<NSArray<SlateTabPill*>*>* groups=[NSMutableArray array];
  NSMutableSet<NSNumber*>* connectedIds=[NSMutableSet set];
- for(NSUInteger i=1;i<views.count;++i) {
-  NSView* a=views[i-1];
-  NSView* b=views[i];
-  if(![a isKindOfClass:SlateTabPill.class] || ![b isKindOfClass:SlateTabPill.class]) continue;
-  SlateTabPill* first=(SlateTabPill*)a;
-  SlateTabPill* second=(SlateTabPill*)b;
-  if(!workspace.same_pair(first.tabId,second.tabId)) continue;
-  [pairs addObject:@[first,second]];
-  [connectedIds addObject:@(first.tabId)];
-  [connectedIds addObject:@(second.tabId)];
+ NSUInteger idx=0;
+ while(idx < views.count) {
+  if(![views[idx] isKindOfClass:SlateTabPill.class]) { ++idx; continue; }
+  SlateTabPill* start=(SlateTabPill*)views[idx];
+  NSMutableArray<SlateTabPill*>* run=[NSMutableArray arrayWithObject:start];
+  NSUInteger j=idx+1;
+  while(j < views.count && [views[j] isKindOfClass:SlateTabPill.class]) {
+   SlateTabPill* next=(SlateTabPill*)views[j];
+   if(!workspace.same_pair(start.tabId, next.tabId)) break;
+   [run addObject:next];
+   ++j;
+  }
+  if(run.count >= 2) {
+   [groups addObject:run];
+   for(SlateTabPill* p in run) [connectedIds addObject:@(p.tabId)];
+  }
+  idx = j;
  }
  for(NSView* view in views) if([view isKindOfClass:SlateTabPill.class]) {
   SlateTabPill* pill=(SlateTabPill*)view;
   const BOOL connected=[connectedIds containsObject:@(pill.tabId)];
   if(pill.splitConnected!=connected) { pill.splitConnected=connected; [pill updateTabShape]; }
  }
+ const BOOL dark=[self isDarkAppearance];
+ NSColor* accentOuter=SplitAccentBorderColor(self.accentId, self.accentHex, dark);
  [CATransaction begin];
  [CATransaction setDisableActions:YES];
- for(NSUInteger i=0;i<pairs.count;++i) {
+ NSUInteger sepIdx=0;
+ for(NSUInteger i=0;i<groups.count;++i) {
   if(i>=self.splitTabShapeLayers.count) {
    CAShapeLayer* shape=[CAShapeLayer layer];
-   CALayer* separator=[CALayer layer];
    [self.tabPills.layer insertSublayer:shape atIndex:0];
-   [self.tabPills.layer insertSublayer:separator above:shape];
    [self.splitTabShapeLayers addObject:shape];
-   [self.splitTabSeparatorLayers addObject:separator];
   }
-  SlateTabPill* first=pairs[i][0];
-  SlateTabPill* second=pairs[i][1];
+  NSArray<SlateTabPill*>* run=groups[i];
+  SlateTabPill* first=run.firstObject;
   CAShapeLayer* shape=self.splitTabShapeLayers[i];
-  CALayer* separator=self.splitTabSeparatorLayers[i];
-  if(NSWidth(first.frame)<1 || NSWidth(second.frame)<1) {
-   shape.hidden=YES; separator.hidden=YES; continue;
+  BOOL anyEmpty=NO;
+  NSRect groupFrame=first.frame;
+  for(SlateTabPill* p in run) {
+   if(NSWidth(p.frame)<1) { anyEmpty=YES; break; }
+   groupFrame=NSUnionRect(groupFrame, p.frame);
   }
-  const NSRect pairFrame=NSUnionRect(first.frame,second.frame);
+  if(anyEmpty) { shape.hidden=YES; continue; }
   const BOOL foreground=workspace.visible_for(model.selected()) && workspace.contains(first.tabId);
   shape.hidden=NO;
-  shape.frame=pairFrame;
-  const CGRect bounds=CGRectMake(0,0,NSWidth(pairFrame),NSHeight(pairFrame));
+  shape.frame=groupFrame;
+  const CGRect bounds=CGRectMake(0,0,NSWidth(groupFrame),NSHeight(groupFrame));
   CGPathRef path=foreground
    ? CreateActiveBrowserTabPath(bounds,self.tabPills.isFlipped,joinsToolbar)
    : CGPathCreateWithRoundedRect(CGRectInset(bounds,0,2),9,9,nullptr);
@@ -9605,14 +9906,28 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   NSColor* surface=foreground ? (self.barColor ?: NSColor.windowBackgroundColor)
    : [base blendedColorWithFraction:0.10 ofColor:NSColor.labelColor];
   shape.fillColor=surface.CGColor;
-  separator.hidden=NO;
-  separator.frame=CGRectMake(NSMaxX(first.frame)-0.5,NSMidY(pairFrame)-9,1,18);
-  separator.backgroundColor=[InkOn(surface) colorWithAlphaComponent:0.16].CGColor;
+  shape.lineWidth=foreground ? 1.5 : 1.0;
+  shape.strokeColor=foreground ? [accentOuter colorWithAlphaComponent:0.85].CGColor
+   : [InkOn(surface) colorWithAlphaComponent:0.16].CGColor;
+
+  for(NSUInteger k=0;k + 1 < run.count;++k) {
+   if(sepIdx >= self.splitTabSeparatorLayers.count) {
+    CALayer* separator=[CALayer layer];
+    [self.tabPills.layer insertSublayer:separator above:shape];
+    [self.splitTabSeparatorLayers addObject:separator];
+   }
+   CALayer* separator=self.splitTabSeparatorLayers[sepIdx++];
+   separator.hidden=NO;
+   separator.frame=CGRectMake(NSMaxX(run[k].frame)-0.5, NSMidY(groupFrame)-9, 1, 18);
+   separator.backgroundColor=[InkOn(surface) colorWithAlphaComponent:0.16].CGColor;
+  }
  }
- while(self.splitTabShapeLayers.count>pairs.count) {
+ while(self.splitTabShapeLayers.count>groups.count) {
   [self.splitTabShapeLayers.lastObject removeFromSuperlayer];
-  [self.splitTabSeparatorLayers.lastObject removeFromSuperlayer];
   [self.splitTabShapeLayers removeLastObject];
+ }
+ while(self.splitTabSeparatorLayers.count>sepIdx) {
+  [self.splitTabSeparatorLayers.lastObject removeFromSuperlayer];
   [self.splitTabSeparatorLayers removeLastObject];
  }
  [CATransaction commit];
@@ -9851,12 +10166,18 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(self.sidebarFoot) [self.sidebarFoot updateDoors];
  const auto id=model.selected(); const auto* tab=model.find(id);
  const BOOL tabChanged=self.displayedTab!=id;
- const BOOL splitChanged=self.displayedSplitLeft!=workspace.left || self.displayedSplitRight!=workspace.right;
+ NSString* splitSig=[self currentSplitSignature];
+ const BOOL splitChanged=self.displayedSplitLeft!=workspace.left || self.displayedSplitRight!=workspace.right ||
+  ![(self.displayedSplitSignature ?: @"") isEqualToString:splitSig];
  const BOOL splitVisible=workspace.visible_for(id);
- const auto* leftTab=splitVisible ? model.find(workspace.left) : nullptr;
- const auto* rightTab=splitVisible ? model.find(workspace.right) : nullptr;
- const BOOL anyHome=(tab && tab->url=="about:blank") ||
-  (leftTab && leftTab->url=="about:blank") || (rightTab && rightTab->url=="about:blank");
+ BOOL anyBlankSplit=NO;
+ if(splitVisible) {
+  for(TabId pid : workspace.active_tabs()) {
+   const auto* pt=model.find(pid);
+   if(pt && pt->url=="about:blank") { anyBlankSplit=YES; break; }
+  }
+ }
+ const BOOL anyHome=(tab && tab->url=="about:blank") || anyBlankSplit;
  const BOOL homeChanged=self.homeView.hidden==anyHome;
  if(!listChanged && !stripChanged && !tabChanged && !selectChanged && !homeChanged && !splitChanged) {
   if(tab) {
@@ -9900,9 +10221,12 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.displayedTab=id;
   self.displayedSplitLeft=workspace.left;
   self.displayedSplitRight=workspace.right;
+  self.displayedSplitSignature=splitSig;
   // Keep window title static ("Slate") to prevent AppKit's -[NSThemeFrame _updateTitleProperties:animated:YES] from animating traffic lights on tab switch.
  if(tabChanged || homeChanged) [self applyPlateChrome];
  }
+ if(splitVisible && anyBlankSplit) [self rebuildSplitBlankPicker];
+ else if(self.splitBlankPicker) self.splitBlankPicker.hidden=YES;
  [self syncPageGeometry];
  self.verticalMenuItem.state=self.verticalTabs ? NSControlStateValueOn : NSControlStateValueOff;
  if(self.hideTabsMenuItem)
@@ -9915,10 +10239,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const BOOL tabChanged=self.displayedTab!=id;
  const BOOL splitVisible=workspace.visible_for(id);
  const auto* tab=model.find(id);
- const auto* left=splitVisible ? model.find(workspace.left) : nullptr;
- const auto* right=splitVisible ? model.find(workspace.right) : nullptr;
- self.homeView.hidden=!((tab && tab->url=="about:blank") ||
-  (left && left->url=="about:blank") || (right && right->url=="about:blank"));
+ BOOL anyBlankSplit=NO;
+ if(splitVisible) {
+  for(TabId pid : workspace.active_tabs()) {
+   const auto* pt=model.find(pid);
+   if(pt && pt->url=="about:blank") { anyBlankSplit=YES; break; }
+  }
+ }
+ self.homeView.hidden=!((tab && tab->url=="about:blank") || anyBlankSplit);
  self.placeholder.hidden=model.live(id) || (tab && tab->url=="about:blank");
  // Size the incoming pane containers before attaching/showing their WebKit
  // hosts. The chrome and tab-list repaint can run on the next main-loop turn.
@@ -9931,9 +10259,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   if(!item.host) continue;
   if(show) {
    item.hide_scheduled=false;
-   NSView* pageParent=splitVisible
-    ? (identifier==workspace.left ? self.splitLeftPane : self.splitRightPane)
-    : self.content;
+   NSView* pageParent=self.content;
+   if(splitVisible) {
+    const int pIdx=workspace.pane_index(identifier);
+    if(pIdx>=0 && pIdx<(int)self.splitPanes.count) pageParent=self.splitPanes[pIdx];
+   }
    if(pageParent && item.host.superview!=pageParent) {
     if(pageParent==self.content) [self.content addSubview:item.host positioned:NSWindowBelow relativeTo:self.homeView];
     else [pageParent addSubview:item.host];
@@ -9980,7 +10310,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  // Sorting preserves window attachment, unlike removing and re-adding pages.
  NSMutableArray<NSView*>* order=[self.content.subviews mutableCopy];
  NSMutableArray<NSView*>* slots=[NSMutableArray array];
- if(splitVisible) [slots addObjectsFromArray:@[self.splitLeftPane,self.splitRightPane]];
+ if(splitVisible) {
+  const size_t n=MIN(workspace.pane_count(), self.splitPanes.count);
+  for(size_t i=0;i<n;++i) [slots addObject:self.splitPanes[i]];
+ }
  else if(auto it=runtimes.find(id);it!=runtimes.end() && it->second.host.superview==self.content)
   [slots addObject:it->second.host];
  for(NSView* slot in slots) {
@@ -10011,10 +10344,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  if(event.type==NSEventTypeLeftMouseDown || event.type==NSEventTypeRightMouseDown || event.type==NSEventTypeOtherMouseDown) {
   NSPoint point=[self.content convertPoint:event.locationInWindow fromView:nil];
   interacts=NSPointInRect(point,self.content.bounds);
-  if(interacts && workspace.visible_for(model.selected())) {
-   const CGFloat cut=round(NSWidth(self.content.bounds)*workspace.clamped_ratio(NSWidth(self.content.bounds)));
-   const TabId pane=point.x<cut ? workspace.left : workspace.right;
-   if(pane && pane!=model.selected()) [self activateTab:pane];
+  if(interacts && workspace.visible_for(model.selected()) && !workspace.collapsed_for_width(NSWidth(self.content.bounds))) {
+   const auto tabs=workspace.active_tabs();
+   TabId hitPane=0;
+   for(size_t i=0;i<tabs.size() && i<self.splitPanes.count;++i) {
+    NSView* paneView=self.splitPanes[i];
+    if(!paneView.hidden && NSPointInRect(point, paneView.frame)) { hitPane=tabs[i]; break; }
+   }
+   if(hitPane && hitPane!=model.selected()) [self activateTab:hitPane];
   }
  } else if(event.type==NSEventTypeKeyDown) {
   NSResponder* responder=self.window.firstResponder;
@@ -10156,6 +10493,47 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  [self scheduleSave];
  return YES;
 }
+- (BOOL)addTabToActiveSplit:(TabId)identifier neighbour:(TabId)neighbour before:(BOOL)before {
+ if(self.quitting || !model.find(identifier) || model.closing(identifier)) return NO;
+ [self hideSplitDrag];
+ if(!workspace.visible_for(model.selected()) || workspace.is_full() || workspace.member(identifier)) {
+  NSBeep(); return NO;
+ }
+ if(!workspace.add_pane(identifier, neighbour, before)) { NSBeep(); return NO; }
+ // Keep split members adjacent in the tab strip order.
+ const auto tabs=workspace.active_tabs();
+ const auto* firstTab=model.find(tabs.front());
+ const auto* addedTab=model.find(identifier);
+ if(firstTab && addedTab && !firstTab->pinned && !addedTab->pinned && firstTab->group_id==addedTab->group_id) {
+  const int idx=workspace.pane_index(identifier);
+  if(idx>=0 && static_cast<size_t>(idx+1)<tabs.size()) {
+   model.move_tab_before(identifier, tabs[idx+1]);
+  } else if(idx>0) {
+   TabId afterPrev=0;
+   BOOL passedPrev=NO;
+   for(const auto& t : model.tabs()) {
+    if(t.id==tabs[idx-1]) { passedPrev=YES; continue; }
+    if(passedPrev && t.id!=identifier && !t.pinned && t.group_id==firstTab->group_id) { afterPrev=t.id; break; }
+   }
+   model.move_tab_before(identifier, afterPrev);
+  }
+ }
+ self.splitInstalling=YES;
+ for(TabId pid : tabs) {
+  const auto* pt=model.find(pid);
+  if(pt && pt->url!="about:blank" && !model.closing(pid) && !runtimes.contains(pid)) {
+   [self activateTab:pid];
+  }
+ }
+ [self activateTab:identifier];
+ self.splitInstalling=NO;
+ self.displayedSplitLeft=0;
+ self.displayedSplitRight=0;
+ self.displayedSplitSignature=@"";
+ [self refresh];
+ [self scheduleSave];
+ return YES;
+}
 - (BOOL)isSplitPlaceholderTab:(TabId)identifier {
  const auto* tab=model.find(identifier);
  return tab && tab->url=="about:blank" && workspace.member(identifier);
@@ -10166,20 +10544,77 @@ static SlateThemePanel* s_sharedThemePanel = nil;
     !model.find(identifier) || model.closing(identifier) || workspace.member(identifier) ||
     !workspace.member(empty)) return NO;
  workspace.select(empty);
- const slate::SplitSide side=workspace.left==empty ? slate::SplitSide::Left : slate::SplitSide::Right;
- workspace.replace(identifier,side);
+ workspace.replace_tab(empty, identifier);
  self.splitInstalling=YES;
  [self activateTab:identifier];
  self.splitInstalling=NO;
  [self performClose:empty reason:slate::CloseReason::Remove];
  self.displayedSplitLeft=0;
  self.displayedSplitRight=0;
+ self.displayedSplitSignature=@"";
  [self refresh];
  [self scheduleSave];
  return YES;
 }
+- (void)bringOpenTabIntoBlankSplit:(NSButton*)sender {
+ const TabId openId=(TabId)sender.tag;
+ if(!openId || !workspace.visible_for(model.selected())) return;
+ TabId blankId=0;
+ for(TabId pid : workspace.active_tabs()) {
+  const auto* pt=model.find(pid);
+  if(pt && pt->url=="about:blank") { blankId=pid; break; }
+ }
+ if(blankId) [self replaceEmptySplitTab:blankId withTab:openId];
+}
+- (void)rebuildSplitBlankPicker {
+ if(!self.splitBlankPicker) return;
+ for(NSView* sub in [self.splitBlankPicker.subviews copy]) [sub removeFromSuperview];
+ if(!workspace.visible_for(model.selected())) { self.splitBlankPicker.hidden=YES; return; }
+ NSMutableArray<NSNumber*>* candidates=[NSMutableArray array];
+ for(const auto& t : model.tabs()) {
+  if(t.url=="about:blank" || workspace.contains(t.id) || model.closing(t.id)) continue;
+  [candidates addObject:@(t.id)];
+  if(candidates.count >= 6) break;
+ }
+ if(!candidates.count) { self.splitBlankPicker.hidden=YES; return; }
+ const BOOL dark=[self isDarkAppearance];
+ NSColor* accent=SplitAccentBorderColor(self.accentId, self.accentHex, dark);
+ self.splitBlankPicker.layer.backgroundColor=[(dark ? [NSColor colorWithCalibratedWhite:0.13 alpha:0.92] : [NSColor colorWithCalibratedWhite:0.99 alpha:0.94]) CGColor];
+ self.splitBlankPicker.layer.borderColor=[accent colorWithAlphaComponent:0.35].CGColor;
+ const CGFloat rowH=30.0;
+ const CGFloat headerH=26.0;
+ const CGFloat pad=10.0;
+ const CGFloat totalH=pad + headerH + candidates.count * rowH + pad;
+ self.splitBlankPicker.frame=NSMakeRect(NSMinX(self.splitBlankPicker.frame), NSMinY(self.splitBlankPicker.frame), 280, totalH);
+ NSTextField* header=[NSTextField labelWithString:@"Or bring in an open tab"];
+ header.font=[NSFont systemFontOfSize:11.5 weight:NSFontWeightMedium];
+ header.textColor=NSColor.secondaryLabelColor;
+ header.frame=NSMakeRect(14, totalH - pad - 20, 252, 18);
+ [self.splitBlankPicker addSubview:header];
+ for(NSUInteger i=0;i<candidates.count;++i) {
+  const TabId tid=[candidates[i] unsignedLongLongValue];
+  const auto* tab=model.find(tid);
+  if(!tab) continue;
+  NSButton* btn=[[NSButton alloc] initWithFrame:NSMakeRect(8, totalH - pad - headerH - (i+1)*rowH, 264, rowH - 2)];
+  btn.bordered=NO;
+  btn.wantsLayer=YES;
+  btn.layer.cornerRadius=7;
+  btn.layer.backgroundColor=[NSColor.labelColor colorWithAlphaComponent:dark ? 0.06 : 0.04].CGColor;
+  btn.alignment=NSTextAlignmentLeft;
+  btn.font=[NSFont systemFontOfSize:12.5];
+  btn.title=[NSString stringWithFormat:@"  %@", TabLabel(*tab)];
+  btn.image=[self iconForTab:*tab];
+  btn.imagePosition=NSImageLeft;
+  btn.imageScaling=NSImageScaleProportionallyDown;
+  btn.tag=(NSInteger)tid;
+  btn.target=self;
+  btn.action=@selector(bringOpenTabIntoBlankSplit:);
+  [self.splitBlankPicker addSubview:btn];
+ }
+ self.splitBlankPicker.hidden=NO;
+}
 - (void)exitSplitView:(id)sender {
- const TabId target=[sender isKindOfClass:NSMenuItem.class]
+ const TabId target=[sender isKindOfClass:NSMenuItem.class] && ((NSMenuItem*)sender).representedObject
   ? (TabId)[((NSMenuItem*)sender).representedObject unsignedLongLongValue] : model.selected();
  if(!workspace.member(target)) return;
  workspace.select(target);
@@ -10187,11 +10622,44 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  workspace.select(model.selected());
  self.displayedSplitLeft=0;
  self.displayedSplitRight=0;
+ self.displayedSplitSignature=@"";
  [self refresh];
  [self scheduleSave];
 }
+- (void)detachSplitPane:(id)sender {
+ const TabId target=[sender isKindOfClass:NSMenuItem.class] && ((NSMenuItem*)sender).representedObject
+  ? (TabId)[((NSMenuItem*)sender).representedObject unsignedLongLongValue] : model.selected();
+ if(!workspace.member(target)) return;
+ workspace.remove(target);
+ workspace.select(model.selected());
+ self.displayedSplitLeft=0;
+ self.displayedSplitRight=0;
+ self.displayedSplitSignature=@"";
+ [self refresh];
+ [self scheduleSave];
+}
+- (void)evenSplitPanes:(id)sender {
+ (void)sender;
+ if(!workspace.visible_for(model.selected())) return;
+ workspace.even();
+ [self syncPageGeometry];
+ [self scheduleSave];
+}
+- (void)addBlankPaneToSplit:(id)sender {
+ (void)sender;
+ if(!workspace.visible_for(model.selected()) || workspace.is_full()) { NSBeep(); return; }
+ try {
+  const TabId empty=model.add("about:blank");
+  [self addTabToActiveSplit:empty neighbour:model.selected() before:NO];
+ } catch(const std::exception&) { NSBeep(); }
+}
+- (void)addTabToSplitFromMenu:(NSMenuItem*)sender {
+ const TabId identifier=(TabId)[sender.representedObject unsignedLongLongValue];
+ if(!identifier || !model.find(identifier)) return;
+ [self addTabToActiveSplit:identifier neighbour:model.selected() before:NO];
+}
 - (void)swapSplitSides:(id)sender {
- const TabId target=[sender isKindOfClass:NSMenuItem.class]
+ const TabId target=[sender isKindOfClass:NSMenuItem.class] && ((NSMenuItem*)sender).representedObject
   ? (TabId)[((NSMenuItem*)sender).representedObject unsignedLongLongValue] : model.selected();
  if(!workspace.member(target)) return;
  workspace.select(target);
@@ -10199,6 +10667,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  workspace.select(model.selected());
  self.displayedSplitLeft=0;
  self.displayedSplitRight=0;
+ self.displayedSplitSignature=@"";
  [self refresh];
  [self scheduleSave];
 }
@@ -10211,28 +10680,65 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   return;
  }
  if(selected==identifier) {
-  // The menu explicitly asks for a new split with the current page, so an
-  // empty companion is intentional here. Dragging never takes this path.
   try {
    const TabId empty=model.add("about:blank");
    [self openSplitWithTab:empty side:side base:identifier];
   } catch(const std::exception&) { NSBeep(); }
  } else if(workspace.member(selected)) {
-  // Preserve the visible pair when opening a new pair from a tab menu.
-  try {
-   const TabId empty=model.add("about:blank");
-   [self openSplitWithTab:identifier side:side base:empty];
-  } catch(const std::exception&) { NSBeep(); }
+  if(!workspace.is_full()) {
+   [self addTabToActiveSplit:identifier neighbour:selected before:(side==slate::SplitSide::Left)];
+  } else {
+   try {
+    const TabId empty=model.add("about:blank");
+    [self openSplitWithTab:identifier side:side base:empty];
+   } catch(const std::exception&) { NSBeep(); }
+  }
  } else {
   [self openSplitWithTab:identifier side:side base:selected];
  }
 }
-- (void)setSplitRatioAtWindowPoint:(NSPoint)point {
+- (void)setSplitDivider:(NSInteger)dividerIndex atWindowPoint:(NSPoint)point {
  if(!workspace.visible_for(model.selected()) || NSWidth(self.content.bounds)<1) return;
+ const size_t n=workspace.pane_count();
+ if(n < 2 || dividerIndex < 0 || static_cast<size_t>(dividerIndex) + 1 >= n) return;
+ const CGFloat totalW=NSWidth(self.content.bounds);
+ const CGFloat gutter=7.0;
+ const CGFloat inset=6.0;
+ const CGFloat availW=MAX(1.0, totalW - 2*inset - gutter * static_cast<CGFloat>(n - 1));
  NSPoint local=[self.content convertPoint:point fromView:nil];
- workspace.ratio=std::clamp((double)local.x/NSWidth(self.content.bounds),0.0,1.0);
- workspace.ratio=workspace.clamped_ratio(NSWidth(self.content.bounds));
+ auto shares=workspace.clamped_sizes(totalW);
+ double prefix=0.0;
+ for(size_t i=0;i<static_cast<size_t>(dividerIndex);++i) prefix += shares[i];
+ const double pairTotal=shares[dividerIndex] + shares[dividerIndex + 1];
+ const CGFloat pairStartX=inset + prefix * availW + static_cast<CGFloat>(dividerIndex) * gutter;
+ CGFloat rawLeftW=local.x - pairStartX - gutter * 0.5;
+ // Magnetic snap to even split (lovesea PaneStage: 15pt snap, 20pt unsnap).
+ const CGFloat evenW=(pairTotal * 0.5) * availW;
+ const CGFloat dist=fabs(rawLeftW - evenW);
+ if(self.splitDividerSnapped) {
+  if(dist < 20.0) rawLeftW=evenW;
+  else self.splitDividerSnapped=NO;
+ } else if(dist <= 15.0) {
+  rawLeftW=evenW;
+  self.splitDividerSnapped=YES;
+  [NSHapticFeedbackManager.defaultPerformer performFeedbackPattern:NSHapticFeedbackPatternAlignment
+                                                   performanceTime:NSHapticFeedbackPerformanceTimeNow];
+ }
+ const double least=slate::SplitPair::least_share(n);
+ double newLeft=std::clamp(static_cast<double>(rawLeftW) / availW, least, MAX(least, pairTotal - least));
+ shares[dividerIndex]=newLeft;
+ shares[dividerIndex + 1]=MAX(least, pairTotal - newLeft);
+ if(n == 2) {
+  workspace.ratio=shares[0];
+  workspace.ratio=workspace.clamped_ratio(totalW);
+  workspace.set_sizes({workspace.ratio, 1.0 - workspace.ratio});
+ } else {
+  workspace.set_sizes(shares);
+ }
  [self syncPageGeometry];
+}
+- (void)setSplitRatioAtWindowPoint:(NSPoint)point {
+ [self setSplitDivider:0 atWindowPoint:point];
 }
 - (void)finishSplitResize { [self scheduleSave]; }
 - (void)hideSplitDrag {
@@ -10247,9 +10753,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  self.splitPreviewTarget=0;
  self.splitOverlay.hidden=YES;
  self.splitOverlay.alphaValue=1;
+ if(self.splitHintOverlay) self.splitHintOverlay.hidden=YES;
+ for(NSView* card in self.splitPreviewCards) card.hidden=YES;
+ if(self.splitPreview) self.splitPreview.hidden=YES;
 }
 - (BOOL)updateTabSplitIntent:(TabId)source target:(TabId)target side:(slate::SplitSide)side atWindowPoint:(NSPoint)point {
- // Strip targets never arm a split. Releasing a pair half there separates it.
  [self hideSplitDrag]; return NO;
 }
 - (NSPoint)splitDragPointer {
@@ -10279,44 +10787,130 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  TabId target=base;
  NSInteger candidate=0;
  int zone=1;
+ BOOL addingToExistingSplit=NO;
  NSRect page=self.content.bounds;
  if(workspace.visible_for(model.selected())) {
-  CGFloat divider=NSWidth(page)*workspace.clamped_ratio(NSWidth(page));
-  target=point.x<divider ? workspace.left : workspace.right;
-  if(![self isSplitPlaceholderTab:target]) { [self hideSplitDrag]; return; }
-  page=target==workspace.left ? NSMakeRect(0,0,divider,NSHeight(page)) : NSMakeRect(divider,0,NSWidth(page)-divider,NSHeight(page));
-  const int shown=self.splitPreviewTarget==target ? (self.splitDropSide ? (point.x<NSMidX(page) ? 1 : 2) : 0) : 0;
-  if(slate::SplitDragIntent::edge_side(NSWidth(page),point.x-NSMinX(page),shown)) candidate=target==workspace.left ? 1 : 2;
-  zone=3;
+  // Find which existing split pane the pointer is over.
+  const auto activeTabs=workspace.active_tabs();
+  NSRect hitRect=page;
+  TabId hitTab=0;
+  for(size_t i=0;i<activeTabs.size() && i<self.splitPanes.count;++i) {
+   NSView* pv=self.splitPanes[i];
+   if(!pv.hidden && NSPointInRect(point, pv.frame)) { hitTab=activeTabs[i]; hitRect=pv.frame; break; }
+  }
+  if(!hitTab && !activeTabs.empty()) hitTab=activeTabs.front();
+  target=hitTab;
+  if([self isSplitPlaceholderTab:target]) {
+   const int shown=self.splitPreviewTarget==target ? (int)self.splitDropSide : 0;
+   if(slate::SplitDragIntent::edge_side(NSWidth(hitRect), point.x - NSMinX(hitRect), shown)) {
+    candidate=(point.x < NSMidX(hitRect)) ? 1 : 2;
+   }
+   zone=3;
+  } else if(!workspace.is_full()) {
+   // lovesea parity: dragging a tab onto the edge of an active 2- or 3-pane split adds a 3rd/4th pane!
+   const int shown=self.splitDraggedTab==identifier && self.splitPreviewTarget==target ? (int)self.splitDropSide : 0;
+   candidate=slate::SplitDragIntent::edge_side(NSWidth(hitRect), point.x - NSMinX(hitRect), shown);
+   addingToExistingSplit=YES;
+   zone=2;
+  } else {
+   [self hideSplitDrag]; return;
+  }
  } else if(model.find(base) && !model.closing(base) && workspace.open_action(identifier,base)==slate::SplitOpenAction::PairWithBase) {
   const int shown=self.splitDraggedTab==identifier && self.splitPreviewTarget==target ? (int)self.splitDropSide : 0;
   candidate=slate::SplitDragIntent::edge_side(NSWidth(page),point.x,shown);
  } else { [self hideSplitDrag]; return; }
- if(!candidate) { [self hideSplitDrag]; return; }
+
+ if(!candidate) {
+  // Over the middle of a splittable page: show faint edge drop hints (lovesea SplitDropHint).
+  self.splitOverlay.hidden=YES;
+  self.splitDropSide=0;
+  self.splitPreviewTarget=0;
+  if(self.splitHintOverlay) {
+   [self layoutSplitOverlay];
+   self.splitHintOverlay.hidden=NO;
+  }
+  return;
+ }
  const BOOL armed=splitIntent.update(identifier,target,zone,(int)candidate,point.x,point.y,CACurrentMediaTime());
  if(!armed) {
-  self.splitOverlay.hidden=YES; self.splitDropSide=0; self.splitPreviewTarget=0; return;
+  self.splitOverlay.hidden=YES; self.splitDropSide=0; self.splitPreviewTarget=0;
+  if(self.splitHintOverlay) { [self layoutSplitOverlay]; self.splitHintOverlay.hidden=NO; }
+  return;
  }
  const BOOL changed=self.splitOverlay.hidden || self.splitDropSide!=candidate || self.splitPreviewTarget!=target;
  self.splitDraggedTab=identifier; self.splitPreviewTarget=target;
  self.splitDragBaseTab=base; self.splitDropSide=candidate;
+ if(self.splitHintOverlay) self.splitHintOverlay.hidden=YES;
  self.splitOverlay.hidden=NO; self.splitOverlay.alphaValue=1;
- self.splitLeftTarget.hidden=candidate!=1; self.splitRightTarget.hidden=candidate!=2;
- const auto* tab=model.find(identifier);
- self.splitPreviewTitle.stringValue=tab ? TabLabel(*tab) : @"Tab";
- self.splitPreviewIcon.image=tab ? [self iconForTab:*tab] : nil;
- NSColor* accent=ChromeAccent(self.accentId,self.accentHex,[self isDarkAppearance]);
- NSView* panel=candidate==1 ? self.splitLeftTarget : self.splitRightTarget;
- panel.layer.backgroundColor=[accent colorWithAlphaComponent:0.16].CGColor;
- panel.layer.borderWidth=2; panel.layer.borderColor=[accent colorWithAlphaComponent:0.7].CGColor;
- ((NSImageView*)SplitChild(panel,@"split-icon")).contentTintColor=accent;
- NSTextField* label=(NSTextField*)SplitChild(panel,@"split-label");
- label.stringValue=@"Release to split"; label.textColor=NSColor.labelColor;
- self.splitPreview.frame=NSMakeRect(NSMidX(panel.frame)-105,NSMidY(panel.frame)+48,210,50);
+
+ // Build live multi-pane drop preview (lovesea SplitDropPreview) with Settings accent outer line!
+ const BOOL dark=[self isDarkAppearance];
+ NSColor* accent=SplitAccentBorderColor(self.accentId, self.accentHex, dark);
+ const auto* carriedTab=model.find(identifier);
+ NSString* carriedTitle=carriedTab ? TabLabel(*carriedTab) : @"New Tab";
+ NSMutableArray<NSDictionary*>* slots=[NSMutableArray array];
+ if(workspace.visible_for(model.selected()) && addingToExistingSplit) {
+  for(TabId pid : workspace.active_tabs()) {
+   const auto* pt=model.find(pid);
+   NSString* title=pt ? TabLabel(*pt) : @"Page";
+   if(pid == target && candidate == 1) [slots addObject:@{@"title":carriedTitle, @"proposed":@YES}];
+   [slots addObject:@{@"title":title, @"proposed":@NO}];
+   if(pid == target && candidate == 2) [slots addObject:@{@"title":carriedTitle, @"proposed":@YES}];
+  }
+ } else if(workspace.visible_for(model.selected())) {
+  for(TabId pid : workspace.active_tabs()) {
+   const auto* pt=model.find(pid);
+   if(pid == target) [slots addObject:@{@"title":carriedTitle, @"proposed":@YES}];
+   else [slots addObject:@{@"title":pt ? TabLabel(*pt) : @"Page", @"proposed":@NO}];
+  }
+ } else {
+  const auto* baseTab=model.find(target);
+  NSString* baseTitle=baseTab ? TabLabel(*baseTab) : @"Page";
+  if(candidate == 1) {
+   [slots addObject:@{@"title":carriedTitle, @"proposed":@YES}];
+   [slots addObject:@{@"title":baseTitle, @"proposed":@NO}];
+  } else {
+   [slots addObject:@{@"title":baseTitle, @"proposed":@NO}];
+   [slots addObject:@{@"title":carriedTitle, @"proposed":@YES}];
+  }
+ }
+
+ const NSRect bounds=self.splitOverlay.bounds;
+ const CGFloat margin=10.0;
+ const CGFloat gap=7.0;
+ const NSUInteger count=MIN(slots.count, self.splitPreviewCards.count);
+ const CGFloat slotW=count > 0 ? MAX(0, (NSWidth(bounds) - 2*margin - gap*(count - 1)) / (CGFloat)count) : 0;
+ const CGFloat slotH=MAX(0, NSHeight(bounds) - 2*margin);
+ for(NSUInteger i=0;i<self.splitPreviewCards.count;++i) {
+  NSView* card=self.splitPreviewCards[i];
+  if(i >= count) { card.hidden=YES; continue; }
+  NSDictionary* info=slots[i];
+  const BOOL proposed=[info[@"proposed"] boolValue];
+  card.hidden=NO;
+  card.frame=NSMakeRect(margin + i*(slotW + gap), margin, slotW, slotH);
+  card.layer.cornerRadius=12;
+  if(proposed) {
+   card.layer.backgroundColor=[accent colorWithAlphaComponent:dark ? 0.22 : 0.14].CGColor;
+   card.layer.borderWidth=2.0;
+   card.layer.borderColor=accent.CGColor;
+  } else {
+   card.layer.backgroundColor=[(dark ? [NSColor colorWithCalibratedWhite:0.12 alpha:0.55] : [NSColor colorWithCalibratedWhite:1.0 alpha:0.55]) CGColor];
+   card.layer.borderWidth=1.0;
+   card.layer.borderColor=[NSColor.labelColor colorWithAlphaComponent:0.16].CGColor;
+  }
+  NSImageView* icon=(NSImageView*)SplitChild(card,@"split-icon");
+  NSTextField* label=(NSTextField*)SplitChild(card,@"split-label");
+  icon.hidden=!proposed;
+  icon.frame=NSMakeRect(round((slotW - 22)/2), round(slotH/2 + 8), 22, 22);
+  icon.contentTintColor=accent;
+  label.stringValue=info[@"title"];
+  label.textColor=proposed ? NSColor.labelColor : NSColor.secondaryLabelColor;
+  label.frame=NSMakeRect(12, round(slotH/2 - 18), MAX(0, slotW - 24), 20);
+ }
+ if(self.splitPreview) self.splitPreview.hidden=YES;
  if(changed) [NSHapticFeedbackManager.defaultPerformer performFeedbackPattern:NSHapticFeedbackPatternAlignment performanceTime:NSHapticFeedbackPerformanceTimeNow];
 }
 - (BOOL)finishSplitDragAtScreenPoint:(NSPoint)screenPoint tab:(TabId)identifier base:(TabId)base {
- // A release can validate an already shown preview; it cannot create one.
  const BOOL shown=!self.splitOverlay.hidden && self.splitDraggedTab==identifier && self.splitDropSide!=0;
  const NSInteger previousSide=self.splitDropSide;
  const TabId previousTarget=self.splitPreviewTarget;
@@ -10326,7 +10920,11 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const BOOL valid=shown && side==previousSide && target==previousTarget;
  [self hideSplitDrag];
  if(!valid || !side) return NO;
- if(workspace.visible_for(model.selected())) return [self replaceEmptySplitTab:target withTab:identifier];
+ if(workspace.visible_for(model.selected())) {
+  if([self isSplitPlaceholderTab:target]) return [self replaceEmptySplitTab:target withTab:identifier];
+  if(!workspace.is_full()) return [self addTabToActiveSplit:identifier neighbour:target before:(side==1)];
+  return NO;
+ }
  return [self openSplitWithTab:identifier side:side==1 ? slate::SplitSide::Left : slate::SplitSide::Right base:target];
 }
 // Slate note: Selecting an unloaded tab creates its runtime on demand; selecting an already loaded tab

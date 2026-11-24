@@ -101,4 +101,30 @@ int main() {
  placeholders.replace(22,slate::SplitSide::Right);
  assert(placeholders.same_pair(20,22) && placeholders.same_pair(10,11));
  assert(!placeholders.member(21) && placeholders.pairs().size()==2);
+
+ // Multi-pane splits (3–4 panes, lovesea TabSplit parity).
+ slate::WorkspaceLayout quad;
+ assert(quad.open(100,101,slate::SplitSide::Right));
+ assert(quad.pane_count()==2 && !quad.is_full());
+ assert(quad.add_pane(102, 101, false));
+ assert(quad.pane_count()==3 && !quad.is_full());
+ assert(quad.active_tabs().size()==3 && quad.active_tabs()[0]==100 && quad.active_tabs()[1]==101 && quad.active_tabs()[2]==102);
+ assert(quad.add_pane(103, 100, true));
+ assert(quad.pane_count()==4 && quad.is_full());
+ assert(quad.active_tabs()[0]==103 && quad.active_tabs()[1]==100 && quad.active_tabs()[2]==101 && quad.active_tabs()[3]==102);
+ assert(!quad.add_pane(104)); // Max 4 panes
+ assert(quad.collapsed_for_width(900));  // 4 * 250 = 1000
+ assert(!quad.collapsed_for_width(1100));
+ quad.set_sizes({0.02, 0.5, 0.3, 0.18});
+ auto clamped = quad.active_sizes();
+ assert(clamped.size()==4 && clamped[0]>=0.099);
+ quad.even();
+ for (double s : quad.active_sizes()) assert(std::abs(s - 0.25) < 0.001);
+ // Removing a pane from a 4-pane split keeps the remaining 3 panes split.
+ assert(quad.remove(101) == 102);
+ assert(quad.split() && quad.pane_count()==3 && !quad.contains(101));
+ assert(quad.remove(103) == 100);
+ assert(quad.split() && quad.pane_count()==2);
+ assert(quad.remove(100) == 102);
+ assert(!quad.split());
 }
