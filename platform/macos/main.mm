@@ -866,6 +866,8 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)hideSplitDrag;
 - (void)beginSidebarTabGesture:(TabId)identifier;
 - (TabId)sidebarTabAtRow:(NSInteger)row;
+- (TabId)activeTabForSidebarDragExcluding:(TabId)identifier;
+- (BOOL)reorderSidebarTab:(TabId)draggedTabId toRow:(NSInteger)row;
 - (TabId)sidebarDraggedTab:(id<NSDraggingInfo>)info;
 - (NSDragOperation)updateSidebarPageDrop:(id<NSDraggingInfo>)info;
 - (void)endSidebarTabGesture:(TabId)identifier;
@@ -1055,15 +1057,93 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @end
 @implementation SlateSidebarTable
 - (void)mouseDown:(NSEvent*)event {
- const NSInteger row=[self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
- const TabId tab=[self.owner sidebarTabAtRow:row];
- if(tab) [self.owner beginSidebarTabGesture:tab];
- [super mouseDown:event];
- if(tab) {
-  if(self.owner.splitDragCandidateTab==tab)
-   [self.owner handleTabClick:tab doubleClick:event.clickCount>=2];
-  [self.owner endSidebarTabGesture:tab];
+ const NSPoint startLocal = [self convertPoint:event.locationInWindow fromView:nil];
+ const NSInteger startRow = [self rowAtPoint:startLocal];
+ const TabId tab = [self.owner sidebarTabAtRow:startRow];
+ if(!tab || !self.owner) {
+  [super mouseDown:event];
+  return;
  }
+ SlateDelegate* delegate = self.owner;
+ NSWindow* dragWindow = self.window;
+ const NSPoint startScreen = [dragWindow convertPointToScreen:event.locationInWindow];
+ const TabId baseTab = [delegate activeTabForSidebarDragExcluding:tab];
+ BOOL isDragging = NO;
+ BOOL cancelled = NO;
+ NSInteger lastReorderRow = startRow;
+
+ while(YES) {
+  NSEvent* nextEvent = [dragWindow nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp | NSEventMaskKeyDown)];
+  if(!nextEvent) break;
+  if(nextEvent.type == NSEventTypeKeyDown) {
+   if(nextEvent.keyCode == 53) { // Escape cancels drag
+    cancelled = YES;
+    break;
+   }
+   continue;
+  }
+  const NSPoint curScreen = [dragWindow convertPointToScreen:nextEvent.locationInWindow];
+  if(nextEvent.type == NSEventTypeLeftMouseDragged) {
+   if(!isDragging && hypot(curScreen.x - startScreen.x, curScreen.y - startScreen.y) > 5.0) {
+    isDragging = YES;
+    delegate.splitSourceTab = tab;
+    delegate.splitDragBaseTab = baseTab;
+    delegate.splitDragCancelled = NO;
+    [NSCursor.closedHandCursor push];
+   }
+   if(!isDragging) continue;
+
+   const NSPoint winPt = [dragWindow convertPointFromScreen:curScreen];
+   const NSPoint listPt = [self convertPoint:winPt fromView:nil];
+   const NSPoint sidePt = [delegate.sidebar convertPoint:winPt fromView:nil];
+   const BOOL overSidebar = delegate.sidebar && NSPointInRect(sidePt, delegate.sidebar.bounds);
+   const NSPoint pagePt = [delegate.content convertPoint:winPt fromView:nil];
+   const BOOL overPage = delegate.content && NSPointInRect(pagePt, delegate.content.bounds);
+
+   if(overSidebar) {
+    [delegate hideSplitDrag];
+    const NSInteger hoverRow = [self rowAtPoint:listPt];
+    if(hoverRow >= 0 && hoverRow != lastReorderRow) {
+     if([delegate reorderSidebarTab:tab toRow:hoverRow]) {
+      lastReorderRow = hoverRow;
+     }
+    }
+   } else if(overPage) {
+    [delegate updateSplitDragAtScreenPoint:curScreen tab:tab base:baseTab];
+   } else {
+    [delegate hideSplitDrag];
+   }
+  } else if(nextEvent.type == NSEventTypeLeftMouseUp) {
+   if(isDragging) [NSCursor pop];
+   if(!isDragging) {
+    [delegate handleTabClick:tab doubleClick:event.clickCount >= 2];
+   } else if(!cancelled) {
+    const NSPoint winPt = [dragWindow convertPointFromScreen:curScreen];
+    const NSPoint pagePt = [delegate.content convertPoint:winPt fromView:nil];
+    const BOOL overPage = delegate.content && NSPointInRect(pagePt, delegate.content.bounds);
+    BOOL handled = NO;
+    if(overPage) {
+     handled = [delegate finishSplitDragAtScreenPoint:curScreen tab:tab base:baseTab];
+    } else if([delegate dropTab:tab atScreenPoint:curScreen]) {
+     handled = YES;
+    } else {
+     const BOOL outsideWindow = !NSPointInRect(curScreen, NSInsetRect(dragWindow.frame, -16, -16));
+     if(outsideWindow) {
+      [delegate hideSplitDrag];
+      [delegate tearOffTab:tab atScreenPoint:curScreen];
+      handled = YES;
+     }
+    }
+    if(!handled) [delegate hideSplitDrag];
+   }
+   break;
+  }
+ }
+ if(cancelled && isDragging) [NSCursor pop];
+ delegate.splitSourceTab = 0;
+ delegate.splitDragBaseTab = 0;
+ delegate.splitDragCandidateTab = 0;
+ [delegate hideSplitDrag];
 }
 @end
 #if defined(SLATE_ENABLE_VERIFY)
@@ -2743,14 +2823,11 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  [CATransaction commit];
 }
 - (void)mouseDown:(NSEvent*)event {
- if(self.owner && self.tabId) [self.owner beginSidebarTabGesture:self.tabId];
- else if(self.owner && self.groupId) [self.owner toggleGroupCollapsed:self.groupId];
- [super mouseDown:event];
- if(self.owner && self.tabId) {
-  if(self.owner.splitDragCandidateTab==self.tabId)
-   [self.owner handleTabClick:self.tabId doubleClick:event.clickCount>=2];
-  [self.owner endSidebarTabGesture:self.tabId];
+ if(self.owner && self.groupId && !self.tabId) {
+  [self.owner toggleGroupCollapsed:self.groupId];
+  return;
  }
+ [super mouseDown:event];
 }
 @end
 
@@ -9027,6 +9104,37 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (TabId)sidebarTabAtRow:(NSInteger)row {
  const auto rows=[self sidebarRows];
  return row>=0 && (size_t)row<rows.size() && rows[row].kind==SideRow::Kind::Tab ? rows[row].tab : 0;
+}
+- (TabId)activeTabForSidebarDragExcluding:(TabId)identifier {
+ const TabId sel = model.selected();
+ if(sel && sel != identifier && model.find(sel) && !model.closing(sel)) return sel;
+ // If dragging the currently selected tab, pick the nearest non-closing partner tab if any.
+ for(const auto& t : model.tabs()) {
+  if(t.id != identifier && !model.closing(t.id)) return t.id;
+ }
+ return 0;
+}
+- (BOOL)reorderSidebarTab:(TabId)draggedTabId toRow:(NSInteger)row {
+ const auto rows=[self sidebarRows];
+ if(row < 0 || static_cast<size_t>(row) >= rows.size()) return NO;
+ if(rows[row].kind == SideRow::Kind::Tab) {
+  const TabId target = rows[row].tab;
+  if(!target || target == draggedTabId) return NO;
+  if(workspace.member(draggedTabId)) {
+   if(workspace.same_pair(draggedTabId, target)) return NO;
+   workspace.remove(draggedTabId);
+   self.displayedSplitLeft = 0;
+   self.displayedSplitRight = 0;
+   self.displayedSplitSignature = @"";
+  }
+  const auto* targetTab = model.find(target);
+  if(targetTab) model.set_tab_group(draggedTabId, targetTab->group_id);
+  model.move_tab_before(draggedTabId, target);
+  [self refresh];
+  [self scheduleSave];
+  return YES;
+ }
+ return NO;
 }
 - (TabId)sidebarDraggedTab:(id<NSDraggingInfo>)info {
  if(info.draggingSource!=self.tabList) return 0;
