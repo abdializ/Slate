@@ -874,6 +874,8 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)finishSplitResize;
 - (void)setupSplitViews;
 - (NSInteger)splitSideForTab:(TabId)tab;
+- (NSInteger)splitGroupPositionForTab:(TabId)tab;
+- (NSInteger)splitGroupCountForTab:(TabId)tab;
 - (BOOL)tabInVisibleSplit:(TabId)tab;
 - (void)layoutSplitOverlay;
 - (void)rebuildSplitBlankPicker;
@@ -1710,8 +1712,26 @@ static NSColor* TabGroupColorForId(const std::string& groupId, const std::string
 
  if(self.splitConnected) {
   if(self.tabShapeLayer) self.tabShapeLayer.hidden=YES;
-  self.layer.backgroundColor=NSColor.clearColor.CGColor;
-  self.layer.borderWidth=0;
+  const BOOL inActiveSplit = (delegate && [delegate tabInVisibleSplit:self.tabId]);
+  const BOOL activeDark = delegate.barColor ? ColorIsDark(delegate.barColor) : isDark;
+  if(selected && delegate) {
+   NSColor* accentOuter = SplitAccentBorderColor(delegate.accentId, delegate.accentHex, isDark);
+   self.layer.cornerRadius = 7.0;
+   self.layer.masksToBounds = YES;
+   self.layer.backgroundColor = [accentOuter colorWithAlphaComponent:activeDark ? 0.24 : 0.16].CGColor;
+   self.layer.borderWidth = 0;
+  } else if(self.hovered) {
+   self.layer.cornerRadius = 7.0;
+   self.layer.masksToBounds = YES;
+   NSColor* hoverTone = (inActiveSplit ? activeDark : chromeIsDark)
+    ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.08]
+    : [NSColor colorWithCalibratedWhite:0.0 alpha:0.06];
+   self.layer.backgroundColor = hoverTone.CGColor;
+   self.layer.borderWidth = 0;
+  } else {
+   self.layer.backgroundColor = NSColor.clearColor.CGColor;
+   self.layer.borderWidth = 0;
+  }
   return;
  }
  if(selected) {
@@ -1805,10 +1825,14 @@ static NSColor* TabGroupColorForId(const std::string& groupId, const std::string
 
  NSColor* ink = nil;
  NSColor* textInk = nil;
- if(selected) {
+ const BOOL inActiveSplit = (delegate && [delegate tabInVisibleSplit:self.tabId]);
+ if(selected || inActiveSplit) {
   const BOOL activeDark = delegate.barColor ? ColorIsDark(delegate.barColor) : isDark;
+  const CGFloat textAlpha = selected ? (activeDark ? 0.96 : 0.92) : (hovered ? 0.90 : 0.68);
   ink = activeDark ? [NSColor colorWithCalibratedWhite:0.96 alpha:0.95] : [NSColor colorWithCalibratedWhite:0.11 alpha:0.92];
-  textInk = ink;
+  textInk = activeDark
+   ? [NSColor colorWithCalibratedWhite:0.96 alpha:textAlpha]
+   : [NSColor colorWithCalibratedWhite:0.11 alpha:textAlpha];
  } else {
   const BOOL inactiveDark = chromeIsDark;
   ink = inactiveDark ? [NSColor colorWithCalibratedWhite:0.96 alpha:0.95] : [NSColor colorWithCalibratedWhite:0.11 alpha:0.92];
@@ -1988,7 +2012,10 @@ NSView* SplitChild(NSView* parent, NSString* identifier) {
 @implementation SlatePageSlot
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)info { return [self.owner updateSidebarPageDrop:info]; }
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)info { return [self.owner updateSidebarPageDrop:info]; }
-- (void)draggingExited:(id<NSDraggingInfo>)info { [self.owner hideSplitDrag]; }
+- (void)draggingExited:(id<NSDraggingInfo>)info {
+ NSPoint local = [self convertPoint:info.draggingLocation fromView:nil];
+ if(!NSPointInRect(local, self.bounds)) [self.owner hideSplitDrag];
+}
 - (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)info { return [self.owner updateSidebarPageDrop:info]!=NSDragOperationNone; }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)info {
  const TabId tab=[self.owner sidebarDraggedTab:info];
@@ -2472,8 +2499,9 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  self.speakerButton.contentTintColor = self.owner.accentMuted ?: NSColor.secondaryLabelColor;
  self.pipBadge.hidden = !tab.pip_active;
  const NSInteger splitSide=[self.owner splitSideForTab:tab.id];
+ const NSInteger splitCount=[self.owner splitGroupCountForTab:tab.id];
  self.splitBadge.hidden=!splitSide;
- self.splitBadge.toolTip=splitSide ? (splitSide==1 ? @"Left pane in split view" : @"Right pane in split view") : nil;
+ self.splitBadge.toolTip=splitSide ? [NSString stringWithFormat:@"Pane %ld of %ld in split view",(long)splitSide,(long)MAX(2,splitCount)] : nil;
  self.splitBadge.contentTintColor=self.owner.accentMuted ?: NSColor.secondaryLabelColor;
 
 
@@ -2667,15 +2695,50 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   return;
  }
 
- self.pillLayer.cornerRadius = 9;
+ const NSInteger splitPos = self.owner ? [self.owner splitGroupPositionForTab:self.tabId] : 0;
+ const BOOL inActiveSplit = self.owner && [self.owner tabInVisibleSplit:self.tabId];
  if(@available(macOS 11.0, *)) self.pillLayer.cornerCurve = kCACornerCurveContinuous;
- self.pillLayer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
- if(self.selected || [self.owner tabInVisibleSplit:self.tabId]) {
-  self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:0.14] CGColor];
- } else if(self.hovered) {
-  self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:0.07] CGColor];
+
+ if(splitPos > 0) {
+  // lovesea SplitTabItem stacked vertical card in sidebar: top corners rounded on first pane,
+  // square on middle panes, bottom corners rounded on last pane, framed in Settings accent!
+  const BOOL dark = [self.owner isDarkAppearance];
+  NSColor* accentOuter = SplitAccentBorderColor(self.owner.accentId, self.owner.accentHex, dark);
+  if(splitPos == 1) {
+   self.pillLayer.cornerRadius = 9;
+   self.pillLayer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+  } else if(splitPos == 3) {
+   self.pillLayer.cornerRadius = 9;
+   self.pillLayer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+  } else {
+   self.pillLayer.cornerRadius = 0;
+   self.pillLayer.maskedCorners = 0;
+  }
+  self.pillLayer.borderWidth = inActiveSplit ? 1.25 : 0.75;
+  self.pillLayer.borderColor = inActiveSplit
+   ? [accentOuter colorWithAlphaComponent:0.85].CGColor
+   : [ink colorWithAlphaComponent:0.18].CGColor;
+  if(self.selected) {
+   self.pillLayer.backgroundColor = [accentOuter colorWithAlphaComponent:dark ? 0.24 : 0.16].CGColor;
+  } else if(inActiveSplit) {
+   self.pillLayer.backgroundColor = [ink colorWithAlphaComponent:self.hovered ? 0.14 : 0.08].CGColor;
+  } else if(self.hovered) {
+   self.pillLayer.backgroundColor = [ink colorWithAlphaComponent:0.10].CGColor;
+  } else {
+   self.pillLayer.backgroundColor = [ink colorWithAlphaComponent:0.04].CGColor;
+  }
  } else {
-  self.pillLayer.backgroundColor = NSColor.clearColor.CGColor;
+  self.pillLayer.cornerRadius = 9;
+  self.pillLayer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+  self.pillLayer.borderWidth = 0;
+  self.pillLayer.borderColor = nil;
+  if(self.selected) {
+   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:0.14] CGColor];
+  } else if(self.hovered) {
+   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:0.07] CGColor];
+  } else {
+   self.pillLayer.backgroundColor = NSColor.clearColor.CGColor;
+  }
  }
 
  [CATransaction commit];
@@ -8511,6 +8574,19 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  const int idx=pair->index_of(tab);
  return idx>=0 ? idx+1 : (pair->left==tab ? 1 : 2);
 }
+- (NSInteger)splitGroupPositionForTab:(TabId)tab {
+ const auto pair=workspace.pair_for(tab);
+ if(!pair || pair->tabs.size()<2) return 0;
+ const int idx=pair->index_of(tab);
+ if(idx<0) return 0;
+ if(idx==0) return 1;
+ if(static_cast<size_t>(idx+1)==pair->tabs.size()) return 3;
+ return 2;
+}
+- (NSInteger)splitGroupCountForTab:(TabId)tab {
+ const auto pair=workspace.pair_for(tab);
+ return pair ? (NSInteger)pair->tabs.size() : 0;
+}
 - (BOOL)tabInVisibleSplit:(TabId)tab { return workspace.visible_for(model.selected()) && workspace.contains(tab); }
 - (NSString*)currentSplitSignature {
  if(!workspace.split()) return @"";
@@ -9105,12 +9181,21 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   [self hideSplitDrag];
   return;
  }
- // A native drop receiver already applied an accepted reorder or split.
- // Finishing it again can tear a newly created pair apart.
+ // If the drag ended on the page while a split drop preview is active, finish the split
+ // even if WKWebView reported a non-None drag operation.
+ const TabId base=self.splitDragBaseTab ? self.splitDragBaseTab : model.selected();
+ const NSPoint winPt=[self.window convertPointFromScreen:screenPoint];
+ const NSPoint pagePt=[self.content convertPoint:winPt fromView:nil];
+ const BOOL overPage=self.content && NSPointInRect(pagePt, self.content.bounds);
+ if(overPage && self.splitDropSide != 0 && !self.splitOverlay.hidden) {
+  const BOOL didSplit=[self finishSplitDragAtScreenPoint:screenPoint tab:draggedTabId base:base];
+  self.splitDragBaseTab=0;
+  if(didSplit) return;
+ }
+ // A native drop receiver (such as tabList reorder) already applied an accepted drop.
  if(operation!=NSDragOperationNone) {
   self.splitDragBaseTab=0; [self hideSplitDrag]; return;
  }
- const TabId base=self.splitDragBaseTab ? self.splitDragBaseTab : model.selected();
  const BOOL didSplit=[self dropTab:draggedTabId atScreenPoint:screenPoint] || [self finishSplitDragAtScreenPoint:screenPoint tab:draggedTabId base:base];
  self.splitDragBaseTab=0;
  if(didSplit) return;
@@ -9870,7 +9955,14 @@ static SlateThemePanel* s_sharedThemePanel = nil;
  for(NSView* view in views) if([view isKindOfClass:SlateTabPill.class]) {
   SlateTabPill* pill=(SlateTabPill*)view;
   const BOOL connected=[connectedIds containsObject:@(pill.tabId)];
-  if(pill.splitConnected!=connected) { pill.splitConnected=connected; [pill updateTabShape]; }
+  if(pill.splitConnected!=connected) {
+   pill.splitConnected=connected;
+   const auto* t=model.find(pill.tabId);
+   [pill applySelected:pill.selectedTab filled:pill.expanded hovered:pill.hovered
+                 title:t ? TabLabel(*t) : pill.titleLabel.stringValue incognito:pill.incognitoTab];
+  } else if(connected) {
+   [pill updateTabShape];
+  }
  }
  const BOOL dark=[self isDarkAppearance];
  NSColor* accentOuter=SplitAccentBorderColor(self.accentId, self.accentHex, dark);
@@ -9897,9 +9989,8 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   shape.hidden=NO;
   shape.frame=groupFrame;
   const CGRect bounds=CGRectMake(0,0,NSWidth(groupFrame),NSHeight(groupFrame));
-  CGPathRef path=foreground
-   ? CreateActiveBrowserTabPath(bounds,self.tabPills.isFlipped,joinsToolbar)
-   : CGPathCreateWithRoundedRect(CGRectInset(bounds,0,2),9,9,nullptr);
+  // Clean floating rounded pill (lovesea SplitTabItem) so the accent outer line wraps cleanly on all sides.
+  CGPathRef path=CGPathCreateWithRoundedRect(CGRectInset(bounds, 0.5, 2.5), 9, 9, nullptr);
   shape.path=path;
   CGPathRelease(path);
   NSColor* base=self.window.backgroundColor ?: NSColor.windowBackgroundColor;
@@ -9907,7 +9998,7 @@ static SlateThemePanel* s_sharedThemePanel = nil;
    : [base blendedColorWithFraction:0.10 ofColor:NSColor.labelColor];
   shape.fillColor=surface.CGColor;
   shape.lineWidth=foreground ? 1.5 : 1.0;
-  shape.strokeColor=foreground ? [accentOuter colorWithAlphaComponent:0.85].CGColor
+  shape.strokeColor=foreground ? [accentOuter colorWithAlphaComponent:0.90].CGColor
    : [InkOn(surface) colorWithAlphaComponent:0.16].CGColor;
 
   for(NSUInteger k=0;k + 1 < run.count;++k) {
@@ -10831,7 +10922,10 @@ static SlateThemePanel* s_sharedThemePanel = nil;
   }
   return;
  }
- const BOOL armed=splitIntent.update(identifier,target,zone,(int)candidate,point.x,point.y,CACurrentMediaTime());
+ // For interactive sidebar drags (splitSourceTab == identifier), arm the edge preview immediately
+ // so dragging a tab from the vertical sidebar onto a page edge works smoothly without dwelling.
+ const BOOL sidebarLiveDrag = (self.splitSourceTab == identifier);
+ const BOOL armed = sidebarLiveDrag || splitIntent.update(identifier,target,zone,(int)candidate,point.x,point.y,CACurrentMediaTime());
  if(!armed) {
   self.splitOverlay.hidden=YES; self.splitDropSide=0; self.splitPreviewTarget=0;
   if(self.splitHintOverlay) { [self layoutSplitOverlay]; self.splitHintOverlay.hidden=NO; }
