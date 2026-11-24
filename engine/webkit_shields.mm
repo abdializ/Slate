@@ -546,10 +546,9 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
       )) return true;
     }
 
-    // YouTube ad indicators
+    // YouTube ad indicators — match only active player ad states, never stray companion text.
     if (host.includes('youtube.com')) {
       if (anyVisibleAdIndicator('#movie_player.ad-showing, #movie_player.ad-interrupting, .html5-video-player.ad-showing')) return true;
-      if (anyVisibleAdIndicator('.ytp-ad-player-overlay, .ytp-ad-text')) return true;
     }
 
     // Twitch live streams cannot generally be accelerated; use only player ad UI signals.
@@ -585,7 +584,9 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
     if (video.setAttribute && video.removeAttribute) {
       if (adActive) {
         if (!video.hasAttribute("data-slate-ad-break")) video.setAttribute("data-slate-ad-break", "1");
-      } else video.removeAttribute("data-slate-ad-break");
+      } else if (video.hasAttribute("data-slate-ad-break")) {
+        video.removeAttribute("data-slate-ad-break");
+      }
     }
     if (isDisneyPlayer || video.mediaKeys) {
       if (video.__slate_ad_boosted__) {
@@ -637,11 +638,11 @@ static NSString* const kStreamAdDefuserSource = @R"JS(
     const target = document.body || document.documentElement;
     if (target) {
       obs.observe(target, { childList: true, subtree: true, attributes: true,
-        attributeFilter: ["class", "data-testid", "aria-label", "hidden", "style"] });
+        attributeFilter: ["class", "data-testid", "aria-label", "hidden"] });
     } else {
       document.addEventListener('DOMContentLoaded', function() {
         if (document.body) obs.observe(document.body, { childList: true, subtree: true, attributes: true,
-            attributeFilter: ["class", "data-testid", "aria-label", "hidden", "style"] });
+            attributeFilter: ["class", "data-testid", "aria-label", "hidden"] });
       });
     }
   } catch(e) {}

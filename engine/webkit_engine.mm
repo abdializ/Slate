@@ -931,8 +931,7 @@ class WebKitEngine final : public BrowserEngine {
     for (NSString* selName in @[
       @"_setDOMTimersThrottlingEnabled:",
       @"_setHiddenPageDOMTimerThrottlingEnabled:",
-      @"_setHiddenPageDOMTimerThrottlingAutoIncreases:",
-      @"_setLowPowerVideoAudioBufferSizeEnabled:"
+      @"_setHiddenPageDOMTimerThrottlingAutoIncreases:"
     ]) {
       SEL s = NSSelectorFromString(selName);
       if ([config.preferences respondsToSelector:s]) {
