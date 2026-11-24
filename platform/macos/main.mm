@@ -1544,9 +1544,8 @@ typedef NS_ENUM(NSInteger, SlateNavMotion) { SlateNavMotionNone=0, SlateNavMotio
      else [delegate dragMoveTab:self.tabId toPoint:[delegate.tabCluster convertPoint:nextEvent.locationInWindow fromView:nil]];
     } else didSplit=[delegate finishSplitDragAtScreenPoint:endLocInScreen tab:self.tabId base:baseTab];
    }
-   const NSRect releaseBar=[dragWindow convertRectToScreen:[delegate.tabCluster convertRect:delegate.tabCluster.bounds toView:nil]];
-   const BOOL releasedOutsideBar=!NSPointInRect(endLocInScreen,NSInsetRect(releaseBar,-20,-12));
-   if(isDragging && !didSplit && releasedOutsideBar)
+   const BOOL releasedOutsideWindow = !NSPointInRect(endLocInScreen, NSInsetRect(dragWindow.frame, -16, -16));
+   if(isDragging && !didSplit && releasedOutsideWindow)
     [delegate tearOffTab:self.tabId atScreenPoint:endLocInScreen];
    else if(!isDragging) [delegate handleTabClick:self.tabId doubleClick:NO];
    break;
@@ -9173,37 +9172,38 @@ static SlateThemePanel* s_sharedThemePanel = nil;
 - (void)tableView:(NSTableView *)tableView draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)screenPoint operation:(NSDragOperation)operation {
  [self stopSplitDragTracking];
  const TabId draggedTabId=self.splitSourceTab;
- self.splitSourceTab=0;
  self.splitDragCandidateTab=0;
  if(self.splitDragCancelled || !draggedTabId || !model.find(draggedTabId)) {
+  self.splitSourceTab=0;
   self.splitDragCancelled=NO;
   self.splitDragBaseTab=0;
   [self hideSplitDrag];
   return;
  }
- // If the drag ended on the page while a split drop preview is active, finish the split
- // even if WKWebView reported a non-None drag operation.
+ // Keep self.splitSourceTab alive during finishSplitDragAtScreenPoint: so sidebarLiveDrag stays YES!
  const TabId base=self.splitDragBaseTab ? self.splitDragBaseTab : model.selected();
  const NSPoint winPt=[self.window convertPointFromScreen:screenPoint];
  const NSPoint pagePt=[self.content convertPoint:winPt fromView:nil];
  const BOOL overPage=self.content && NSPointInRect(pagePt, self.content.bounds);
  if(overPage && self.splitDropSide != 0 && !self.splitOverlay.hidden) {
   const BOOL didSplit=[self finishSplitDragAtScreenPoint:screenPoint tab:draggedTabId base:base];
+  self.splitSourceTab=0;
   self.splitDragBaseTab=0;
   if(didSplit) return;
  }
  // A native drop receiver (such as tabList reorder) already applied an accepted drop.
  if(operation!=NSDragOperationNone) {
-  self.splitDragBaseTab=0; [self hideSplitDrag]; return;
+  self.splitSourceTab=0; self.splitDragBaseTab=0; [self hideSplitDrag]; return;
  }
  const BOOL didSplit=[self dropTab:draggedTabId atScreenPoint:screenPoint] || [self finishSplitDragAtScreenPoint:screenPoint tab:draggedTabId base:base];
+ self.splitSourceTab=0;
  self.splitDragBaseTab=0;
  if(didSplit) return;
- NSRect sidebarScreenRect = [self.window convertRectToScreen:[self.sidebar convertRect:self.sidebar.bounds toView:nil]];
- const BOOL outsideSidebar = !NSPointInRect(screenPoint, NSInsetRect(sidebarScreenRect, -10, -10));
-
+ // Only tear off into a new window when released genuinely OUTSIDE the browser window.
+ // Dropping in the middle of the page inside the window cleanly cancels instead of tearing off.
+ const BOOL outsideWindow = !NSPointInRect(screenPoint, NSInsetRect(self.window.frame, -16, -16));
  [self hideSplitDrag];
- if(outsideSidebar) [self tearOffTab:draggedTabId atScreenPoint:screenPoint];
+ if(outsideWindow) [self tearOffTab:draggedTabId atScreenPoint:screenPoint];
 }
 - (CGFloat)tableView:(NSTableView*)table heightOfRow:(NSInteger)row {
  const auto rows=[self sidebarRows];
