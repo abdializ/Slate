@@ -41,11 +41,15 @@ class WebKitShields {
   WebKitShields();
   ~WebKitShields() = default;
 
+  void EnsureLoaded();
   void CompileRules(const std::vector<std::string>& rule_file_paths);
   void BroadcastRuleList();
 
   bool enabled_ = true;
   bool always_block_in_incognito_ = true;
+  bool initialized_ = false;
+  bool load_started_ = false;
+  std::vector<std::string> rule_file_paths_;
   std::mutex mutex_;
   WKContentRuleListStore* __strong store_ = nil;
   WKContentRuleList* __strong rule_list_ = nil;

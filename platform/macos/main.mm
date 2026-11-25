@@ -289,8 +289,37 @@ NSColor* HostColor(NSString* host) {
  const CGFloat brt=0.62+((hash>>24)&0x3f)/400.0;
  return [NSColor colorWithHue:hue saturation:sat brightness:brt alpha:1];
 }
+static NSImage* SlateCachedSymbol(NSString* name, NSString* desc, CGFloat pt, NSFontWeight weight) {
+ if(!name.length) return nil;
+ static NSMutableDictionary<NSString*, NSImage*>* cache = nil;
+ static dispatch_once_t once;
+ dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
+ NSString* key = [NSString stringWithFormat:@"%@|%.2f|%.3f", name, (double)pt, (double)weight];
+ NSImage* hit = cache[key];
+ if(hit) return hit;
+ NSImage* img = nil;
+ if(@available(macOS 11.0, *)) {
+  img = [NSImage imageWithSystemSymbolName:name accessibilityDescription:desc];
+  if(img && pt > 0) {
+   NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:pt weight:weight];
+   img = [img imageWithSymbolConfiguration:cfg] ?: img;
+  }
+ }
+ if(img) {
+  if(cache.count > 128) [cache removeAllObjects];
+  cache[key] = img;
+ }
+ return img;
+}
+
 NSImage* LetterTile(NSString* letter, NSString* host, CGFloat size) {
  NSString* glyph=(letter.length ? [letter substringToIndex:1] : @"•").uppercaseString;
+ NSString* key=[NSString stringWithFormat:@"%@|%@|%d", glyph, host ?: @"", (int)llround(size)];
+ static NSCache<NSString*, NSImage*>* tileCache = nil;
+ static dispatch_once_t once;
+ dispatch_once(&once, ^{ tileCache = [[NSCache alloc] init]; tileCache.countLimit = 64; });
+ NSImage* cached = [tileCache objectForKey:key];
+ if(cached) return cached;
  NSColor* fill=HostColor(host.length ? host : glyph);
  NSImage* image=[NSImage imageWithSize:NSMakeSize(size,size) flipped:NO drawingHandler:^BOOL(NSRect rect) {
   NSBezierPath* path=[NSBezierPath bezierPathWithRoundedRect:rect xRadius:size/2.0 yRadius:size/2.0];
@@ -307,10 +336,16 @@ NSImage* LetterTile(NSString* letter, NSString* host, CGFloat size) {
   return YES;
  }];
  [image setTemplate:NO];
+ if(image) [tileCache setObject:image forKey:key];
  return image;
 }
 NSImage* ClipMark(NSImage* source, CGFloat size) {
  if(!source) return nil;
+ static char kClipCacheKey;
+ NSNumber* sizeKey = @((NSInteger)llround(size));
+ NSMutableDictionary<NSNumber*, NSImage*>* perSource = objc_getAssociatedObject(source, &kClipCacheKey);
+ NSImage* cached = perSource[sizeKey];
+ if(cached) return cached;
  NSImage* image=[NSImage imageWithSize:NSMakeSize(size,size) flipped:NO drawingHandler:^BOOL(NSRect rect) {
   NSBezierPath* path=[NSBezierPath bezierPathWithRoundedRect:rect xRadius:4 yRadius:4];
   [path addClip];
@@ -319,6 +354,14 @@ NSImage* ClipMark(NSImage* source, CGFloat size) {
   return YES;
  }];
  [image setTemplate:NO];
+ if(image) {
+  if(!perSource) {
+   perSource = [NSMutableDictionary dictionaryWithCapacity:2];
+   objc_setAssociatedObject(source, &kClipCacheKey, perSource, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  }
+  if(perSource.count >= 4) [perSource removeAllObjects];
+  perSource[sizeKey] = image;
+ }
  return image;
 }
 NSImage* AccentSwatch(NSColor* color) {
@@ -2309,7 +2352,6 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 @property BOOL loading;
 @property BOOL asleep;
 @property(strong) NSImage* mark;
-@property(strong) CALayer* bgLayer;
 @property(strong) CALayer* iconLayer;
 @end
 @implementation SlateTabBubble
@@ -2317,10 +2359,8 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  if(self=[super initWithFrame:frame]) {
   self.wantsLayer = YES;
   self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
-  self.bgLayer = [CALayer layer];
   self.iconLayer = [CALayer layer];
   self.iconLayer.contentsGravity = kCAGravityResizeAspect;
-  [self.layer addSublayer:self.bgLayer];
   [self.layer addSublayer:self.iconLayer];
  }
  return self;
@@ -2333,12 +2373,9 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  [self.superview mouseDown:event];
 }
 - (void)updateLayer {
- const BOOL rail=self.owner && [self.owner sidebarIconRail];
-
  [CATransaction begin];
  [CATransaction setDisableActions:YES];
 
- self.bgLayer.hidden = YES;
  // The row cell owns the visible mark size and centers this view in the rail.
  self.iconLayer.frame = self.bounds;
 
@@ -2428,8 +2465,6 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 @property(strong) SlateTabActionButton* closeButton;
 @property(strong) SlateTabActionButton* speakerButton;
 @property(strong) NSImageView* pipBadge;
-@property(strong) NSImageView* splitBadge;
-@property(strong) NSProgressIndicator* spinner;
 @property BOOL hovering;
 @property BOOL isLoading;
 @property BOOL inGroup;
@@ -2441,8 +2476,6 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 @implementation SlateSideRowCell
 - (instancetype)initWithFrame:(NSRect)frame {
  if(self = [super initWithFrame:frame]) {
-  self.wantsLayer = YES;
-
   self.bubble = [[SlateTabBubble alloc] initWithFrame:NSZeroRect];
   [self addSubview:self.bubble];
 
@@ -2458,36 +2491,19 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   [self addSubview:self.speakerButton];
 
   self.closeButton = [[SlateTabActionButton alloc] initWithFrame:NSMakeRect(0, 0, 15, 15)];
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:8 weight:NSFontWeightSemibold];
-   self.closeButton.image = [[NSImage imageWithSystemSymbolName:@"xmark" accessibilityDescription:@"Close Tab"] imageWithSymbolConfiguration:cfg];
-  }
+  self.closeButton.image = SlateCachedSymbol(@"xmark", @"Close Tab", 8, NSFontWeightSemibold);
   self.closeButton.target = self;
   self.closeButton.action = @selector(closeClicked:);
   self.closeButton.toolTip = @"Close Tab (⌘W)";
   self.closeButton.hidden = YES;
   [self addSubview:self.closeButton];
 
-  self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 15, 15)];
-  self.spinner.style = NSProgressIndicatorStyleSpinning;
-  self.spinner.controlSize = NSControlSizeSmall;
-  self.spinner.displayedWhenStopped = NO;
-  self.spinner.hidden = YES;
-  [self addSubview:self.spinner];
-
   self.pipBadge = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, 15, 15)];
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:9 weight:NSFontWeightSemibold];
-   self.pipBadge.image = [[NSImage imageWithSystemSymbolName:@"pip.fill" accessibilityDescription:@"Picture in Picture"] imageWithSymbolConfiguration:cfg];
-  }
+  self.pipBadge.image = SlateCachedSymbol(@"pip.fill", @"Picture in Picture", 9, NSFontWeightSemibold);
   self.pipBadge.contentTintColor = [NSColor systemBlueColor];
   self.pipBadge.toolTip = @"Picture in Picture active";
   self.pipBadge.hidden = YES;
   [self addSubview:self.pipBadge];
-  self.splitBadge=[[NSImageView alloc] initWithFrame:NSMakeRect(0,0,15,15)];
-  self.splitBadge.image=[NSImage imageWithSystemSymbolName:@"rectangle.split.2x1" accessibilityDescription:@"Split view"];
-  self.splitBadge.hidden=YES;
-  [self addSubview:self.splitBadge];
  }
  return self;
 }
@@ -2573,29 +2589,15 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  const BOOL isMuted = [self.owner tabIsMuted:tab.id];
  const BOOL isAudible = [self.owner tabIsAudible:tab.id];
  if(isMuted) {
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:8 weight:NSFontWeightRegular];
-   self.speakerButton.image = [[NSImage imageWithSystemSymbolName:@"speaker.slash.fill" accessibilityDescription:@"Unmute Tab"] imageWithSymbolConfiguration:cfg];
-  }
+  self.speakerButton.image = SlateCachedSymbol(@"speaker.slash.fill", @"Unmute Tab", 8, NSFontWeightRegular);
   self.speakerButton.toolTip = @"Unmute Tab";
  } else if(isAudible) {
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:8 weight:NSFontWeightRegular];
-   self.speakerButton.image = [[NSImage imageWithSystemSymbolName:@"speaker.wave.2.fill" accessibilityDescription:@"Mute Tab"] imageWithSymbolConfiguration:cfg];
-  }
+  self.speakerButton.image = SlateCachedSymbol(@"speaker.wave.2.fill", @"Mute Tab", 8, NSFontWeightRegular);
   self.speakerButton.toolTip = @"Mute Tab";
  }
  self.speakerButton.contentTintColor = self.owner.accentMuted ?: NSColor.secondaryLabelColor;
  self.pipBadge.hidden = !tab.pip_active;
- self.splitBadge.hidden = YES;
-
-
- // Loading state is shown cleanly by the dimmed favicon, toolbar progress bar, and reload button.
- // Keep the legacy sidebar pinwheel stopped and hidden so it never glitches next to tab titles.
- self.spinner.displayedWhenStopped = NO;
- [self.spinner stopAnimation:nil];
- self.spinner.hidden = YES;
-
+ [self.bubble setNeedsDisplay:YES];
  [self updateLayoutForHover];
 }
 - (void)layout {
@@ -2614,8 +2616,6 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   self.closeButton.hidden = YES;
   self.speakerButton.hidden = YES;
   self.pipBadge.hidden = YES;
-  self.spinner.hidden = YES;
-  self.splitBadge.hidden = YES;
   [CATransaction commit];
   return;
  }
@@ -2658,9 +2658,6 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  } else {
   self.pipBadge.hidden = YES;
  }
-
- self.splitBadge.hidden = YES;
- self.spinner.hidden = YES;
 
  CGFloat trailingLimit = rightOffset - 4;
  const CGFloat labelX = indent + 15 + 8;
@@ -3163,21 +3160,16 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   self.wantsLayer = YES;
   self.layer.cornerRadius = 8.0;
   if(@available(macOS 11.0, *)) self.layer.cornerCurve = kCACornerCurveContinuous;
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:11 weight:NSFontWeightMedium];
-   self.image = [[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:help] imageWithSymbolConfiguration:cfg];
-  }
+  self.image = SlateCachedSymbol(symbol, help, 11, NSFontWeightMedium);
   self.imagePosition = NSImageOnly;
   self.imageScaling = NSImageScaleProportionallyDown;
  }
  return self;
 }
 - (void)setSymbolName:(NSString*)symbolName {
+ if([_symbolName isEqualToString:symbolName]) return;
  _symbolName = [symbolName copy];
- if(@available(macOS 11.0, *)) {
-  NSImageSymbolConfiguration* cfg = [NSImageSymbolConfiguration configurationWithPointSize:11 weight:NSFontWeightMedium];
-  self.image = [[NSImage imageWithSystemSymbolName:_symbolName accessibilityDescription:self.toolTip] imageWithSymbolConfiguration:cfg];
- }
+ self.image = SlateCachedSymbol(_symbolName, self.toolTip, 11, NSFontWeightMedium);
 }
 - (BOOL)mouseDownCanMoveWindow { return NO; }
 - (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
@@ -3355,12 +3347,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 
   self.plusIcon=[[NSImageView alloc] initWithFrame:NSZeroRect];
   self.plusIcon.imageScaling=NSImageScaleProportionallyDown;
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* cfg=[NSImageSymbolConfiguration configurationWithPointSize:10 weight:NSFontWeightMedium];
-   self.plusIcon.image=[[NSImage imageWithSystemSymbolName:@"plus" accessibilityDescription:@"New tab"] imageWithSymbolConfiguration:cfg];
-  } else {
-   self.plusIcon.image=[NSImage imageNamed:@"TabIconTemplate"];
-  }
+  self.plusIcon.image = SlateCachedSymbol(@"plus", @"New tab", 10, NSFontWeightMedium) ?: [NSImage imageNamed:@"TabIconTemplate"];
   [self addSubview:self.plusIcon];
 
   self.label=[NSTextField labelWithString:@"New tab"];
@@ -6538,10 +6525,17 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  {
   SlateExtensionsManager* extMgr = [SlateExtensionsManager sharedManager];
   extMgr.hostDelegate = self;
-  [extMgr startIfNeeded];
-  [extMgr notifyWindowOpened];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildExtensionButtons) name:SlateExtensionsDidChangeNotification object:nil];
   [self rebuildExtensionButtons];
+  // Defer extension startup briefly until the window, initial tabs, and startup UI finish
+  // allocating in compact pages so WebKit's in-process DNR compiler cannot interleave temporary
+  // allocations with long-lived UI/tab objects (avoiding 200+ MB permanent malloc fragmentation).
+  __weak SlateDelegate* weakExtSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2500LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+   if (!weakExtSelf || weakExtSelf.quitting) return;
+   [extMgr startIfNeeded];
+   [extMgr notifyWindowOpened];
+  });
  }
  if(workspace.visible_for(model.selected())) {
   const TabId focused=model.selected();
@@ -9384,8 +9378,16 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  return [self sidebarIconRail] ? kRailRow : 28;
 }
 - (NSTableRowView*)tableView:(NSTableView*)table rowViewForRow:(NSInteger)row {
- SlateCapsuleRow* rowView=[[SlateCapsuleRow alloc] initWithFrame:NSZeroRect];
+ static NSUserInterfaceItemIdentifier const kRowReuseId = @"SlateCapsuleRow";
+ SlateCapsuleRow* rowView = (SlateCapsuleRow*)[table makeViewWithIdentifier:kRowReuseId owner:self];
+ if(![rowView isKindOfClass:SlateCapsuleRow.class]) {
+  rowView=[[SlateCapsuleRow alloc] initWithFrame:NSZeroRect];
+  rowView.identifier=kRowReuseId;
+ }
  rowView.owner=self;
+ rowView.tabId=0;
+ rowView.groupId=nil;
+ rowView.isNewTabRow=NO;
  const auto rows=[self sidebarRows];
  if(row>=0 && static_cast<size_t>(row)<rows.size()) {
   if(rows[row].kind==SideRow::Kind::Tab) rowView.tabId=rows[row].tab;
@@ -9425,7 +9427,12 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  if(row<0 || static_cast<size_t>(row)>=rows.size()) return [NSTextField labelWithString:@""];
  if(rows[row].kind==SideRow::Kind::NewTab) {
   const BOOL rail=[self sidebarIconRail];
-  SlateInlineAddRow* cell=[[SlateInlineAddRow alloc] initWithFrame:NSZeroRect];
+  static NSUserInterfaceItemIdentifier const kAddRowId = @"SlateInlineAddRow";
+  SlateInlineAddRow* cell=(SlateInlineAddRow*)[table makeViewWithIdentifier:kAddRowId owner:self];
+  if(![cell isKindOfClass:SlateInlineAddRow.class]) {
+   cell=[[SlateInlineAddRow alloc] initWithFrame:NSZeroRect];
+   cell.identifier=kAddRowId;
+  }
   cell.owner=self;
   cell.isRail=rail;
   cell.autoresizingMask=NSViewWidthSizable | NSViewHeightSizable;
@@ -9440,11 +9447,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   cell.autoresizingMask=NSViewWidthSizable | NSViewHeightSizable;
   NSString* chevronSymbol=collapsed ? @"chevron.right" : @"chevron.down";
   NSImageView* chevron=[[NSImageView alloc] initWithFrame:NSZeroRect];
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* chevronConf=[NSImageSymbolConfiguration configurationWithPointSize:9 weight:NSFontWeightSemibold];
-   chevron.image=[[NSImage imageWithSystemSymbolName:chevronSymbol accessibilityDescription:nil]
-    imageWithSymbolConfiguration:chevronConf];
-  }
+  chevron.image = SlateCachedSymbol(chevronSymbol, nil, 9, NSFontWeightSemibold);
   chevron.contentTintColor=[accentInk colorWithAlphaComponent:0.55];
   chevron.translatesAutoresizingMaskIntoConstraints=NO;
   NSTextField* label=[NSTextField labelWithString:group ? Text(group->title) : @"Group"];
@@ -9488,8 +9491,14 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  }
  const auto* tab=model.find(rows[row].tab); if(!tab) return [NSTextField labelWithString:@""];
  const BOOL rail=[self sidebarIconRail];
- SlateSideRowCell* cell=[[SlateSideRowCell alloc] initWithFrame:NSZeroRect];
+ static NSUserInterfaceItemIdentifier const kTabCellId = @"SlateSideRowCell";
+ SlateSideRowCell* cell=(SlateSideRowCell*)[table makeViewWithIdentifier:kTabCellId owner:self];
+ if(![cell isKindOfClass:SlateSideRowCell.class]) {
+  cell=[[SlateSideRowCell alloc] initWithFrame:NSZeroRect];
+  cell.identifier=kTabCellId;
+ }
  cell.owner=self;
+ cell.hovering=NO;
  cell.autoresizingMask=NSViewWidthSizable | NSViewHeightSizable;
  [cell configureWithTab:*tab isRail:rail];
  return cell;
@@ -9654,8 +9663,8 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  const auto* tab=model.find(model.selected());
  const BOOL saved=tab && [[SlateBookmarks sharedStore] containsURL:Text(tab->url)];
  NSString* symbol=saved ? @"star.fill" : @"star";
- NSImage* image=[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"Bookmark"]
-  ?: [NSImage imageWithSystemSymbolName:@"bookmark" accessibilityDescription:@"Bookmark"];
+ NSImage* image=SlateCachedSymbol(symbol, @"Bookmark", 0, NSFontWeightRegular)
+  ?: SlateCachedSymbol(@"bookmark", @"Bookmark", 0, NSFontWeightRegular);
  self.bookmarkButton.image=image;
  self.bookmarkButton.toolTip=saved ? @"Bookmarks (⌘D to toggle)" : @"Bookmarks (⌘D to add)";
  self.bookmarkButton.enabled=tab && tab->url.rfind("http",0)==0;
@@ -9925,12 +9934,9 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
 - (NSImage*)iconForTab:(const slate::Tab&)tab {
  if(tab.url=="about:blank") return BrowserGlyphImage();
  if(tab.incognito) {
-  if(@available(macOS 11.0, *)) {
-   NSImageSymbolConfiguration* cfg=[NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightMedium];
-   NSImage* sym=[[NSImage imageWithSystemSymbolName:@"eyeglasses" accessibilityDescription:@"Incognito"] imageWithSymbolConfiguration:cfg];
-   if(!sym) sym=[[NSImage imageWithSystemSymbolName:@"eye.slash" accessibilityDescription:@"Incognito"] imageWithSymbolConfiguration:cfg];
-   if(sym) return sym;
-  }
+  NSImage* sym = SlateCachedSymbol(@"eyeglasses", @"Incognito", 12, NSFontWeightMedium)
+   ?: SlateCachedSymbol(@"eye.slash", @"Incognito", 12, NSFontWeightMedium);
+  if(sym) return sym;
   return LetterTile(@"🕶", @"Incognito", kRailMark);
  }
  const CGFloat markSize=[self sidebarIconRail] ? RailMarkForWidth([self sidebarLayoutWidth]) : 16.0;
@@ -10618,9 +10624,47 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
     if(later->second.engine && !later->second.pip_active) {
      later->second.engine->set_occluded(YES);
     }
+    // Detach inactive background tabs from the window hierarchy (matching Safari/lovesea)
+    // unless actively playing media, in PiP, or on a camera/microphone call. Removing a
+    // hidden WKWebView from the window drops its IOSurface tile backing stores immediately.
+    BOOL keepAttached = later->second.pip_active || later->second.auto_pip_origin != 0 ||
+                        later->second.audible || later->second.video_playing;
+    if(!keepAttached && later->second.host) {
+     if(@available(macOS 12.0, *)) {
+      for(NSView* sub in later->second.host.subviews) {
+       if([sub isKindOfClass:WKWebView.class]) {
+        WKWebView* wv = (WKWebView*)sub;
+        if(wv.cameraCaptureState != WKMediaCaptureStateNone ||
+           wv.microphoneCaptureState != WKMediaCaptureStateNone) {
+         keepAttached = YES;
+         break;
+        }
+       }
+      }
+     }
+    }
+    if(!keepAttached && later->second.host.superview) {
+     [later->second.host removeFromSuperview];
+    }
    });
   } else if(item.host.hidden && item.engine && !item.pip_active) {
    item.engine->set_occluded(YES);
+   if(item.host.superview && item.auto_pip_origin == 0 && !item.audible && !item.video_playing) {
+    BOOL onCall = NO;
+    if(@available(macOS 12.0, *)) {
+     for(NSView* sub in item.host.subviews) {
+      if([sub isKindOfClass:WKWebView.class]) {
+       WKWebView* wv = (WKWebView*)sub;
+       if(wv.cameraCaptureState != WKMediaCaptureStateNone ||
+          wv.microphoneCaptureState != WKMediaCaptureStateNone) {
+        onCall = YES;
+        break;
+       }
+      }
+     }
+    }
+    if(!onCall) [item.host removeFromSuperview];
+   }
   }
  }
  [self syncBrowserOcclusion];
@@ -12233,8 +12277,8 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  const BOOL off=!slate::WebKitShields::Shared().IsEnabledForIncognito(curIncog);
  const BOOL paused=!host.empty() && !slate::WebKitShields::Shared().IsSiteEnabled(host);
  NSString* symbol=off || paused ? @"shield.slash" : @"checkmark.shield";
- NSImage* image=[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"Slate Shields"]
-  ?: [NSImage imageWithSystemSymbolName:@"shield" accessibilityDescription:@"Slate Shields"];
+ NSImage* image=SlateCachedSymbol(symbol, @"Slate Shields", 0, NSFontWeightRegular)
+  ?: SlateCachedSymbol(@"shield", @"Slate Shields", 0, NSFontWeightRegular);
  self.shieldsButton.image=image;
  self.shieldsButton.contentTintColor=off||paused ? (self.barMuted ?: NSColor.secondaryLabelColor) : (self.barInk ?: NSColor.controlAccentColor);
  self.shieldsButton.toolTip=off ? @"Ad blocking is off" : paused ?

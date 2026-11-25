@@ -699,9 +699,27 @@ WebKitShields::WebKitShields() {
 }
 
 void WebKitShields::Initialize(const std::vector<std::string>& rule_file_paths) {
-  const std::vector<std::string> paths = rule_file_paths;
+  initialized_ = true;
+  if (rule_file_paths_ != rule_file_paths) {
+    rule_file_paths_ = rule_file_paths;
+    load_started_ = false;
+    rule_list_ = nil;
+  }
+  if (!enabled_) {
+    // Avoid mapping/compiling the 18+ MB compiled content rule list when Shields is turned off.
+    // EnsureLoaded() will lazily load it if the user enables Shields or opens an incognito tab.
+    fprintf(stderr, "[SlateShields] Deferred rule list load (shields disabled).\n");
+    return;
+  }
+  EnsureLoaded();
+}
+
+void WebKitShields::EnsureLoaded() {
+  if (!initialized_ || load_started_ || rule_list_) return;
+  load_started_ = true;
+  const std::vector<std::string> paths = rule_file_paths_;
   uint64_t fingerprint = 1469598103934665603ULL;
-  for (const auto& path : rule_file_paths) {
+  for (const auto& path : paths) {
     NSString* file = [NSString stringWithUTF8String:path.c_str()];
     for (unsigned char byte : std::string(file.lastPathComponent.UTF8String)) {
       fingerprint ^= byte;
@@ -1239,11 +1257,14 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
     [controller addUserScript:ytScript];
   }
 
-  // Attach compiled rule list immediately if already available
-  if (active && rule_list_) {
-    @try {
-      [controller addContentRuleList:rule_list_];
-    } @catch (id ex) {}
+  // Attach compiled rule list immediately if already available; lazily load if needed.
+  if (active) {
+    if (!rule_list_) EnsureLoaded();
+    if (rule_list_) {
+      @try {
+        [controller addContentRuleList:rule_list_];
+      } @catch (id ex) {}
+    }
   }
 }
 
@@ -1274,12 +1295,18 @@ void WebKitShields::InjectStreamingProtection(WKWebView* webView) const {
 void WebKitShields::SetEnabled(bool enabled) {
   enabled_ = enabled;
   [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kGlobalBlockerKey];
+  if (enabled) {
+    EnsureLoaded();
+  }
   BroadcastRuleList();
 }
 
 void WebKitShields::SetAlwaysBlockInIncognito(bool enabled) {
   always_block_in_incognito_ = enabled;
   [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kAlwaysIncognitoBlockerKey];
+  if (enabled && incognito_controllers_ && incognito_controllers_.count > 0) {
+    EnsureLoaded();
+  }
   BroadcastRuleList();
 }
 

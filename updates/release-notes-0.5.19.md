@@ -1,0 +1,7 @@
+# Slate 0.5.19
+
+## lovesea-Grade Memory & Startup Architecture
+- **Detached inactive tab surfaces (`owned unmapped`):** Inactive background tabs that aren't playing media, in PiP, or on a camera/mic call are now detached from the window hierarchy once hidden (matching lovesea/Safari), allowing WebKit to immediately release hidden `IOSurface` tile backing stores instead of holding 40–65 MB of unmapped graphics memory.
+- **Deferred & staggered extension startup (eliminates permanent `Malloc Small` fragmentation):** Deferred `SlateExtensionsManager` startup briefly until the window, initial tabs, and startup UI finish allocating in compact pages, and staggered multiple extensions 400 ms apart so WebKit's in-process DNR compilation cannot interleave temporary allocations with long-lived UI/tab objects.
+- **Lazy Shields rule list loading:** Skips loading/mapping the 18+ MB compiled `SlateShields` rule list at startup when built-in Shields is turned off, loading it lazily only when enabled or needed for incognito tabs.
+- **Zero-leak AppKit chrome & cell reuse:** Added `NSTableView` cell/row reuse (`SlateCapsuleRow`, `SlateSideRowCell`, `SlateInlineAddRow`), removed dead hidden `NSProgressIndicator` / `splitBadge` / `bgLayer` subviews from every tab row, memoized SF Symbol images + `ClipMark` + `LetterTile` (slashing thousands of redundant `NSImage` / `NSImageSymbolConfiguration` allocations down to ~30), and fixed the ARC `__block` retain cycles in `SlateBookmarks` (`findURL:` / `findNodeWithIdentifier:`).

@@ -463,6 +463,7 @@ API_AVAILABLE(macos(15.4))
   if (![rows isKindOfClass:[NSArray class]]) return;
 
   NSFileManager* fm = [NSFileManager defaultManager];
+  NSMutableArray<SlateExtensionRecord*>* toLoad = [NSMutableArray array];
   for (NSDictionary* row in rows) {
     if (![row isKindOfClass:[NSDictionary class]]) continue;
     NSString* path = row[@"path"];
@@ -487,7 +488,24 @@ API_AVAILABLE(macos(15.4))
     [_mutableExtensions addObject:rec];
 
     if (rec.enabled && self.globalEnabled) {
+      [toLoad addObject:rec];
+    }
+  }
+  // Load enabled extensions sequentially (staggered 400ms apart) so WebKit does not
+  // collide service workers or spike allocator fragmentation at startup.
+  __weak SlateExtensionsManager* weakSelf = self;
+  for (NSUInteger idx = 0; idx < toLoad.count; ++idx) {
+    SlateExtensionRecord* rec = toLoad[idx];
+    if (idx == 0) {
       [self loadRecordIntoController:rec completion:nil];
+    } else {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(idx * 400LL * NSEC_PER_MSEC)),
+                     dispatch_get_main_queue(), ^{
+        SlateExtensionsManager* strongSelf = weakSelf;
+        if (strongSelf && rec.enabled && strongSelf.globalEnabled) {
+          [strongSelf loadRecordIntoController:rec completion:nil];
+        }
+      });
     }
   }
 }
@@ -573,6 +591,7 @@ API_AVAILABLE(macos(15.4))
       dispatch_async(dispatch_get_main_queue(), ^{
         if (!extension || error) {
           rec.loadError = error.localizedDescription ?: @"Invalid Chrome extension manifest.";
+          fprintf(stderr, "SLATE_EXT_LOAD_ERR id=%s err=%s\n", rec.identifier.UTF8String, rec.loadError.UTF8String);
           rec.enabled = NO;
           [self saveRegistry];
           [self postDidChange];
@@ -610,6 +629,7 @@ API_AVAILABLE(macos(15.4))
         BOOL ok = [ctrl loadExtensionContext:ctx error:&loadErr];
         if (!ok) {
           rec.loadError = loadErr.localizedDescription ?: @"Failed to load extension context.";
+          fprintf(stderr, "SLATE_EXT_CTX_LOAD_ERR id=%s err=%s\n", rec.identifier.UTF8String, rec.loadError.UTF8String);
           rec.enabled = NO;
           [self saveRegistry];
           [self postDidChange];
@@ -623,6 +643,15 @@ API_AVAILABLE(macos(15.4))
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
                        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
           slate::trim_process_memory(true);
+        });
+        __weak WKWebExtensionContext* weakCtx = ctx;
+        NSString* extIdCopy = [rec.identifier copy];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+          WKWebExtensionContext* c = weakCtx;
+          if (!c) return;
+          for (NSError* e in c.errors) {
+            fprintf(stderr, "SLATE_EXT_CTX_ERR id=%s err=%s\n", extIdCopy.UTF8String, e.localizedDescription.UTF8String);
+          }
         });
         if (extension.hasBackgroundContent) {
           [ctx loadBackgroundContentWithCompletionHandler:^(NSError* _Nullable bgErr) {

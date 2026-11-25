@@ -199,46 +199,36 @@ NSNotificationName const SlateBookmarksChangedNotification = @"SlateBookmarksCha
   return [self findURL:urlString] != nil;
 }
 
+static SlateBookmark* FindBookmarkByURL(NSArray<SlateBookmark*>* nodes, NSString* urlString) {
+  for (SlateBookmark* node in nodes) {
+    if (!node.isFolder && [node.url isEqualToString:urlString]) return node;
+    if (node.isFolder && node.children.count) {
+      SlateBookmark* hit = FindBookmarkByURL(node.children, urlString);
+      if (hit) return hit;
+    }
+  }
+  return nil;
+}
+
+static SlateBookmark* FindBookmarkByIdentifier(NSArray<SlateBookmark*>* nodes, NSString* identifier) {
+  for (SlateBookmark* node in nodes) {
+    if ([node.identifier isEqualToString:identifier]) return node;
+    if (node.isFolder && node.children.count) {
+      SlateBookmark* hit = FindBookmarkByIdentifier(node.children, identifier);
+      if (hit) return hit;
+    }
+  }
+  return nil;
+}
+
 - (SlateBookmark*)findURL:(NSString*)urlString {
   if (!urlString.length) return nil;
-  __block SlateBookmark* found = nil;
-  void (^walk)(NSArray<SlateBookmark*>*);
-  __block void (^weakWalk)(NSArray<SlateBookmark*>*);
-  weakWalk = walk = ^(NSArray<SlateBookmark*>* nodes) {
-    for (SlateBookmark* node in nodes) {
-      if (found) return;
-      if (!node.isFolder && [node.url isEqualToString:urlString]) {
-        found = node;
-        return;
-      }
-      if (node.isFolder && node.children.count) {
-        weakWalk(node.children);
-      }
-    }
-  };
-  walk(self.roots);
-  return found;
+  return FindBookmarkByURL(self.roots, urlString);
 }
 
 - (SlateBookmark*)findNodeWithIdentifier:(NSString*)identifier {
   if (!identifier.length) return nil;
-  __block SlateBookmark* found = nil;
-  void (^walk)(NSArray<SlateBookmark*>*);
-  __block void (^weakWalk)(NSArray<SlateBookmark*>*);
-  weakWalk = walk = ^(NSArray<SlateBookmark*>* nodes) {
-    for (SlateBookmark* node in nodes) {
-      if (found) return;
-      if ([node.identifier isEqualToString:identifier]) {
-        found = node;
-        return;
-      }
-      if (node.isFolder && node.children.count) {
-        weakWalk(node.children);
-      }
-    }
-  };
-  walk(self.roots);
-  return found;
+  return FindBookmarkByIdentifier(self.roots, identifier);
 }
 
 - (void)addURL:(NSString*)urlString title:(NSString*)title {
