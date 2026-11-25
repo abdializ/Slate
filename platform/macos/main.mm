@@ -648,6 +648,8 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property(strong) WKWebViewConfiguration* pendingPopupConfiguration;
 @property(assign) TabId pendingPopupTab;
 @property(strong) NSMutableDictionary<NSNumber*,NSImage*>* tabIcons;
+@property(strong) NSMutableDictionary<NSString*,NSImage*>* hostIcons;
+@property(strong) NSMutableSet<NSString*>* faviconFetchAttempted;
 @property(strong) SlateOmnibox* omnibox;
 @property(strong) NSLayoutConstraint* sidebarWidth;
 @property(strong) NSLayoutConstraint* sidebarLeading;
@@ -2303,6 +2305,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 @property TabId tabId;
 @property BOOL selectedTab;
 @property BOOL loading;
+@property BOOL asleep;
 @property(strong) NSImage* mark;
 @property(strong) CALayer* bgLayer;
 @property(strong) CALayer* iconLayer;
@@ -2352,7 +2355,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
    self.iconLayer.backgroundColor=nil;
    self.iconLayer.contents=contents;
   }
-  self.iconLayer.opacity = self.loading ? 0.55 : 1.0;
+  self.iconLayer.opacity = self.asleep ? 0.42 : (self.loading ? 0.60 : 1.0);
  } else {
   self.iconLayer.mask=nil;
   self.iconLayer.backgroundColor=nil;
@@ -2556,10 +2559,13 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  auto loadIt = runtimes.find(tab.id);
  self.isLoading = (loadIt != runtimes.end() && loadIt->second.loading);
  self.bubble.loading = self.isLoading;
+ const BOOL isAsleep = !model.live(tab.id) && !tab.selected && tab.url != "about:blank";
+ self.bubble.asleep = isAsleep;
  self.bubble.mark = [self.owner iconForTab:tab];
 
  NSString* title = TabSidebarTitle(tab);
  self.label.stringValue = title;
+ self.label.alphaValue = isAsleep ? 0.58 : 1.0;
  self.toolTip = title;
 
  const BOOL isMuted = [self.owner tabIsMuted:tab.id];
@@ -9884,6 +9890,35 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  [self.homeView setNeedsLayout:YES];
  [self.homeBoard setNeedsDisplay:YES];
 }
+static NSString* FaviconCachePathForHost(NSString* host) {
+ if(!host.length) return nil;
+ NSMutableString* safe=[NSMutableString string];
+ for(NSUInteger i=0;i<host.length && safe.length<120;++i) {
+  unichar c=[host characterAtIndex:i];
+  if((c>='a' && c<='z') || (c>='0' && c<='9') || c=='.' || c=='-') [safe appendFormat:@"%C", c];
+  else [safe appendString:@"_"];
+ }
+ if(!safe.length) return nil;
+ NSString* dir=[DataDirectory() stringByAppendingPathComponent:@"favicons"];
+ return [dir stringByAppendingPathComponent:[safe stringByAppendingString:@".png"]];
+}
+static void SaveHostFavicon(NSString* host, NSData* png) {
+ if(!host.length || !png.length) return;
+ NSString* path=FaviconCachePathForHost(host);
+ if(!path) return;
+ NSString* dir=[path stringByDeletingLastPathComponent];
+ dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+  [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+  [png writeToFile:path atomically:YES];
+ });
+}
+static NSImage* LoadHostFaviconFromDisk(NSString* host) {
+ NSString* path=FaviconCachePathForHost(host);
+ if(!path) return nil;
+ NSData* data=[NSData dataWithContentsOfFile:path];
+ return data.length ? [[NSImage alloc] initWithData:data] : nil;
+}
+
 - (NSImage*)iconForTab:(const slate::Tab&)tab {
  if(tab.url=="about:blank") return BrowserGlyphImage();
  if(tab.incognito) {
@@ -9898,6 +9933,33 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  const CGFloat markSize=[self sidebarIconRail] ? RailMarkForWidth([self sidebarLayoutWidth]) : 16.0;
  NSImage* stored=self.tabIcons[@(tab.id)];
  if(stored) return ClipMark(stored, markSize);
+ NSURL* parsed=[NSURL URLWithString:Text(tab.url)];
+ NSString* host=parsed.host.lowercaseString;
+ if(host.length) {
+  if(!self.hostIcons) self.hostIcons=[NSMutableDictionary dictionary];
+  NSImage* hostImg=self.hostIcons[host];
+  if(!hostImg) {
+   hostImg=LoadHostFaviconFromDisk(host);
+   if(hostImg) self.hostIcons[host]=hostImg;
+  }
+  if(hostImg) return ClipMark(hostImg, markSize);
+  // Lightweight disk/network favicon fetch for unloaded tabs (zero WebView / zero tab RAM).
+  if(!self.faviconFetchAttempted) self.faviconFetchAttempted=[NSMutableSet set];
+  if(![self.faviconFetchAttempted containsObject:host]) {
+   [self.faviconFetchAttempted addObject:host];
+   NSURL* icoURL=[NSURL URLWithString:[NSString stringWithFormat:@"https://%@/favicon.ico", host]];
+   __weak SlateDelegate* weakSelf=self;
+   [[SlateFaviconLoader sharedLoader] loadURL:icoURL private:NO completion:^(NSData* png) {
+    if(!png.length || !weakSelf || weakSelf.quitting) return;
+    NSImage* img=[[NSImage alloc] initWithData:png];
+    if(!img) return;
+    if(!weakSelf.hostIcons) weakSelf.hostIcons=[NSMutableDictionary dictionary];
+    weakSelf.hostIcons[host]=img;
+    SaveHostFavicon(host, png);
+    [weakSelf scheduleRefresh];
+   }];
+  }
+ }
  return LetterTile(TabInitial(tab), TabHost(tab), markSize);
 }
 - (NSButton*)pillForTab:(const slate::Tab&)tab filled:(BOOL)filled {
@@ -9913,7 +9975,9 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  pill.splitPartner=workspace.member(tab.id) && !tab.selected;
  pill.image=[self iconForTab:tab];
  [pill applySelected:tab.selected filled:isFilled hovered:NO title:title incognito:tab.incognito];
- pill.alphaValue=model.live(tab.id) || tab.selected ? 1 : 0.85;
+ const BOOL unloaded = !model.live(tab.id) && !tab.selected && tab.url != "about:blank";
+ pill.faviconView.alphaValue = unloaded ? 0.45 : 1.0;
+ pill.alphaValue = unloaded ? 0.78 : 1.0;
  pill.toolTip=Text(tab.url);
  pill.translatesAutoresizingMaskIntoConstraints=NO;
  const CGFloat width=isFilled ? TabFillWidth(title) : kCompactTabWidth;
@@ -10204,6 +10268,9 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
    pill.image=[self iconForTab:*tab];
    pill.splitPartner=workspace.member(tab->id) && !tab->selected;
    [pill applySelected:tab->selected filled:filled hovered:hovered title:title incognito:tab->incognito];
+   const BOOL unloaded = !model.live(tab->id) && !tab->selected && tab->url != "about:blank";
+   pill.faviconView.alphaValue = unloaded ? 0.45 : 1.0;
+   pill.alphaValue = unloaded ? 0.78 : 1.0;
    pill.toolTip=Text(tab->url);
   }
   [self layoutTabPillsWithAvailableWidth:[self availableTabStripWidth]];
@@ -11281,9 +11348,19 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   };
   events.favicon_changed=[weakSelf,identifier](std::string png) {
    if(png.empty()) return;
-   NSImage* image=[[NSImage alloc] initWithData:[NSData dataWithBytes:png.data() length:png.size()]];
+   NSData* pngData=[NSData dataWithBytes:png.data() length:png.size()];
+   NSImage* image=[[NSImage alloc] initWithData:pngData];
    if(!image) return;
    weakSelf.tabIcons[@(identifier)]=image;
+   const auto* t=model.find(identifier);
+   if(t && !t->incognito) {
+    NSString* host=[NSURL URLWithString:Text(t->url)].host.lowercaseString;
+    if(host.length) {
+     if(!weakSelf.hostIcons) weakSelf.hostIcons=[NSMutableDictionary dictionary];
+     weakSelf.hostIcons[host]=image;
+     SaveHostFavicon(host, pngData);
+    }
+   }
    [weakSelf scheduleRefresh];
   };
   events.theme_color_changed=[weakSelf,identifier](std::string hex) {
