@@ -58,6 +58,7 @@ class WebKitShields {
   NSHashTable* __strong registered_controllers_ = nil;
   NSHashTable* __strong incognito_controllers_ = nil;
   NSMapTable* __strong controller_hosts_ = nil;
+  NSMapTable* __strong controller_attached_ = nil;
   NSMutableSet<NSString*>* __strong disabled_sites_ = nil;
   WKUserScript* __strong stealth_script_ = nil;
 };

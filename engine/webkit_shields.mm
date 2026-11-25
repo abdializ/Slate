@@ -14,7 +14,7 @@
 
 namespace slate {
 
-static NSString* const kSlateContentRuleListIdentifier = @"SlateShieldsV16";
+static NSString* const kSlateContentRuleListIdentifier = @"SlateShieldsV17";
 
 static NSString* const kYahooAdDefuserSource = @R"JS(
 (function() {
@@ -691,6 +691,7 @@ WebKitShields::WebKitShields() {
   always_block_in_incognito_ = [defaults objectForKey:kAlwaysIncognitoBlockerKey] ? [defaults boolForKey:kAlwaysIncognitoBlockerKey] : true;
   disabled_sites_ = [NSMutableSet setWithArray:[defaults stringArrayForKey:kAllowedSitesKey] ?: @[]];
   controller_hosts_ = [NSMapTable weakToStrongObjectsMapTable];
+  controller_attached_ = [NSMapTable weakToStrongObjectsMapTable];
   incognito_controllers_ = [NSHashTable weakObjectsHashTable];
   NSString* stealthSource = [NSString stringWithUTF8String:slate::kStealthJs];
   stealth_script_ = [[WKUserScript alloc] initWithSource:stealthSource
@@ -888,7 +889,53 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
       @"districtm.io",
       @"yieldlab.net",
       @"smaato.net",
-      @"richaudience.com"
+      @"richaudience.com",
+      // Popunder, streaming-site, push, and aggressive ad/redirect networks
+      @"popads.net",
+      @"popcash.net",
+      @"propellerads.com",
+      @"propellerads.tech",
+      @"propellerclick.com",
+      @"monetag.com",
+      @"acscdn.com",
+      @"alwingulla.com",
+      @"hilltopads.com",
+      @"hilltopads.net",
+      @"clickadu.com",
+      @"clickaine.com",
+      @"adsterra.com",
+      @"adsterraserver.com",
+      @"effectivegatecpm.com",
+      @"highperformanceformat.com",
+      @"profitablecpmrate.com",
+      @"ad-maven.com",
+      @"admaven.com",
+      @"exoclick.com",
+      @"exosrv.com",
+      @"realsrv.com",
+      @"tsyndicate.com",
+      @"trafficjunky.com",
+      @"trafficjunky.net",
+      @"trafficstars.com",
+      @"juicyads.com",
+      @"galaksion.com",
+      @"richads.com",
+      @"onclicka.com",
+      @"onclickperformance.com",
+      @"onclkds.com",
+      @"pushground.com",
+      @"evadav.com",
+      @"mgid.com",
+      @"adskeeper.com",
+      @"rtmark.net",
+      @"wpadmngr.com",
+      @"pemsrv.com",
+      @"adcash.com",
+      @"ufpcdn.com",
+      @"histats.com",
+      @"a-ads.com",
+      @"coinzilla.com",
+      @"bitmedia.io"
     ];
 
     for (NSString* domain in adDomains) {
@@ -900,9 +947,21 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
       }];
     }
 
+    // Site-specific first-party ad/promo delivery paths (e.g. novahd.cc self-hosted sponsor videos/banners & /r/ redirects)
+    [rules addObject:@{
+      @"trigger": @{ @"url-filter": @"^https?://+([^:/]+\\.)?novahd\\.cc/assets/p/.*" },
+      @"action": @{ @"type": @"block" }
+    }];
+    [rules addObject:@{
+      @"trigger": @{ @"url-filter": @"^https?://+([^:/]+\\.)?novahd\\.cc/r/.*" },
+      @"action": @{ @"type": @"block" }
+    }];
+
     // Parse the safe native subset. Unknown modifiers never become broader rules.
+    // macOS WebKit supports 150,000 rules per WKContentRuleList; load all of EasyList + EasyPrivacy
+    // instead of truncating alphabetically at letter I.
     size_t count = 0;
-    const size_t kMaxRulesPerList = 20000;
+    const size_t kMaxRulesPerList = 55000;
     size_t unsupported = 0, duplicate = 0, raw = 0;
     std::unordered_set<std::string> seen;
     NSMutableArray* exceptionRules = [NSMutableArray array];
@@ -1112,6 +1171,17 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
           @"type": @"css-display-none",
           @"selector": @"shreddit-ad-post, shreddit-comments-page-ad, faceplate-tracker[noun='ad']"
         }
+      },
+      // Group 8: novahd.cc first-party promo/sponsor banners & affiliate redirects
+      @{
+        @"trigger": @{
+          @"url-filter": @".*",
+          @"if-domain": @[ @"*novahd.cc" ]
+        },
+        @"action": @{
+          @"type": @"css-display-none",
+          @"selector": @"[class*='promo-'], .home-promo-hero, a[href^='/r/']"
+        }
       }
     ];
     [rules addObjectsFromArray:cosmeticRuleGroups];
@@ -1145,10 +1215,20 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
               [@"SlateRuleCount-" stringByAppendingString:this->rule_identifier_]];
             fprintf(stderr, "[SlateShields] Compiled %lu rules successfully.\n", (unsigned long)rules.count);
             // Reclaim dirty malloc pages left over from compiling the WebKit content rule list.
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
-                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-              malloc_zone_pressure_relief(nullptr, 0);
-            });
+            for (int delaySec : {2, 6}) {
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delaySec * NSEC_PER_SEC)),
+                             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                malloc_zone_pressure_relief(nullptr, 0);
+                vm_address_t* zones = nullptr;
+                unsigned zc = 0;
+                if (malloc_get_all_zones(mach_task_self(), nullptr, &zones, &zc) == KERN_SUCCESS && zones) {
+                  for (unsigned i = 0; i < zc; ++i) {
+                    malloc_zone_t* z = reinterpret_cast<malloc_zone_t*>(zones[i]);
+                    if (z) malloc_zone_pressure_relief(z, 0);
+                  }
+                }
+              });
+            }
             this->BroadcastRuleList();
           } else {
             fprintf(stderr, "[SlateShields] Compilation failed: %s\n", compileError ? compileError.description.UTF8String : "unknown");
@@ -1174,9 +1254,11 @@ void WebKitShields::BroadcastRuleList() {
           [ctrl removeAllContentRuleLists];
           NSString* site = [this->controller_hosts_ objectForKey:ctrl];
           bool isIncog = this->incognito_controllers_ && [this->incognito_controllers_ containsObject:ctrl];
-          if (this->IsEnabledForIncognito(isIncog) && ![this->disabled_sites_ containsObject:site] && this->rule_list_) {
+          bool want = this->IsEnabledForIncognito(isIncog) && ![this->disabled_sites_ containsObject:site] && this->rule_list_;
+          if (want) {
             [ctrl addContentRuleList:this->rule_list_];
           }
+          [this->controller_attached_ setObject:@(want) forKey:ctrl];
         } @catch (id ex) {}
       }
     }
@@ -1257,12 +1339,83 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
     [controller addUserScript:ytScript];
   }
 
+  // Attach document-start first-party ad/sponsor/popunder config pruner for novahd.cc
+  // (strips self-hosted Stake/promo banners, pre-roll/mid-roll sponsor videos, and popunder config
+  // cleanly from /api/config before the SPA mounts, matching uBlock Origin's json-prune behavior).
+  if (active && ![disabled_sites_ containsObject:@"novahd.cc"]) {
+    static NSString* const kNovaDocStartJs = @R"JS(
+      (function() {
+        'use strict';
+        const h = (location && location.hostname || '').toLowerCase();
+        if (h !== 'novahd.cc' && !h.endsWith('.novahd.cc')) return;
+        if (window.__slateNovaAdPrune) return;
+        window.__slateNovaAdPrune = true;
+        function pruneConfig(data) {
+          if (!data || typeof data !== 'object') return data;
+          try {
+            if (data.ads && typeof data.ads === 'object') {
+              data.ads.enabled = false;
+              data.ads.preroll = false;
+              data.ads.midroll = false;
+              data.ads.vastUrl = '';
+              data.ads.vastUrlFallback = '';
+            }
+            if (data.sponsors && typeof data.sponsors === 'object') {
+              data.sponsors.enabled = false;
+              data.sponsors.preroll = false;
+              data.sponsors.midroll = false;
+              data.sponsors.houseAd = false;
+              data.sponsors.breakOffer = false;
+              data.sponsors.creatives = [];
+            }
+            if (data.popunder && typeof data.popunder === 'object') {
+              data.popunder.enabled = false;
+              data.popunder.url = '';
+              data.popunder.urlAlt = '';
+              data.popunder.scriptUrl = '';
+            }
+          } catch (e) {}
+          return data;
+        }
+        const origFetch = window.fetch;
+        if (typeof origFetch === 'function') {
+          window.fetch = function(input, init) {
+            const url = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
+            const isCfg = typeof url === 'string' && /(?:^|\/)api\/config(?:\?|$)/.test(url);
+            const p = origFetch.apply(this, arguments);
+            if (!isCfg) return p;
+            return p.then(function(resp) {
+              if (!resp || !resp.ok) return resp;
+              return resp.clone().text().then(function(txt) {
+                try {
+                  const parsed = pruneConfig(JSON.parse(txt));
+                  const body = JSON.stringify(parsed);
+                  const headers = new Headers(resp.headers);
+                  headers.set('content-type', 'application/json; charset=utf-8');
+                  headers.delete('content-length');
+                  return new Response(body, { status: resp.status, statusText: resp.statusText, headers: headers });
+                } catch (e) {
+                  return resp;
+                }
+              }).catch(function() { return resp; });
+            });
+          };
+        }
+      })();
+    )JS";
+    WKUserScript* novaScript = [[WKUserScript alloc] initWithSource:kNovaDocStartJs
+                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                   forMainFrameOnly:YES];
+    [controller addUserScript:novaScript];
+  }
+
   // Attach compiled rule list immediately if already available; lazily load if needed.
   if (active) {
     if (!rule_list_) EnsureLoaded();
     if (rule_list_) {
       @try {
         [controller addContentRuleList:rule_list_];
+        [controller_attached_ setObject:@YES forKey:controller];
       } @catch (id ex) {}
     }
   }
@@ -1334,11 +1487,14 @@ void WebKitShields::UpdateControllerForURL(WKUserContentController* controller, 
   if (!controller) return;
   NSString* site = NormalizedSite(url.host ?: @"");
   [controller_hosts_ setObject:site forKey:controller];
+  bool isIncog = incognito_controllers_ && [incognito_controllers_ containsObject:controller];
+  bool want = IsEnabledForIncognito(isIncog) && ![disabled_sites_ containsObject:site] && rule_list_;
+  NSNumber* prev = [controller_attached_ objectForKey:controller];
+  if (prev && prev.boolValue == want) return;
   @try {
     [controller removeAllContentRuleLists];
-    bool isIncog = incognito_controllers_ && [incognito_controllers_ containsObject:controller];
-    if (IsEnabledForIncognito(isIncog) && ![disabled_sites_ containsObject:site] && rule_list_)
-      [controller addContentRuleList:rule_list_];
+    if (want) [controller addContentRuleList:rule_list_];
+    [controller_attached_ setObject:@(want) forKey:controller];
   } @catch (id ex) {}
 }
 
@@ -1455,7 +1611,52 @@ bool WebKitShields::IsAdOrTrackerHost(NSString* host) const {
       @"districtm.io",
       @"yieldlab.net",
       @"smaato.net",
-      @"richaudience.com"
+      @"richaudience.com",
+      @"popads.net",
+      @"popcash.net",
+      @"propellerads.com",
+      @"propellerads.tech",
+      @"propellerclick.com",
+      @"monetag.com",
+      @"acscdn.com",
+      @"alwingulla.com",
+      @"hilltopads.com",
+      @"hilltopads.net",
+      @"clickadu.com",
+      @"clickaine.com",
+      @"adsterra.com",
+      @"adsterraserver.com",
+      @"effectivegatecpm.com",
+      @"highperformanceformat.com",
+      @"profitablecpmrate.com",
+      @"ad-maven.com",
+      @"admaven.com",
+      @"exoclick.com",
+      @"exosrv.com",
+      @"realsrv.com",
+      @"tsyndicate.com",
+      @"trafficjunky.com",
+      @"trafficjunky.net",
+      @"trafficstars.com",
+      @"juicyads.com",
+      @"galaksion.com",
+      @"richads.com",
+      @"onclicka.com",
+      @"onclickperformance.com",
+      @"onclkds.com",
+      @"pushground.com",
+      @"evadav.com",
+      @"mgid.com",
+      @"adskeeper.com",
+      @"rtmark.net",
+      @"wpadmngr.com",
+      @"pemsrv.com",
+      @"adcash.com",
+      @"ufpcdn.com",
+      @"histats.com",
+      @"a-ads.com",
+      @"coinzilla.com",
+      @"bitmedia.io"
     ]];
   });
 

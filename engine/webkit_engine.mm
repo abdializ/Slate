@@ -418,6 +418,24 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     }
   }
 
+  // Block ad-network popups & popunders when Slate Shields is active on the opener page.
+  {
+    const bool isIncog = !webView.configuration.websiteDataStore.isPersistent;
+    const std::string openerHost = webView.URL.host ? webView.URL.host.UTF8String : "";
+    auto& shields = slate::WebKitShields::Shared();
+    if (shields.IsEnabledForIncognito(isIncog) && (openerHost.empty() || shields.IsSiteEnabled(openerHost))) {
+      NSString* targetHost = url.host.lowercaseString ?: @"";
+      NSString* targetPath = url.path ?: @"";
+      const BOOL isNovaPromoRedirect =
+          ([targetHost isEqualToString:@"novahd.cc"] || [targetHost hasSuffix:@".novahd.cc"]) &&
+          [targetPath hasPrefix:@"/r/"];
+      if (isNovaPromoRedirect || (targetHost.length && shields.IsAdOrTrackerHost(targetHost))) {
+        fprintf(stderr, "SLATE_SHIELD_BLOCKED_POPUP url=%s\n", urlStr.UTF8String ?: "nil");
+        return nil;
+      }
+    }
+  }
+
   // Return the actual tab-owned view so WebKit retains window.opener, POST
   // requests, and script-populated about:blank windows.
   if (self.events && self.events->create_popup_tab) {
