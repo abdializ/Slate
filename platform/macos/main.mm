@@ -2729,7 +2729,18 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  } else if(self.groupId) {
   self.pillLayer.frame = self.bounds;
  } else {
-  self.pillLayer.frame = self.bounds;
+  const NSRect b = self.bounds;
+  const CGFloat pad = 2.5;
+  const NSInteger splitPos = self.owner ? [self.owner splitGroupPositionForTab:self.tabId] : 0;
+  if(splitPos == 1) {
+   self.pillLayer.frame = NSMakeRect(NSMinX(b), NSMinY(b) + pad, NSWidth(b), MAX(0, NSHeight(b) - pad));
+  } else if(splitPos == 2) {
+   self.pillLayer.frame = b;
+  } else if(splitPos == 3) {
+   self.pillLayer.frame = NSMakeRect(NSMinX(b), NSMinY(b), NSWidth(b), MAX(0, NSHeight(b) - pad));
+  } else {
+   self.pillLayer.frame = NSInsetRect(b, 0, pad);
+  }
  }
  [CATransaction commit];
 }
