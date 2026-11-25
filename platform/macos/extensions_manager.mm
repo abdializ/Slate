@@ -2,6 +2,7 @@
 // Chrome extension installer, and WKWebExtensionWindow/WKWebExtensionTab adapters.
 
 #import "platform/macos/extensions_manager.h"
+#include "platform/macos/memory_monitor.h"
 #include "engine/extension_shims_js.h"
 #import <objc/runtime.h>
 #import <UserNotifications/UserNotifications.h>
@@ -549,6 +550,10 @@ API_AVAILABLE(macos(15.4))
   for (WKWebExtensionPermission perm in ext.requestedPermissions) {
     [ctx setPermissionStatus:WKWebExtensionContextPermissionStatusGrantedExplicitly forPermission:perm];
   }
+  if ([ext.requestedPermissions containsObject:WKWebExtensionPermissionDeclarativeNetRequest]) {
+    [ctx setPermissionStatus:WKWebExtensionContextPermissionStatusGrantedExplicitly
+               forPermission:WKWebExtensionPermissionDeclarativeNetRequestWithHostAccess];
+  }
   for (WKWebExtensionMatchPattern* pattern in ext.requestedPermissionMatchPatterns) {
     [ctx setPermissionStatus:WKWebExtensionContextPermissionStatusGrantedExplicitly forMatchPattern:pattern];
   }
@@ -584,6 +589,17 @@ API_AVAILABLE(macos(15.4))
 
         WKWebExtensionContext* ctx = [WKWebExtensionContext contextForExtension:extension];
         ctx.uniqueIdentifier = rec.identifier;
+        // Keep the same webkit-extension://<id>/ origin across launches so extensions retain
+        // IndexedDB / localStorage / service worker state instead of re-initializing on every boot.
+        NSString* safeHost = [rec.identifier.lowercaseString
+            stringByReplacingOccurrencesOfString:@"[^a-z0-9-]"
+                                      withString:@""
+                                         options:NSRegularExpressionSearch
+                                           range:NSMakeRange(0, rec.identifier.length)];
+        if (safeHost.length > 0) {
+          NSURL* stableBase = [NSURL URLWithString:[NSString stringWithFormat:@"webkit-extension://%@/", safeHost]];
+          if (stableBase) ctx.baseURL = stableBase;
+        }
         ctx.hasAccessToPrivateData = rec.allowInPrivate;
         [self grantRequestedPermissionsOnContext:ctx];
         for (NSString* deniedHost in rec.deniedHosts) {
@@ -601,6 +617,13 @@ API_AVAILABLE(macos(15.4))
           return;
         }
         rec.webExtensionContext = ctx;
+        // WebKit compiles extension declarativeNetRequest rulesets in-process (spiking malloc
+        // by 1+ GB during startup/filter refreshes). Kick off the adaptive settle reclaimer so
+        // empty freed pages return to macOS right after compilation finishes.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
+                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+          slate::trim_process_memory(true);
+        });
         if (extension.hasBackgroundContent) {
           [ctx loadBackgroundContentWithCompletionHandler:^(NSError* _Nullable bgErr) {
             if (bgErr) {
@@ -1128,6 +1151,13 @@ API_AVAILABLE(macos(15.4))
       }];
     }
     [self replyShimToWebView:webView reqId:reqId result:nid error:nil];
+    return;
+  } else if ([op isEqualToString:@"memory.rulesBuilt"]) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+      slate::trim_process_memory(true);
+    });
+    [self replyShimToWebView:webView reqId:reqId result:@YES error:nil];
     return;
   }
   [self replyShimToWebView:webView reqId:reqId result:nil error:@"Unsupported extension shim operation"];

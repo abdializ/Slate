@@ -193,6 +193,36 @@ inline constexpr char kExtensionShimsJs[] = R"SLATE_EXT_SHIM((function() {
       }
     };
   }
+  // 7. Notify host when declarativeNetRequest rulesets finish compiling so Slate
+  // immediately hands empty WebKit compilation pages back to macOS.
+  if (api.declarativeNetRequest) {
+    const dnr = api.declarativeNetRequest;
+    const notifyBuilt = function() {
+      try { bridgeCall('memory.rulesBuilt', {}).catch(function() {}); } catch (e) {}
+    };
+    ['updateEnabledRulesets', 'updateDynamicRules', 'updateSessionRules'].forEach(function(fn) {
+      if (typeof dnr[fn] !== 'function') return;
+      const orig = dnr[fn].bind(dnr);
+      try {
+        dnr[fn] = function() {
+          const args = Array.prototype.slice.call(arguments);
+          const last = args.length ? args[args.length - 1] : null;
+          if (typeof last === 'function') {
+            args[args.length - 1] = function() {
+              notifyBuilt();
+              return last.apply(this, arguments);
+            };
+            return orig.apply(dnr, args);
+          }
+          const res = orig.apply(dnr, args);
+          if (res && typeof res.then === 'function') {
+            res.then(notifyBuilt, function() {});
+          }
+          return res;
+        };
+      } catch (e) {}
+    });
+  }
 })();)SLATE_EXT_SHIM";
 
 } // namespace slate

@@ -21,5 +21,8 @@ int main() { @autoreleasepool {
  monitor.reset(); const int before=callbacks;
  [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
  if(callbacks!=before) std::abort();
+ // Verify off-thread malloc zone reclamation executes cleanly without crashing.
+ slate::trim_process_memory(true);
+ [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
  std::cout << "Native memory sampling and monitor cancellation passed\n";
 }}

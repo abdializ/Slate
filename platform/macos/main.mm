@@ -10783,6 +10783,9 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
   [self syncBrowserOcclusion];
   for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->trim_memory();
   slate::trim_process_memory(true);
+ } else if(sample.browser_footprint_bytes > 150ULL * 1024ULL * 1024ULL) {
+  // Proactively reclaim empty malloc pages left over from background extension/filter list compiles.
+  slate::trim_process_memory(true);
  }
  [self sleepIdleTabsIfNeeded:sample.pressure];
  if(pressureChanged)
