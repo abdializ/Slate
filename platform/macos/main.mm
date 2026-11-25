@@ -2579,11 +2579,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  }
  self.speakerButton.contentTintColor = self.owner.accentMuted ?: NSColor.secondaryLabelColor;
  self.pipBadge.hidden = !tab.pip_active;
- const NSInteger splitSide=[self.owner splitSideForTab:tab.id];
- const NSInteger splitCount=[self.owner splitGroupCountForTab:tab.id];
- self.splitBadge.hidden=!splitSide;
- self.splitBadge.toolTip=splitSide ? [NSString stringWithFormat:@"Pane %ld of %ld in split view",(long)splitSide,(long)MAX(2,splitCount)] : nil;
- self.splitBadge.contentTintColor=self.owner.accentMuted ?: NSColor.secondaryLabelColor;
+ self.splitBadge.hidden = YES;
 
 
  // Loading state is shown cleanly by the dimmed favicon, toolbar progress bar, and reload button.
@@ -2611,8 +2607,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   self.speakerButton.hidden = YES;
   self.pipBadge.hidden = YES;
   self.spinner.hidden = YES;
-  self.splitBadge.hidden=![self.owner splitSideForTab:self.tabId];
-  self.splitBadge.frame=NSMakeRect(NSMaxX(self.bubble.frame)-4,NSMinY(self.bubble.frame)-3,12,12);
+  self.splitBadge.hidden = YES;
   [CATransaction commit];
   return;
  }
@@ -2656,11 +2651,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   self.pipBadge.hidden = YES;
  }
 
- self.splitBadge.hidden=![self.owner splitSideForTab:self.tabId];
- if(!self.splitBadge.hidden) {
-  self.splitBadge.frame=NSMakeRect(rightOffset,round((rowH-15)/2.0),15,15);
-  rightOffset-=18;
- }
+ self.splitBadge.hidden = YES;
  self.spinner.hidden = YES;
 
  CGFloat trailingLimit = rightOffset - 4;
