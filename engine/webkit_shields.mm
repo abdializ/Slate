@@ -5,6 +5,7 @@
 #import "engine/webkit_shields.h"
 #include "engine/stealth_js.h"
 #include "engine/twitch_adblock_js.h"
+#include <malloc/malloc.h>
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -1125,6 +1126,11 @@ void WebKitShields::CompileRules(const std::vector<std::string>& rule_file_paths
             [NSUserDefaults.standardUserDefaults setInteger:rules.count forKey:
               [@"SlateRuleCount-" stringByAppendingString:this->rule_identifier_]];
             fprintf(stderr, "[SlateShields] Compiled %lu rules successfully.\n", (unsigned long)rules.count);
+            // Reclaim dirty malloc pages left over from compiling the WebKit content rule list.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+              malloc_zone_pressure_relief(nullptr, 0);
+            });
             this->BroadcastRuleList();
           } else {
             fprintf(stderr, "[SlateShields] Compilation failed: %s\n", compileError ? compileError.description.UTF8String : "unknown");

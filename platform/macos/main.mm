@@ -888,6 +888,8 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)closeNextForQuit;
 - (void)observePageEvent:(NSEvent*)event;
 - (void)memoryChanged:(slate::MemorySample)sample;
+- (void)sleepIdleTabsIfNeeded:(slate::Pressure)pressure;
+- (IBAction)trimMemoryNow:(id)sender;
 #if defined(SLATE_ENABLE_VERIFY)
 - (void)startVerifyCommands;
 - (void)runVerifyLoopInBackground;
@@ -8506,6 +8508,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
 - (void)appDidResignActive:(NSNotification*)notification {
  (void)notification;
  [self autoPiPForVisibleWorkspace];
+ slate::trim_process_memory(false);
 }
 - (void)appDidBecomeActive:(NSNotification*)notification {
  (void)notification;
@@ -10713,21 +10716,77 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
 }
 // Slate note: Memory pressure trims bounded app-owned caches. Automatic page destruction remains
 // disconnected.
+- (IBAction)trimMemoryNow:(id)sender {
+ (void)sender;
+ if(self.quitting) return;
+ [[SlateFaviconLoader sharedLoader] trimCache];
+ [self syncBrowserOcclusion];
+ for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->trim_memory();
+ slate::trim_process_memory(true);
+}
+- (void)sleepIdleTabsIfNeeded:(slate::Pressure)pressure {
+ if(self.quitting) return;
+ NSNumber* pref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateAutoSleepMinutes"];
+ NSInteger minutes = pref ? pref.integerValue : 30; // Default: 30 minutes (Off = 0)
+ if(minutes <= 0) return;
+ if(pressure == slate::Pressure::Critical) minutes = MIN(minutes, 2);
+ else if(pressure == slate::Pressure::Warning) minutes = MIN(minutes, 5);
+
+ const auto now = std::chrono::steady_clock::now();
+ const auto threshold = std::chrono::minutes(minutes);
+ const TabId selected = model.selected();
+
+ // Collect WKWebViews with active downloads so we never sleep a downloading tab.
+ NSMutableSet<WKWebView*>* downloadingViews = [NSMutableSet set];
+ for(SlateDownloadItem* dl in [SlateDownloadManager sharedManager].activeDownloads) {
+  if(dl.sourceWebView) [downloadingViews addObject:dl.sourceWebView];
+ }
+
+ std::vector<TabId> toSleep;
+ for(const auto& tab : model.tabs()) {
+  if(!model.live(tab.id) || model.closing(tab.id)) continue;
+  if(tab.selected || tab.id == selected || tab.pinned || tab.protected_content) continue;
+  if(tab.url == "about:blank" || tab.url == "about:blank#popup") continue;
+  if(workspace.member(tab.id) || self.detachedTabs[@(tab.id)] || self.floatingTabId == tab.id) continue;
+  if(tab.pip_active || tab.is_protected(now)) continue;
+  auto rtIt = runtimes.find(tab.id);
+  if(rtIt != runtimes.end()) {
+   const auto& rt = rtIt->second;
+   if(rt.audible || rt.video_playing || rt.pip_active || rt.loading) continue;
+   if(rt.host) {
+    BOOL hasDownload = NO;
+    for(NSView* sub in rt.host.subviews) {
+     if([sub isKindOfClass:WKWebView.class] && [downloadingViews containsObject:(WKWebView*)sub]) {
+      hasDownload = YES; break;
+     }
+    }
+    if(hasDownload) continue;
+   }
+  }
+  if(now - tab.last_used >= threshold) {
+   toSleep.push_back(tab.id);
+  }
+ }
+ for(TabId tid : toSleep) {
+  fprintf(stderr, "SLATE_AUTO_SLEEP id=%llu idle_min=%ld\n",
+          static_cast<unsigned long long>(tid), (long)minutes);
+  [self beginClose:tid reason:slate::CloseReason::Discard];
+ }
+}
 - (void)memoryChanged:(slate::MemorySample)sample {
  const BOOL pressureChanged=sample.pressure!=memorySample.pressure || sample.pressure_known!=memorySample.pressure_known;
  memorySample=sample;
  if(self.quitting) return;
 
- // WebKit cannot prove a document has no unsaved application state. Keep
- // automatic destruction disconnected; pressure may evict only bounded caches.
-
  if(sample.pressure==slate::Pressure::Warning || sample.pressure==slate::Pressure::Critical) {
   [[SlateFaviconLoader sharedLoader] trimCache];
   [self syncBrowserOcclusion];
   for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->trim_memory();
+  slate::trim_process_memory(true);
  }
+ [self sleepIdleTabsIfNeeded:sample.pressure];
  if(pressureChanged)
-  fprintf(stderr,"SLATE_MEMORY pressure=%s main_process_bytes=%llu automatic=off\n",
+  fprintf(stderr,"SLATE_MEMORY pressure=%s main_process_bytes=%llu\n",
    !sample.pressure_known ? "unknown" : sample.pressure==slate::Pressure::Critical ? "critical" : sample.pressure==slate::Pressure::Warning ? "warning" : "normal",
    static_cast<unsigned long long>(sample.browser_footprint_bytes));
 }
@@ -11949,10 +12008,11 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  }
  if(self.floatingTabId == identifier) self.floatingTabId = 0;
  const BOOL closingVisibleSplit=workspace.visible_for(model.selected()) && workspace.contains(identifier);
- const TabId splitSurvivor=workspace.remove(identifier);
+ const TabId splitSurvivor=(closeReason == slate::CloseReason::Discard) ? 0 : workspace.remove(identifier);
  const auto reason=model.close_reason(identifier);
  runtimes.erase(identifier); model.closed(identifier);
- [self.tabIcons removeObjectForKey:@(identifier)];
+ if(closeReason != slate::CloseReason::Discard) [self.tabIcons removeObjectForKey:@(identifier)];
+ slate::trim_process_memory(false);
  fprintf(stderr,"SLATE_TAB_CLOSED id=%llu loaded=%zu\n",static_cast<unsigned long long>(identifier),runtimes.size());
  bool any_incognito = false;
  for(const auto& t : model.tabs()) {

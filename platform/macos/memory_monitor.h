@@ -16,4 +16,7 @@ class MemoryMonitor {
 // Main-queue callbacks, initial sample plus 10-second refresh and immediate OS
 // pressure notifications. Destruction cancels both sources.
 std::unique_ptr<MemoryMonitor> monitor_memory(std::function<void(MemorySample)> callback);
+// Reclaims dirty freed malloc pages in the main process off the main thread
+// (uses malloc_zone_pressure_relief when footprint grew beyond a 48 MB margin or force=true).
+void trim_process_memory(bool force = false);
 }

@@ -9,6 +9,7 @@
 #include "engine/page_theme_js.h"
 #include "engine/image_download_js.h"
 #include "engine/extension_shims_js.h"
+#include "engine/memory_optimizer_js.h"
 #include "engine/pip_state.h"
 #import "platform/macos/download_manager.h"
 #import "platform/macos/form_relay.h"
@@ -931,11 +932,19 @@ class WebKitEngine final : public BrowserEngine {
     for (NSString* selName in @[
       @"_setDOMTimersThrottlingEnabled:",
       @"_setHiddenPageDOMTimerThrottlingEnabled:",
-      @"_setHiddenPageDOMTimerThrottlingAutoIncreases:"
+      @"_setHiddenPageDOMTimerThrottlingAutoIncreases:",
+      @"_setInvisibleMediaAutoplayNotPermitted:"
     ]) {
       SEL s = NSSelectorFromString(selName);
       if ([config.preferences respondsToSelector:s]) {
         reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(config.preferences, s, YES);
+      }
+    }
+    {
+      // Prevent WebKit from hoarding offscreen GPU compositor tiles on long feeds (YouTube/Kick/X).
+      SEL aggTileSel = NSSelectorFromString(@"_setAggressiveTileRetentionEnabled:");
+      if ([config.preferences respondsToSelector:aggTileSel]) {
+        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(config.preferences, aggTileSel, NO);
       }
     }
     [SlateFrameRate applyToPreferences:config.preferences];
@@ -1002,6 +1011,18 @@ class WebKitEngine final : public BrowserEngine {
                                                       forMainFrameOnly:NO
                                                         inContentWorld:[WKContentWorld defaultClientWorld]];
       [config.userContentController addUserScript:mediaScript];
+
+      // Site-scoped idle memory optimizer (Kick/Twitch/YouTube chat DOM windowing, offscreen preview cleanup,
+      // and hidden muted stream suspension). Default ON; user-configurable in Settings.
+      NSNumber* memOptPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateMemoryOptimizerEnabled"];
+      if (!memOptPref || memOptPref.boolValue) {
+        NSString* memOptJs = [NSString stringWithUTF8String:slate::kMemoryOptimizerJs];
+        WKUserScript* memOptScript = [[WKUserScript alloc] initWithSource:memOptJs
+                                                            injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                         forMainFrameOnly:NO
+                                                           inContentWorld:[WKContentWorld defaultClientWorld]];
+        [config.userContentController addUserScript:memOptScript];
+      }
     } else {
       WKUserScript* mediaScript = [[WKUserScript alloc] initWithSource:mediaMonitorJs
                                                          injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
@@ -1400,6 +1421,12 @@ class WebKitEngine final : public BrowserEngine {
     web_view_.allowsMagnification = YES;
     web_view_.magnification = 1.0;
     web_view_.allowsBackForwardNavigationGestures = NO;
+    {
+      SEL occlSel = NSSelectorFromString(@"_setWindowOcclusionDetectionEnabled:");
+      if ([web_view_ respondsToSelector:occlSel]) {
+        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(web_view_, occlSel, YES);
+      }
+    }
     web_view_.navigationDelegate = delegate_;
     web_view_.UIDelegate = delegate_;
     delegate_.webView = web_view_;
@@ -1696,6 +1723,32 @@ class WebKitEngine final : public BrowserEngine {
     }
   }
 
+  void set_occluded(bool occluded) override {
+    if (occluded_ == occluded) return;
+    occluded_ = occluded;
+    if (occluded_ && web_view_) {
+      // Drop suspended back/forward page snapshots when hidden to free SPA DOM/JS heaps.
+      SEL clearBfcSel = NSSelectorFromString(@"_clearBackForwardCache");
+      if ([web_view_ respondsToSelector:clearBfcSel]) {
+        reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)(web_view_, clearBfcSel);
+      }
+    }
+  }
+
+  void trim_memory() override {
+    if (!web_view_ || closed_) return;
+    SEL clearBfcSel = NSSelectorFromString(@"_clearBackForwardCache");
+    if ([web_view_ respondsToSelector:clearBfcSel]) {
+      reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)(web_view_, clearBfcSel);
+    }
+    if (@available(macOS 11.0, *)) {
+      [web_view_ evaluateJavaScript:@"if (typeof window.__slateTrimPageMemory === 'function') window.__slateTrimPageMemory();"
+                           inFrame:nil
+                    inContentWorld:[WKContentWorld defaultClientWorld]
+                 completionHandler:nil];
+    }
+  }
+
   void stop() override {
     if (web_view_) [web_view_ stopLoading];
   }
@@ -1723,7 +1776,14 @@ class WebKitEngine final : public BrowserEngine {
         } @catch(id e) {}
 
         if (@available(macOS 12.0, *)) {
+          [web_view_ pauseAllMediaPlaybackWithCompletionHandler:nil];
           [web_view_ closeAllMediaPresentationsWithCompletionHandler:nil];
+        }
+        {
+          SEL clearBfcSel = NSSelectorFromString(@"_clearBackForwardCache");
+          if ([web_view_ respondsToSelector:clearBfcSel]) {
+            reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)(web_view_, clearBfcSel);
+          }
         }
         if (@available(macOS 11.0, *)) {
           [web_view_.configuration.userContentController removeScriptMessageHandlerForName:@"slateWebStore" contentWorld:[WKContentWorld defaultClientWorld]];
@@ -1750,9 +1810,16 @@ class WebKitEngine final : public BrowserEngine {
         }
         [web_view_ stopLoading];
         [web_view_.configuration.userContentController removeAllUserScripts];
+        [web_view_.configuration.userContentController removeAllContentRuleLists];
         [web_view_ removeFromSuperview];
         web_view_.navigationDelegate = nil;
         web_view_.UIDelegate = nil;
+        {
+          SEL closeSel = NSSelectorFromString(@"_close");
+          if ([web_view_ respondsToSelector:closeSel]) {
+            reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)(web_view_, closeSel);
+          }
+        }
         web_view_ = nil;
       }
 
@@ -1767,6 +1834,7 @@ class WebKitEngine final : public BrowserEngine {
   WKWebView* __strong web_view_ = nil;
   SlateWebNavigationDelegate* __strong delegate_ = nil;
   bool incognito_ = false;
+  bool occluded_ = false;
   bool closed_ = false;
 };
 

@@ -3,6 +3,8 @@
 
 #include "memory_monitor.h"
 #include <dispatch/dispatch.h>
+#include <mach/mach.h>
+#include <malloc/malloc.h>
 #include <sys/sysctl.h>
 #include <memory>
 namespace slate {
@@ -64,5 +66,29 @@ class MacMemoryMonitor final : public MemoryMonitor {
 }
 std::unique_ptr<MemoryMonitor> monitor_memory(std::function<void(MemorySample)> callback) {
  return std::make_unique<MacMemoryMonitor>(std::move(callback));
+}
+
+void trim_process_memory(bool force) {
+ static dispatch_queue_t trim_queue = nullptr;
+ static dispatch_once_t once;
+ dispatch_once(&once, ^{
+  trim_queue = dispatch_queue_create("dev.slate.browser.memory-trim", DISPATCH_QUEUE_SERIAL);
+ });
+ dispatch_async(trim_queue, ^{
+  static uint64_t last_after_trim = 0;
+  constexpr uint64_t kMarginBytes = 48ULL * 1024ULL * 1024ULL;
+  auto current_footprint = []() -> uint64_t {
+   task_vm_info_data_t info{};
+   mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+   if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+    return info.phys_footprint;
+   }
+   return 0;
+  };
+  const uint64_t before = current_footprint();
+  if (!force && last_after_trim > 0 && before <= last_after_trim + kMarginBytes) return;
+  malloc_zone_pressure_relief(nullptr, 0);
+  last_after_trim = current_footprint();
+ });
 }
 }

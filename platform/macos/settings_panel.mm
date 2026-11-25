@@ -34,6 +34,7 @@
 - (void)toggleTabsReveal:(id)sender;
 - (void)toggleBookmarksBar:(id)sender;
 - (void)togglePages120Hz:(id)sender;
+- (IBAction)trimMemoryNow:(id)sender;
 - (void)toggleShields:(id)sender;
 - (void)resumeAdBlockSite:(NSString*)site;
 - (IBAction)showPasswordsPanel:(id)sender;
@@ -269,6 +270,9 @@
 @property (nonatomic, strong) NSSegmentedControl* appearanceSegment;
 @property (nonatomic, strong) NSSegmentedControl* tabStyleSegment;
 @property (nonatomic, strong) NSSwitch* switch120Hz;
+@property (nonatomic, strong) NSSwitch* switchMemoryOptimizer;
+@property (nonatomic, strong) NSPopUpButton* autoSleepPopup;
+@property (nonatomic, strong) NSTextField* trimMemorySubtitle;
 @property (nonatomic, strong) NSSwitch* switchVerticalTabs;
 @property (nonatomic, strong) NSSwitch* switchCollapseTabs;
 @property (nonatomic, strong) NSSwitch* switchBookmarks;
@@ -447,6 +451,15 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   [self updateSwatches];
 
   if (_switch120Hz) _switch120Hz.state = self.slateDelegate.pages120Hz ? NSControlStateValueOn : NSControlStateValueOff;
+  if (_switchMemoryOptimizer) {
+    NSNumber* memPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateMemoryOptimizerEnabled"];
+    _switchMemoryOptimizer.state = (!memPref || memPref.boolValue) ? NSControlStateValueOn : NSControlStateValueOff;
+  }
+  if (_autoSleepPopup) {
+    NSNumber* sleepPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateAutoSleepMinutes"];
+    NSInteger mins = sleepPref ? sleepPref.integerValue : 30;
+    [_autoSleepPopup selectItemWithTag:mins];
+  }
   if (_switchVerticalTabs) _switchVerticalTabs.state = self.slateDelegate.verticalTabs ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchCollapseTabs) _switchCollapseTabs.state = self.slateDelegate.tabsCollapsed ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchBookmarks) _switchBookmarks.state = self.slateDelegate.showBookmarksBar ? NSControlStateValueOn : NSControlStateValueOff;
@@ -800,8 +813,86 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
                buttonWidth:92
                     action:@selector(makeDefaultClicked:)
                subtitleOut:nil];
+  y += 111 + 22;
 
-  [self finishCanvas:doc scroll:scroll contentHeight:y + 111];
+  y = [self addSectionCaptionTo:doc y:y text:@"Memory & Performance"];
+  SlateSettingsCard* memCard = [self addCardTo:doc y:y height:169];
+  NSNumber* memPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateMemoryOptimizerEnabled"];
+  _switchMemoryOptimizer = [self addSwitchRowToCard:memCard y:0
+                                              title:@"Optimize Heavy Sites"
+                                           subtitle:@"Cap Kick/Twitch/YouTube live chat DOM and pause hidden muted previews"
+                                                 on:(!memPref || memPref.boolValue)
+                                             action:@selector(toggleMemoryOptimizerClicked:)];
+  [self addDividerToCard:memCard y:55];
+
+  // Auto-Sleep Idle Tabs popup row
+  {
+    CGFloat mcw = NSWidth(memCard.bounds);
+    NSTextField* t = [NSTextField labelWithString:@"Auto-Sleep Idle Tabs"];
+    t.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+    t.frame = NSMakeRect(16, 56 + 10, mcw - 170, 17);
+    t.autoresizingMask = NSViewWidthSizable;
+    [memCard addSubview:t];
+
+    NSTextField* s = [NSTextField labelWithString:@"Unload inactive tabs to 0 MB (never sleeps audio, PiP, or downloads)"];
+    s.font = [NSFont systemFontOfSize:11.5];
+    s.textColor = NSColor.secondaryLabelColor;
+    s.lineBreakMode = NSLineBreakByTruncatingTail;
+    s.frame = NSMakeRect(16, 56 + 29, mcw - 170, 15);
+    s.autoresizingMask = NSViewWidthSizable;
+    [memCard addSubview:s];
+
+    NSPopUpButton* pop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(mcw - 140, 56 + 14, 124, 26) pullsDown:NO];
+    pop.autoresizingMask = NSViewMinXMargin;
+    pop.controlSize = NSControlSizeSmall;
+    NSArray<NSDictionary*>* opts = @[
+      @{@"t": @"Off", @"m": @0},
+      @{@"t": @"10 minutes", @"m": @10},
+      @{@"t": @"30 minutes", @"m": @30},
+      @{@"t": @"1 hour", @"m": @60},
+      @{@"t": @"2 hours", @"m": @120}
+    ];
+    for (NSDictionary* opt in opts) {
+      [pop addItemWithTitle:opt[@"t"]];
+      pop.lastItem.tag = [opt[@"m"] integerValue];
+    }
+    NSNumber* sleepPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateAutoSleepMinutes"];
+    NSInteger curMins = sleepPref ? sleepPref.integerValue : 30;
+    if (![pop selectItemWithTag:curMins]) [pop selectItemWithTag:30];
+    pop.target = self;
+    pop.action = @selector(autoSleepChanged:);
+    [memCard addSubview:pop];
+    _autoSleepPopup = pop;
+  }
+  [self addDividerToCard:memCard y:112];
+  NSTextField* trimSub = nil;
+  [self addActionRowToCard:memCard y:113
+                     title:@"Reclaim Unused Memory"
+                  subtitle:@"Clear WebKit back/forward caches, prune offscreen DOM, and trim malloc"
+               buttonTitle:@"Trim Now"
+               buttonWidth:88
+                    action:@selector(trimMemoryClicked:)
+               subtitleOut:&trimSub];
+  _trimMemorySubtitle = trimSub;
+
+  [self finishCanvas:doc scroll:scroll contentHeight:y + 169];
+}
+
+- (void)toggleMemoryOptimizerClicked:(NSSwitch*)sender {
+  BOOL on = (sender.state == NSControlStateValueOn);
+  [NSUserDefaults.standardUserDefaults setBool:on forKey:@"SlateMemoryOptimizerEnabled"];
+}
+
+- (void)autoSleepChanged:(NSPopUpButton*)sender {
+  NSInteger mins = sender.selectedItem ? sender.selectedItem.tag : 30;
+  [NSUserDefaults.standardUserDefaults setInteger:mins forKey:@"SlateAutoSleepMinutes"];
+}
+
+- (void)trimMemoryClicked:(id)sender {
+  if (self.slateDelegate) [self.slateDelegate trimMemoryNow:sender];
+  if (_trimMemorySubtitle) {
+    _trimMemorySubtitle.stringValue = @"Caches cleared and unused memory reclaimed";
+  }
 }
 
 - (void)toggle120HzClicked:(id)sender {
