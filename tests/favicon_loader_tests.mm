@@ -19,13 +19,13 @@ static NSInteger starts=0, current=0, peak=0;
 - (void)startLoading {
  self.counted=YES; starts++; current++; peak=MAX(peak,current);
  NSString* path=self.request.URL.path;
- NSDictionary* headers=[path isEqualToString:@"/declared-big"] ? @{@"Content-Length":@"999999"} : @{};
+ NSDictionary* headers=[path isEqualToString:@"/declared-big"] ? @{@"Content-Length":@"5000000"} : @{};
  NSHTTPURLResponse* response=[[NSHTTPURLResponse alloc] initWithURL:self.request.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:headers];
  [self.client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
  if ([path hasPrefix:@"/slow"]) return;
  if ([path isEqualToString:@"/chunked-big"]) {
-  NSData* chunk=[NSMutableData dataWithLength:64*1024];
-  for(int i=0;i<6;i++) [self.client URLProtocol:self didLoadData:chunk];
+  NSData* chunk=[NSMutableData dataWithLength:1024*1024];
+  for(int i=0;i<5;i++) [self.client URLProtocol:self didLoadData:chunk];
  } else [self.client URLProtocol:self didLoadData:icon];
  [self.client URLProtocolDidFinishLoading:self];
  if(self.counted) { self.counted=NO; current--; }

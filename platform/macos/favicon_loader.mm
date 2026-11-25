@@ -5,7 +5,7 @@
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
 
-static constexpr NSUInteger kMaxIconBytes = 256 * 1024;
+static constexpr NSUInteger kMaxIconBytes = 4 * 1024 * 1024;
 static constexpr NSUInteger kMaxActiveIcons = 4;
 static constexpr NSUInteger kMaxQueuedIcons = 128;
 
@@ -45,7 +45,7 @@ static NSData* SmallIcon(NSData* data) {
  const uint64_t width = [properties[(__bridge NSString*)kCGImagePropertyPixelWidth] unsignedLongLongValue];
  const uint64_t height = [properties[(__bridge NSString*)kCGImagePropertyPixelHeight] unsignedLongLongValue];
  CGImageRef image = nullptr;
- if (width && height && width <= 4096 && height <= 4096 && width * height <= 4 * 1024 * 1024) {
+ if (width && height && width <= 4096 && height <= 4096 && width * height <= 16 * 1024 * 1024) {
   image = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)@{
    (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways:@YES,
    (__bridge NSString*)kCGImageSourceThumbnailMaxPixelSize:@64,
