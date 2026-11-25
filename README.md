@@ -1,6 +1,6 @@
 # Slate
 
-> **File notes:** Introduces Slate, its product goal, build/test steps, supported behavior, and measurement limits.
+
 
 
 **A native Mac browser built around the cost of keeping tabs open.**
