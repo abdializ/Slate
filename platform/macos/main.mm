@@ -8502,6 +8502,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
 - (void)appDidResignActive:(NSNotification*)notification {
  (void)notification;
  [self autoPiPForVisibleWorkspace];
+ slate::PurgeWebKitMemoryCaches(false);
  slate::trim_process_memory(false);
 }
 - (void)appDidBecomeActive:(NSNotification*)notification {
@@ -10775,15 +10776,17 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  [[SlateFaviconLoader sharedLoader] trimCache];
  [self syncBrowserOcclusion];
  for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->trim_memory();
+ slate::PurgeWebKitMemoryCaches(true);
  slate::trim_process_memory(true);
 }
 - (void)sleepIdleTabsIfNeeded:(slate::Pressure)pressure {
  if(self.quitting) return;
  NSNumber* pref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateAutoSleepMinutes"];
- NSInteger minutes = pref ? pref.integerValue : 30; // Default: 30 minutes (Off = 0)
+ NSInteger minutes = pref ? pref.integerValue : 10; // Default: 10 minutes (Off = 0)
  if(minutes <= 0) return;
  if(pressure == slate::Pressure::Critical) minutes = MIN(minutes, 2);
  else if(pressure == slate::Pressure::Warning) minutes = MIN(minutes, 5);
+ else if(runtimes.size() > 4) minutes = MIN(minutes, 5);
 
  const auto now = std::chrono::steady_clock::now();
  const auto threshold = std::chrono::minutes(minutes);
@@ -10835,10 +10838,18 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
   [[SlateFaviconLoader sharedLoader] trimCache];
   [self syncBrowserOcclusion];
   for(auto& [identifier,item]:runtimes) if(item.engine) item.engine->trim_memory();
+  slate::PurgeWebKitMemoryCaches(true);
   slate::trim_process_memory(true);
- } else if(sample.browser_footprint_bytes > 150ULL * 1024ULL * 1024ULL) {
-  // Proactively reclaim empty malloc pages left over from background extension/filter list compiles.
-  slate::trim_process_memory(true);
+ } else {
+  if(sample.browser_footprint_bytes > 85ULL * 1024ULL * 1024ULL) {
+   // Proactively reclaim empty malloc pages left over from background extension/filter list compiles.
+   slate::trim_process_memory(true);
+  }
+  static uint32_t normalTicks = 0;
+  if(++normalTicks % 4 == 0 && !runtimes.empty()) {
+   // Periodic 2-minute sweep: flush dead WebCore decoded resources & run JSC GC in WebContent.
+   slate::PurgeWebKitMemoryCaches(true);
+  }
  }
  [self sleepIdleTabsIfNeeded:sample.pressure];
  if(pressureChanged)
@@ -12068,6 +12079,7 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  const auto reason=model.close_reason(identifier);
  runtimes.erase(identifier); model.closed(identifier);
  if(closeReason != slate::CloseReason::Discard) [self.tabIcons removeObjectForKey:@(identifier)];
+ if(!self.quitting) slate::PurgeWebKitMemoryCaches(false);
  slate::trim_process_memory(false);
  fprintf(stderr,"SLATE_TAB_CLOSED id=%llu loaded=%zu\n",static_cast<unsigned long long>(identifier),runtimes.size());
  bool any_incognito = false;

@@ -87,9 +87,9 @@ void trim_process_memory(bool force) {
  static dispatch_once_t block_once;
  dispatch_once(&block_once, ^{
   run_trim = [^(bool pass_force, int settle_depth) {
-   constexpr uint64_t kMarginBytes = 32ULL * 1024ULL * 1024ULL;
-   constexpr uint64_t kHighFootprintBytes = 140ULL * 1024ULL * 1024ULL;
-   constexpr uint64_t kSettleFootprintBytes = 200ULL * 1024ULL * 1024ULL;
+   constexpr uint64_t kMarginBytes = 24ULL * 1024ULL * 1024ULL;
+   constexpr uint64_t kHighFootprintBytes = 80ULL * 1024ULL * 1024ULL;
+   constexpr uint64_t kSettleFootprintBytes = 105ULL * 1024ULL * 1024ULL;
    constexpr int kMaxSettlePasses = 18; // Up to ~3 minutes during heavy DNR compilation.
 
    auto current_footprint = []() -> uint64_t {

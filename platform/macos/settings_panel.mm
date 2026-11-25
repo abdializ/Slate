@@ -457,7 +457,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   }
   if (_autoSleepPopup) {
     NSNumber* sleepPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateAutoSleepMinutes"];
-    NSInteger mins = sleepPref ? sleepPref.integerValue : 30;
+    NSInteger mins = sleepPref ? sleepPref.integerValue : 10;
     [_autoSleepPopup selectItemWithTag:mins];
   }
   if (_switchVerticalTabs) _switchVerticalTabs.state = self.slateDelegate.verticalTabs ? NSControlStateValueOn : NSControlStateValueOff;
@@ -847,6 +847,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
     pop.controlSize = NSControlSizeSmall;
     NSArray<NSDictionary*>* opts = @[
       @{@"t": @"Off", @"m": @0},
+      @{@"t": @"5 minutes", @"m": @5},
       @{@"t": @"10 minutes", @"m": @10},
       @{@"t": @"30 minutes", @"m": @30},
       @{@"t": @"1 hour", @"m": @60},
@@ -857,8 +858,8 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
       pop.lastItem.tag = [opt[@"m"] integerValue];
     }
     NSNumber* sleepPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateAutoSleepMinutes"];
-    NSInteger curMins = sleepPref ? sleepPref.integerValue : 30;
-    if (![pop selectItemWithTag:curMins]) [pop selectItemWithTag:30];
+    NSInteger curMins = sleepPref ? sleepPref.integerValue : 10;
+    if (![pop selectItemWithTag:curMins]) [pop selectItemWithTag:10];
     pop.target = self;
     pop.action = @selector(autoSleepChanged:);
     [memCard addSubview:pop];

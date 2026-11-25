@@ -757,7 +757,16 @@ void WebKitShields::EnsureLoaded() {
       this->BroadcastRuleList();
     } else {
       fprintf(stderr, "[SlateShields] No cached rule list, compiling in background...\n");
-      this->CompileRules(paths);
+      // Defer cold compilation briefly during app launch so temporary rule-compiler buffers
+      // never interleave with initial UI/tab allocations (skipped during test runs with SLATE_SHIELDS_CACHE_DIR).
+      if (getenv("SLATE_SHIELDS_CACHE_DIR")) {
+        this->CompileRules(paths);
+      } else {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500LL * NSEC_PER_MSEC)),
+                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+          this->CompileRules(paths);
+        });
+      }
     }
   }];
 }
@@ -1288,12 +1297,12 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
     [controller addUserScript:stealth_script_];
   }
 
-  // Attach native Twitch HLS Web Worker ad blocker at document start when active
+  // Attach native Twitch HLS Web Worker ad blocker at document start when active (main frame only)
   if (active && ![disabled_sites_ containsObject:@"twitch.tv"]) {
     NSString* twitchJs = [NSString stringWithUTF8String:kTwitchAdBlockJs];
     WKUserScript* twitchScript = [[WKUserScript alloc] initWithSource:twitchJs
                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                     forMainFrameOnly:NO];
+                                                     forMainFrameOnly:YES];
     [controller addUserScript:twitchScript];
   }
 
@@ -1373,6 +1382,14 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
               data.popunder.url = '';
               data.popunder.urlAlt = '';
               data.popunder.scriptUrl = '';
+            }
+            if (data.player && typeof data.player === 'object') {
+              if (typeof data.player.bufferTargetSeconds === 'number' && data.player.bufferTargetSeconds > 15) {
+                data.player.bufferTargetSeconds = 15;
+              }
+              if (typeof data.player.maxBufferSeconds === 'number' && data.player.maxBufferSeconds > 25) {
+                data.player.maxBufferSeconds = 25;
+              }
             }
           } catch (e) {}
           return data;

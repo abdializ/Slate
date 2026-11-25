@@ -183,6 +183,13 @@ static NSString* SlateSafariApplicationName() {
   fprintf(stderr, "SLATE_NAV_FINISH url=%s title=%s\n",
           webView.URL.absoluteString.UTF8String ?: "nil",
           webView.title.UTF8String ?: "nil");
+  // Prevent a single tab from piling up 5-20 frozen SPA snapshots (200-600 MB) in BFCache.
+  if (webView.backForwardList.backList.count >= 2) {
+    SEL clearBfcSel = NSSelectorFromString(@"_clearBackForwardCache");
+    if ([webView respondsToSelector:clearBfcSel]) {
+      reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)(webView, clearBfcSel);
+    }
+  }
   slate::WebKitShields::Shared().InjectStreamingProtection(webView);
   dispatch_async(dispatch_get_main_queue(), ^{
     [SlatePDFOverlay checkAndConfigureForWebView:webView];
@@ -844,18 +851,56 @@ static dispatch_once_t sFeatureToken;
 
 @end
 
+@interface WKProcessPool (SlatePrivatePool)
+- (instancetype)_initWithConfiguration:(id)configuration __attribute__((objc_method_family(init)));
+- (void)_clearWebProcessCache;
+- (void)_garbageCollectJavaScriptObjectsForTesting;
+@end
+
+@interface NSObject (SlatePrivatePoolConfig)
+- (void)setUsesWebProcessCache:(BOOL)uses;
+- (void)setSuspendsWebProcessesAggressivelyOnMemoryPressure:(BOOL)suspends;
+@end
+
 namespace slate {
 
+static NSHashTable<WKWebsiteDataStore*>* KnownDataStores() {
+  static NSHashTable<WKWebsiteDataStore*>* table = nil;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    table = [NSHashTable weakObjectsHashTable];
+  });
+  return table;
+}
+
+static WKProcessPool* MakeLeanProcessPool() {
+  Class cfgCls = NSClassFromString(@"_WKProcessPoolConfiguration");
+  if (cfgCls && [WKProcessPool instancesRespondToSelector:@selector(_initWithConfiguration:)]) {
+    id cfg = [[cfgCls alloc] init];
+    if (cfg) {
+      if ([cfg respondsToSelector:@selector(setUsesWebProcessCache:)]) {
+        [cfg setUsesWebProcessCache:NO];
+      }
+      if ([cfg respondsToSelector:@selector(setSuspendsWebProcessesAggressivelyOnMemoryPressure:)]) {
+        [cfg setSuspendsWebProcessesAggressivelyOnMemoryPressure:YES];
+      }
+      WKProcessPool* pool = [[WKProcessPool alloc] _initWithConfiguration:cfg];
+      if (pool) return pool;
+    }
+  }
+  return [[WKProcessPool alloc] init];
+}
+
+static WKProcessPool* g_sharedPool = nil;
+static WKProcessPool* g_incognitoPool = nil;
 
 static WKProcessPool* GetSharedProcessPool(bool incognito) {
-  static WKProcessPool* sharedPool = nil;
-  static WKProcessPool* incognitoPool = nil;
   if (incognito) {
-    if (!incognitoPool) incognitoPool = [[WKProcessPool alloc] init];
-    return incognitoPool;
+    if (!g_incognitoPool) g_incognitoPool = MakeLeanProcessPool();
+    return g_incognitoPool;
   } else {
-    if (!sharedPool) sharedPool = [[WKProcessPool alloc] init];
-    return sharedPool;
+    if (!g_sharedPool) g_sharedPool = MakeLeanProcessPool();
+    return g_sharedPool;
   }
 }
 
@@ -906,6 +951,9 @@ class WebKitEngine final : public BrowserEngine {
       config.websiteDataStore = (__bridge WKWebsiteDataStore*)website_data_store;
     } else {
       config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    }
+    if (config.websiteDataStore) {
+      [KnownDataStores() addObject:config.websiteDataStore];
     }
     if (@available(macOS 11.3, *)) {
       config.upgradeKnownHostsToHTTPS = [SlatePrivacySecurity httpsOnlyEnabled];
@@ -1029,7 +1077,7 @@ class WebKitEngine final : public BrowserEngine {
         NSString* memOptJs = [NSString stringWithUTF8String:slate::kMemoryOptimizerJs];
         WKUserScript* memOptScript = [[WKUserScript alloc] initWithSource:memOptJs
                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                         forMainFrameOnly:NO
+                                                         forMainFrameOnly:YES
                                                            inContentWorld:[WKContentWorld defaultClientWorld]];
         [config.userContentController addUserScript:memOptScript];
       }
@@ -1201,7 +1249,7 @@ class WebKitEngine final : public BrowserEngine {
     )JS";
     WKUserScript* chromeScript = [[WKUserScript alloc] initWithSource:chromeCompatJs
                                                          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                      forMainFrameOnly:NO];
+                                                      forMainFrameOnly:YES];
     [config.userContentController addUserScript:chromeScript];
 
     // Create delegate
@@ -1417,7 +1465,7 @@ class WebKitEngine final : public BrowserEngine {
       NSString* extShimJs = [NSString stringWithUTF8String:slate::kExtensionShimsJs];
       WKUserScript* extShimScript = [[WKUserScript alloc] initWithSource:extShimJs
                                                            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                        forMainFrameOnly:NO];
+                                                        forMainFrameOnly:YES];
       [config.userContentController addUserScript:extShimScript];
       [config.userContentController addScriptMessageHandler:delegate_ name:@"slateExtShim"];
     }
@@ -1854,6 +1902,39 @@ void PurgeIncognitoStorage() {
   [[WKWebsiteDataStore nonPersistentDataStore] removeDataOfTypes:websiteDataTypes
                                                   modifiedSince:epoch
                                               completionHandler:^{}];
+}
+
+void PurgeWebKitMemoryCaches(bool aggressive) {
+  auto run = ^{
+    // Public Apple API: evict dead decoded images, scripts, stylesheets, and fonts from
+    // WebCore::MemoryCache across all active WebContent processes without touching logins/cookies/playback.
+    NSSet<NSString*>* memOnly = [NSSet setWithObject:WKWebsiteDataTypeMemoryCache];
+    NSMutableSet<WKWebsiteDataStore*>* stores = [NSMutableSet set];
+    WKWebsiteDataStore* def = [WKWebsiteDataStore defaultDataStore];
+    if (def) [stores addObject:def];
+    for (WKWebsiteDataStore* s in KnownDataStores()) {
+      if (s) [stores addObject:s];
+    }
+    NSDate* past = [NSDate distantPast];
+    for (WKWebsiteDataStore* store in stores) {
+      [store removeDataOfTypes:memOnly modifiedSince:past completionHandler:^{}];
+    }
+
+    for (WKProcessPool* pool in @[g_sharedPool ?: (id)NSNull.null, g_incognitoPool ?: (id)NSNull.null]) {
+      if (![pool isKindOfClass:[WKProcessPool class]]) continue;
+      if ([pool respondsToSelector:@selector(_clearWebProcessCache)]) {
+        [pool _clearWebProcessCache];
+      }
+      if (aggressive && [pool respondsToSelector:@selector(_garbageCollectJavaScriptObjectsForTesting)]) {
+        [pool _garbageCollectJavaScriptObjectsForTesting];
+      }
+    }
+  };
+  if ([NSThread isMainThread]) {
+    run();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), run);
+  }
 }
 
 } // namespace slate

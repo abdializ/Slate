@@ -17,6 +17,7 @@ std::unique_ptr<BrowserEngine> make_webkit_engine(void* native_view, EngineEvent
                                                 bool incognito=false, void* website_data_store=nullptr,
                                                 void* popup_configuration=nullptr);
 void PurgeIncognitoStorage();
+void PurgeWebKitMemoryCaches(bool aggressive = false);
 
 } // namespace slate
 
