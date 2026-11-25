@@ -7264,8 +7264,8 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  if(railChanged) {
   self.sidebarAddLeading.constant=rail ? 0 : 18;
   self.sidebarAddLeading.priority=rail ? NSLayoutPriorityDefaultLow : NSLayoutPriorityRequired;
-  if(self.tabListLeading) self.tabListLeading.constant=rail ? 0 : 6;
-  if(self.tabListTrailing) self.tabListTrailing.constant=rail ? 0 : -6;
+  if(self.tabListLeading) self.tabListLeading.constant=6;
+  if(self.tabListTrailing) self.tabListTrailing.constant=-6;
   if(self.sidebarHeaderHeight) [self layoutTrafficLights];
   if(self.sidebarAddHeight) self.sidebarAddHeight.constant=rail ? kRailBubble : 28;
   if(self.sidebarAddWidth) self.sidebarAddWidth.active=rail;
