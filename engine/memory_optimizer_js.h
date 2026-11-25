@@ -89,8 +89,8 @@ inline constexpr const char* kMemoryOptimizerJs = R"JS(
         return true;
       }
       const rect = video.getBoundingClientRect();
-      // Treat large foreground players (>= 480px wide) as primary.
-      if (rect.width >= 480 && rect.height >= 260) return true;
+      // Treat foreground players (>= 280px wide, including narrow Split View panes) as primary.
+      if (rect.width >= 280 && rect.height >= 160) return true;
     } catch (e) {}
     return false;
   }

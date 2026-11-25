@@ -932,19 +932,11 @@ class WebKitEngine final : public BrowserEngine {
     for (NSString* selName in @[
       @"_setDOMTimersThrottlingEnabled:",
       @"_setHiddenPageDOMTimerThrottlingEnabled:",
-      @"_setHiddenPageDOMTimerThrottlingAutoIncreases:",
-      @"_setInvisibleMediaAutoplayNotPermitted:"
+      @"_setHiddenPageDOMTimerThrottlingAutoIncreases:"
     ]) {
       SEL s = NSSelectorFromString(selName);
       if ([config.preferences respondsToSelector:s]) {
         reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(config.preferences, s, YES);
-      }
-    }
-    {
-      // Prevent WebKit from hoarding offscreen GPU compositor tiles on long feeds (YouTube/Kick/X).
-      SEL aggTileSel = NSSelectorFromString(@"_setAggressiveTileRetentionEnabled:");
-      if ([config.preferences respondsToSelector:aggTileSel]) {
-        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(config.preferences, aggTileSel, NO);
       }
     }
     [SlateFrameRate applyToPreferences:config.preferences];
@@ -1421,12 +1413,6 @@ class WebKitEngine final : public BrowserEngine {
     web_view_.allowsMagnification = YES;
     web_view_.magnification = 1.0;
     web_view_.allowsBackForwardNavigationGestures = NO;
-    {
-      SEL occlSel = NSSelectorFromString(@"_setWindowOcclusionDetectionEnabled:");
-      if ([web_view_ respondsToSelector:occlSel]) {
-        reinterpret_cast<void (*)(id, SEL, BOOL)>(objc_msgSend)(web_view_, occlSel, YES);
-      }
-    }
     web_view_.navigationDelegate = delegate_;
     web_view_.UIDelegate = delegate_;
     delegate_.webView = web_view_;

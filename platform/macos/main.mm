@@ -8788,13 +8788,18 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  self.splitDivider=dividers[0];
 
  // Outer focus ring colored with the user's chosen Settings accent adapted to Light/Dark appearance.
- // Positioned outside the pane frame in the gutter so it never overlaps hardware-decoded video surfaces.
+ // Positioned behind the opaque split panes (peeking 2pt into the gutter) so ZERO sibling layer
+ // ever sits above hardware-decoded WKWebView video surfaces.
  self.splitFocusRing=[[SlateSplitOverlay alloc] initWithFrame:NSZeroRect];
  self.splitFocusRing.wantsLayer=YES;
  self.splitFocusRing.layer.cornerRadius=3;
  self.splitFocusRing.layer.borderWidth=2.0;
  self.splitFocusRing.hidden=YES;
- [self.content addSubview:self.splitFocusRing];
+ if(self.splitPanes.firstObject) {
+  [self.content addSubview:self.splitFocusRing positioned:NSWindowBelow relativeTo:self.splitPanes.firstObject];
+ } else {
+  [self.content addSubview:self.splitFocusRing];
+ }
 
  // Faint edge drop bands shown when carrying a tab over a page (lovesea SplitDropHint).
  self.splitHintOverlay=[[SlateSplitOverlay alloc] initWithFrame:NSZeroRect];
@@ -10684,6 +10689,10 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
   [order removeObjectIdenticalTo:slot];
   const NSUInteger home=[order indexOfObjectIdenticalTo:self.homeView];
   [order insertObject:slot atIndex:home==NSNotFound ? order.count : home];
+ }
+ if(self.splitFocusRing && [order containsObject:self.splitFocusRing]) {
+  [order removeObjectIdenticalTo:self.splitFocusRing];
+  [order insertObject:self.splitFocusRing atIndex:0];
  }
  if(![order isEqualToArray:self.content.subviews]) {
   [self.content sortSubviewsUsingFunction:[](__kindof NSView* _Nonnull a,__kindof NSView* _Nonnull b,void* _Nullable context) -> NSComparisonResult {
