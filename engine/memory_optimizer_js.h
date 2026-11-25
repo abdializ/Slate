@@ -167,11 +167,27 @@ inline constexpr const char* kMemoryOptimizerJs = R"JS(
     runIdlePass();
   };
 
+  // Event-driven scheduling with 12s cooldown: ZERO repeating setInterval timers at idle (0 wakeups/s).
+  let lastPassAt = 0;
+  let queued = false;
+  function maybeSchedulePass() {
+    if (document.hidden || queued) return;
+    const now = Date.now();
+    if (now - lastPassAt < 12000) return;
+    queued = true;
+    scheduleIdlePass();
+    lastPassAt = now;
+    setTimeout(function() { queued = false; }, 12000);
+  }
+
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
-  // Gentle 12-second idle sweep — zero rAF work, zero impact on video frame pacing.
-  setInterval(function() {
-    if (!document.hidden) scheduleIdlePass();
-  }, 12000);
+  window.addEventListener('scroll', maybeSchedulePass, { passive: true, capture: true });
+  if (isKick || isTwitch || isYouTube) {
+    // Only wake on actual live-chat DOM growth; idle pages fire zero callbacks.
+    const mo = new MutationObserver(maybeSchedulePass);
+    const root = document.body || document.documentElement;
+    if (root) mo.observe(root, { childList: true, subtree: true });
+  }
 })();
 )JS";
 

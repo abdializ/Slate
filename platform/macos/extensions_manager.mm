@@ -344,22 +344,40 @@ API_AVAILABLE(macos(15.4))
   return [self chromeStoreExtensionIdFromURL:url];
 }
 
+- (void)ensureExtensionControllerIfNeeded {
+  if (_webExtensionController) return;
+  if (@available(macOS 15.4, *)) {
+    if (NSClassFromString(@"WKWebExtensionController")) {
+      WKWebExtensionControllerConfiguration* cfg = [WKWebExtensionControllerConfiguration defaultConfiguration];
+      WKWebExtensionController* ctrl = [[WKWebExtensionController alloc] initWithConfiguration:cfg];
+      ctrl.delegate = self;
+      _webExtensionController = ctrl;
+
+      SlateExtensionWindowAdapter* winAdapter = [[SlateExtensionWindowAdapter alloc] init];
+      winAdapter.manager = self;
+      _windowAdapter = winAdapter;
+    }
+  }
+}
+
+- (BOOL)hasSavedExtensionsOnDisk {
+  if ([NSProcessInfo.processInfo.environment[@"SLATE_BENCH_CLEAN"] boolValue]) return NO;
+  NSString* support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+  NSString* extDir = [[support stringByAppendingPathComponent:@"Slate"] stringByAppendingPathComponent:@"Extensions"];
+  NSArray<NSString*>* items = [NSFileManager.defaultManager contentsOfDirectoryAtPath:extDir error:nil];
+  for (NSString* name in items) {
+    if (![name hasPrefix:@"."]) return YES;
+  }
+  return NO;
+}
+
 - (instancetype)init {
   if (self = [super init]) {
     _mutableExtensions = [NSMutableArray array];
     _tabAdapters = [NSMutableDictionary dictionary];
     _offscreenWebViews = [NSMutableDictionary dictionary];
-    if (@available(macOS 15.4, *)) {
-      if (NSClassFromString(@"WKWebExtensionController")) {
-        WKWebExtensionControllerConfiguration* cfg = [WKWebExtensionControllerConfiguration defaultConfiguration];
-        WKWebExtensionController* ctrl = [[WKWebExtensionController alloc] initWithConfiguration:cfg];
-        ctrl.delegate = self;
-        _webExtensionController = ctrl;
-
-        SlateExtensionWindowAdapter* winAdapter = [[SlateExtensionWindowAdapter alloc] init];
-        winAdapter.manager = self;
-        _windowAdapter = winAdapter;
-      }
+    if ([self hasSavedExtensionsOnDisk]) {
+      [self ensureExtensionControllerIfNeeded];
     }
   }
   return self;
@@ -455,6 +473,9 @@ API_AVAILABLE(macos(15.4))
 - (void)startIfNeeded {
   if (_started) return;
   _started = YES;
+  if ([self hasSavedExtensionsOnDisk]) {
+    [self ensureExtensionControllerIfNeeded];
+  }
   if (![SlateExtensionsManager isSupported]) return;
 
   NSData* data = [NSData dataWithContentsOfFile:[self registryPath]];
@@ -579,6 +600,7 @@ API_AVAILABLE(macos(15.4))
 
 - (void)loadRecordIntoController:(SlateExtensionRecord*)rec
                       completion:(void (^)(NSError* _Nullable error))completion {
+  [self ensureExtensionControllerIfNeeded];
   if (@available(macOS 15.4, *)) {
     WKWebExtensionController* ctrl = self.controller;
     if (!ctrl) {

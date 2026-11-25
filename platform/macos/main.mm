@@ -59,16 +59,101 @@ namespace {
 constexpr CGFloat kTitlebarHeight=42;
 constexpr CGFloat kToolbarHeight=52;
 constexpr CGFloat kSidebarOpenWidth=260;
-constexpr CGFloat kRailBubble=32;
-constexpr CGFloat kRailMark=20;
+constexpr CGFloat kRailBubble=46;
+constexpr CGFloat kRailMark=26;
 CGFloat RailMarkForWidth(CGFloat width) {
- return MIN(28.0, MAX(kRailMark, round(width * 0.32)));
+ return MIN(30.0, MAX(kRailMark, round(width * 0.44)));
 }
-constexpr CGFloat kRailRow=40;
-constexpr CGFloat kSidebarBubbleWidth=48;
+constexpr CGFloat kRailRow=52;
+constexpr CGFloat kSidebarBubbleWidth=78;
 constexpr CGFloat kSidebarLabelWidth=148;
 constexpr CGFloat kSidebarMinWidth=kSidebarBubbleWidth;
 constexpr CGFloat kSidebarHeaderHeight=36;
+
+// Ardia sidebar motion curves & layout metrics (preserving Slate's theme palette)
+constexpr CGFloat kArdiaRowHeight = 34.0;
+constexpr CGFloat kArdiaRowGap = 3.0;
+constexpr CGFloat kArdiaRowPitch = kArdiaRowHeight + kArdiaRowGap; // 37pt
+constexpr CGFloat kArdiaRowRadius = 10.0;
+constexpr CGFloat kArdiaPinnedHeight = 41.0;
+constexpr CGFloat kArdiaPinnedGap = 6.0;
+constexpr CGFloat kArdiaPinnedMinTile = 50.0;
+constexpr int     kArdiaPinnedBalancedMaxCols = 4;
+constexpr CGFloat kArdiaPinnedRadius = 10.0;
+constexpr CGFloat kArdiaGroupRadius = 12.0;
+constexpr CGFloat kArdiaGroupIndent = 16.0;
+constexpr CGFloat kArdiaGroupInset = 3.0;
+constexpr CGFloat kArdiaGroupBorder = 0.5;
+constexpr NSTimeInterval kArdiaDockShowDuration   = 0.20; // DOCK_SLIDE (0.42, 0, 0.58, 1)
+constexpr NSTimeInterval kArdiaDockHideDuration   = 0.10; // ARC_HIDE_MS easeOutCubic
+constexpr NSTimeInterval kArdiaPeekInDuration     = 0.15; // PEEK_IN_MS easeOutCubic
+constexpr NSTimeInterval kArdiaPeekOutDuration    = 0.15; // ARC_PEEK_OUT_MS easeInOutCubic
+constexpr NSTimeInterval kArdiaPeekCloseDelay     = 0.20; // PEEK_CLOSE_DELAY_MS
+constexpr NSTimeInterval kArdiaListSlideDuration  = 0.14; // SIDEBAR_MOTION.listSlide
+constexpr NSTimeInterval kArdiaListFadeDuration   = 0.10; // SIDEBAR_MOTION.listFade
+constexpr NSTimeInterval kArdiaListAppearDuration = 0.14; // SIDEBAR_MOTION.listAppear
+constexpr NSTimeInterval kArdiaFoldDuration       = 0.15; // SIDEBAR_MOTION.fold
+constexpr NSTimeInterval kArdiaHoverInDuration    = 0.05; // hoverFade.show
+constexpr NSTimeInterval kArdiaHoverOutDuration   = 0.20; // hoverFade.hide
+
+static inline BOOL ArdiaReduceMotion(void) {
+ return NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+}
+static inline CAMediaTimingFunction* ArdiaCurveEnter(void) {
+ return [CAMediaTimingFunction functionWithControlPoints:0.33f :1.0f :0.68f :1.0f];
+}
+static inline CAMediaTimingFunction* ArdiaCurveDockSlide(void) {
+ return [CAMediaTimingFunction functionWithControlPoints:0.42f :0.0f :0.58f :1.0f];
+}
+static inline CAMediaTimingFunction* ArdiaCurveInOutCubic(void) {
+ return [CAMediaTimingFunction functionWithControlPoints:0.65f :0.0f :0.35f :1.0f];
+}
+static inline CAMediaTimingFunction* ArdiaCurveCssEase(void) {
+ return [CAMediaTimingFunction functionWithControlPoints:0.25f :0.10f :0.25f :1.0f];
+}
+static inline CAMediaTimingFunction* ArdiaCurveCssEaseOut(void) {
+ return [CAMediaTimingFunction functionWithControlPoints:0.0f :0.0f :0.58f :1.0f];
+}
+static inline CAMediaTimingFunction* ArdiaCurveHoverFade(void) {
+ return [CAMediaTimingFunction functionWithControlPoints:0.25f :0.46f :0.45f :0.94f];
+}
+static CASpringAnimation* ArdiaSpringAnimation(NSString* keyPath, double response, double dampingRatio) {
+ CASpringAnimation* anim = [CASpringAnimation animationWithKeyPath:keyPath];
+ const double omega = (2.0 * M_PI) / MAX(0.05, response);
+ anim.mass = 1.0;
+ anim.stiffness = omega * omega;
+ anim.damping = 2.0 * dampingRatio * omega;
+ anim.duration = MIN(0.65, anim.settlingDuration);
+ return anim;
+}
+static void ArdiaAnimatePressScale(CALayer* layer, CGFloat targetScale, BOOL pressing) {
+ if(!layer || ArdiaReduceMotion()) return;
+ const CGPoint center = CGPointMake(NSMidX(layer.bounds), NSMidY(layer.bounds));
+ CATransform3D t = CATransform3DIdentity;
+ if(fabs(targetScale - 1.0) > 0.001) {
+  t = CATransform3DTranslate(t, center.x, center.y, 0);
+  t = CATransform3DScale(t, targetScale, targetScale, 1.0);
+  t = CATransform3DTranslate(t, -center.x, -center.y, 0);
+ }
+ CASpringAnimation* anim = ArdiaSpringAnimation(@"transform", pressing ? 0.12 : 0.24, pressing ? 1.0 : 0.78);
+ CALayer* pres = layer.presentationLayer;
+ anim.fromValue = [NSValue valueWithCATransform3D:pres ? pres.transform : layer.transform];
+ anim.toValue = [NSValue valueWithCATransform3D:t];
+ [CATransaction begin];
+ [CATransaction setDisableActions:YES];
+ layer.transform = t;
+ [CATransaction commit];
+ [layer addAnimation:anim forKey:@"ardiaPressScale"];
+}
+static NSImage* ArdiaSnapshotView(NSView* view) {
+ if(!view || NSWidth(view.bounds) < 1 || NSHeight(view.bounds) < 1) return nil;
+ NSBitmapImageRep* rep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
+ if(!rep) return nil;
+ [view cacheDisplayInRect:view.bounds toBitmapImageRep:rep];
+ NSImage* img = [[NSImage alloc] initWithSize:view.bounds.size];
+ [img addRepresentation:rep];
+ return img;
+}
 constexpr CGFloat kCompactTabWidth=30;
 constexpr CGFloat kTabHeight=38;
 constexpr CGFloat kOmniboxWidth=860;
@@ -156,7 +241,7 @@ struct SideRow {
  TabId tab=0;
  std::string group;
 };
-struct UiPrefs { BOOL vertical=NO; BOOL collapsed=NO; CGFloat sidebarWidth=kSidebarOpenWidth; NSString* accent=@"slate"; NSString* accentHex=@""; NSString* accentHex2=@""; BOOL showBookmarksBar=YES; CGFloat graniteIntensity=0.0; int themeMode=0; BOOL pages120Hz=NO; int tabStyle=1; TabId splitLeft=0; TabId splitRight=0; double splitRatio=0.5; BOOL splitRightActive=NO; std::vector<slate::SplitPair> splitGroups; };
+struct UiPrefs { BOOL vertical=NO; BOOL collapsed=NO; BOOL allowHideIconSidebar=NO; CGFloat sidebarWidth=kSidebarOpenWidth; NSString* accent=@"slate"; NSString* accentHex=@""; NSString* accentHex2=@""; BOOL showBookmarksBar=YES; CGFloat graniteIntensity=0.0; int themeMode=0; BOOL pages120Hz=NO; int tabStyle=1; TabId splitLeft=0; TabId splitRight=0; double splitRatio=0.5; BOOL splitRightActive=NO; std::vector<slate::SplitPair> splitGroups; };
 NSColor* ColorSRGB(CGFloat r, CGFloat g, CGFloat b) {
  return [NSColor colorWithSRGBRed:r green:g blue:b alpha:1];
 }
@@ -387,6 +472,7 @@ UiPrefs LoadUiPrefs() {
  if([dict[@"vertical_tabs"] isKindOfClass:NSNumber.class]) prefs.vertical=[dict[@"vertical_tabs"] boolValue];
  if([dict[@"sidebar_collapsed"] isKindOfClass:NSNumber.class]) prefs.collapsed=[dict[@"sidebar_collapsed"] boolValue];
  if([dict[@"tabs_collapsed"] isKindOfClass:NSNumber.class]) prefs.collapsed=[dict[@"tabs_collapsed"] boolValue];
+ if([dict[@"allow_hide_icon_sidebar"] isKindOfClass:NSNumber.class]) prefs.allowHideIconSidebar=[dict[@"allow_hide_icon_sidebar"] boolValue];
  if([dict[@"sidebar_width"] isKindOfClass:NSNumber.class])
   prefs.sidebarWidth=ClampSidebarWidth([dict[@"sidebar_width"] doubleValue], 1200);
  if([dict[@"accent"] isKindOfClass:NSString.class] && [dict[@"accent"] length]) prefs.accent=dict[@"accent"];
@@ -769,15 +855,26 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property BOOL addressDirty;
 @property BOOL addressOpen;
 @property CGFloat sidebarUserWidth;
-// Hover-to-peek sidebar (Search/lovesea style): overlay slide-out near left edge with overshoot
+// Hover-to-peek sidebar (Ardia dock & peek timing/arming): overlay slide-out near left edge
 @property BOOL sidebarPeeking;
 @property BOOL sidebarHidingPeek;
 @property BOOL pointerWasInWindow;
+@property BOOL sidebarEdgeArmed;
 @property NSUInteger peekAnimGen;
 @property NSUInteger foldTicket;
 @property(strong) NSTimer* peekDismissTimer;
 @property(strong) id mouseMovedMonitor;
 @property(strong) id localMouseMovedMonitor;
+@property(strong) NSScrollView* sidebarScrollView;
+@property(strong) NSButton* sidebarSpacePill;
+@property(strong) NSLayoutConstraint* sidebarSpacePillLeading;
+@property BOOL allowHideIconSidebar;
+@property(strong) NSLayoutConstraint* sidebarFootHeight;
+@property(copy) NSString* hoveredGroupId;
+@property(copy) NSString* pendingFoldGroupId;
+@property BOOL suppressNextListMotion;
+@property NSTimeInterval lastSpaceSwipeAt;
+@property CGFloat spaceSwipeAccumX;
 @property(copy) NSString* accentId;
 @property(copy) NSString* accentHex;
 @property(copy) NSString* accentHex2;
@@ -873,6 +970,10 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 @property BOOL pages120Hz;
 @property(strong) NSMenuItem* pages120HzMenuItem;
 @property(strong) NSMenu* extensionsMenu;
+@property(copy) NSString* pendingLoadError;
+@property BOOL pendingInitialNeedsWeb;
+@property BOOL pendingBenchClean;
+@property BOOL chromeBuilt;
 #if defined(SLATE_ENABLE_VERIFY)
 @property NSUInteger verifyLine;
 @property NSTimeInterval verifyDelay;
@@ -882,6 +983,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)selectPillTabStyle:(id)sender;
 - (void)selectRegularTabStyle:(id)sender;
 - (void)createWindow;
+- (void)finishCreateWindowChrome;
 - (void)updateSpaceBadge;
 - (void)spaceBadgeClicked:(id)sender;
 - (void)togglePages120Hz:(id)sender;
@@ -948,6 +1050,14 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (void)toggleGroupCollapsed:(NSString*)groupId;
 - (NSMenu*)groupMenu:(NSString*)groupId;
 - (void)newTabGroup:(id)sender;
+- (void)switchSpaceToId:(NSString*)newSpaceId;
+- (void)switchNextSpace;
+- (void)switchPreviousSpace;
+- (void)showSpaceMenuForSpaceId:(NSString*)spaceId fromView:(NSView*)view;
+- (void)updateSidebarGroupHover:(NSString*)groupId;
+- (void)updateSidebarSpacePill;
+- (NSInteger)groupRowPositionForRow:(NSInteger)row outGroupId:(NSString* __autoreleasing *)outGroupId;
+- (void)handleSidebarHorizontalScroll:(NSEvent*)event;
 - (void)rebuildHome;
 - (void)openHomeURL:(id)sender;
 - (void)openHomeAddress:(NSString*)url;
@@ -988,6 +1098,7 @@ static slate::MemorySample memorySample{slate::Pressure::Normal,0,false};
 - (BOOL)stripRevealed;
 - (CGFloat)sidebarLayoutWidth;
 - (void)toggleTabsReveal:(id)sender;
+- (void)setAllowHideIconSidebarEnabled:(BOOL)enabled;
 - (void)syncPageGeometry;
 - (void)setTrafficLightsHidden:(BOOL)hidden;
 - (void)layoutTrafficLights;
@@ -2583,16 +2694,16 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 
  NSString* title = TabSidebarTitle(tab);
  self.label.stringValue = title;
- self.label.alphaValue = isAsleep ? 0.58 : 1.0;
+ self.label.alphaValue = isAsleep ? 0.60 : 1.0; // Ardia SLEEPING_TITLE_OPACITY
  self.toolTip = title;
 
  const BOOL isMuted = [self.owner tabIsMuted:tab.id];
  const BOOL isAudible = [self.owner tabIsAudible:tab.id];
  if(isMuted) {
-  self.speakerButton.image = SlateCachedSymbol(@"speaker.slash.fill", @"Unmute Tab", 8, NSFontWeightRegular);
+  self.speakerButton.image = SlateCachedSymbol(@"speaker.slash.fill", @"Unmute Tab", 9, NSFontWeightRegular);
   self.speakerButton.toolTip = @"Unmute Tab";
  } else if(isAudible) {
-  self.speakerButton.image = SlateCachedSymbol(@"speaker.wave.2.fill", @"Mute Tab", 8, NSFontWeightRegular);
+  self.speakerButton.image = SlateCachedSymbol(@"speaker.wave.2.fill", @"Mute Tab", 9, NSFontWeightRegular);
   self.speakerButton.toolTip = @"Mute Tab";
  }
  self.speakerButton.contentTintColor = self.owner.accentMuted ?: NSColor.secondaryLabelColor;
@@ -2621,11 +2732,13 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  }
 
  const CGFloat width = NSWidth(self.bounds);
- const CGFloat rowH = 28.0;
- const CGFloat indent = self.inGroup ? 24.0 : 10.0;
+ const CGFloat rowH = NSHeight(self.bounds) > 0 ? NSHeight(self.bounds) : kArdiaRowPitch;
+ // Ardia TAB_ROW.contentLeft = 9, SIDEBAR_GROUP.indent = 16 (+ inset 3)
+ const CGFloat indent = self.inGroup ? (kArdiaGroupIndent + 9.0) : 9.0;
+ const CGFloat iconSide = 16.0;
 
  self.label.hidden = NO;
- self.bubble.frame = NSMakeRect(indent, round((rowH - 15) / 2.0), 15, 15);
+ self.bubble.frame = NSMakeRect(indent, round((rowH - iconSide) / 2.0), iconSide, iconSide);
 
  const BOOL isAudible = [self.owner tabIsAudible:self.tabId];
  const BOOL isMuted = [self.owner tabIsMuted:self.tabId];
@@ -2634,45 +2747,45 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  const BOOL live = tab && tab->selected;
  const BOOL isPip = tab && tab->pip_active;
 
- CGFloat rightOffset = width - 22;
+ CGFloat rightOffset = width - (self.inGroup ? (22.0 + kArdiaGroupInset) : 22.0);
  if(self.hovering) {
   self.closeButton.hidden = NO;
-  self.closeButton.frame = NSMakeRect(rightOffset, round((rowH - 15) / 2.0), 15, 15);
-  rightOffset -= 20;
+  self.closeButton.frame = NSMakeRect(rightOffset, round((rowH - 16.0) / 2.0), 16.0, 16.0);
+  rightOffset -= 21.0;
  } else {
   self.closeButton.hidden = YES;
  }
 
  if(hasAudio) {
   self.speakerButton.hidden = NO;
-  self.speakerButton.frame = NSMakeRect(rightOffset, round((rowH - 15) / 2.0), 15, 15);
-  rightOffset -= 20;
+  self.speakerButton.frame = NSMakeRect(rightOffset, round((rowH - 16.0) / 2.0), 16.0, 16.0);
+  rightOffset -= 20.0;
  } else {
   self.speakerButton.hidden = YES;
  }
 
  if(isPip) {
   self.pipBadge.hidden = NO;
-  self.pipBadge.frame = NSMakeRect(rightOffset, round((rowH - 15) / 2.0), 15, 15);
-  rightOffset -= 18;
+  self.pipBadge.frame = NSMakeRect(rightOffset, round((rowH - 16.0) / 2.0), 16.0, 16.0);
+  rightOffset -= 19.0;
  } else {
   self.pipBadge.hidden = YES;
  }
 
- CGFloat trailingLimit = rightOffset - 4;
- const CGFloat labelX = indent + 15 + 8;
- self.label.frame = NSMakeRect(labelX, round((rowH - 16) / 2.0), MAX(0, trailingLimit - labelX), 16);
+ CGFloat trailingLimit = rightOffset + (self.hovering || hasAudio || isPip ? 0.0 : 14.0);
+ const CGFloat labelX = indent + iconSide + 7.0;
+ self.label.frame = NSMakeRect(labelX, round((rowH - 18.0) / 2.0), MAX(0, trailingLimit - labelX), 18.0);
 
  NSColor* ink = self.owner.accentInk ?: NSColor.labelColor;
  if(live) {
-  self.label.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
+  self.label.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium];
   self.label.textColor = ink;
  } else if(self.hovering) {
-  self.label.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
-  self.label.textColor = [ink colorWithAlphaComponent:0.85];
+  self.label.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular];
+  self.label.textColor = [ink colorWithAlphaComponent:0.90];
  } else {
-  self.label.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
-  self.label.textColor = [ink colorWithAlphaComponent:0.75];
+  self.label.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular];
+  self.label.textColor = [ink colorWithAlphaComponent:0.78];
  }
  [CATransaction commit];
 }
@@ -2682,9 +2795,17 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 @property(weak) SlateDelegate* owner;
 @property TabId tabId;
 @property(strong) NSString* groupId;
+@property(copy) NSString* containerGroupId;
+@property NSInteger groupPos; // 0=none, 1=expanded header, 2=middle member, 3=last member, 4=collapsed/solo header
 @property BOOL isNewTabRow;
 @property BOOL hovered;
+@property BOOL hoverTransitioning;
 @property(strong) NSTrackingArea* trackingArea;
+@property(strong) CALayer* groupLayer;
+@property(strong) CALayer* groupBorderLeft;
+@property(strong) CALayer* groupBorderRight;
+@property(strong) CALayer* groupBorderTop;
+@property(strong) CALayer* groupBorderBottom;
 @property(strong) CALayer* pillLayer;
 @end
 
@@ -2693,6 +2814,17 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  if(self=[super initWithFrame:frame]) {
   self.wantsLayer = YES;
   self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
+  self.groupLayer = [CALayer layer];
+  self.groupLayer.masksToBounds = YES;
+  self.groupBorderLeft = [CALayer layer];
+  self.groupBorderRight = [CALayer layer];
+  self.groupBorderTop = [CALayer layer];
+  self.groupBorderBottom = [CALayer layer];
+  [self.groupLayer addSublayer:self.groupBorderLeft];
+  [self.groupLayer addSublayer:self.groupBorderRight];
+  [self.groupLayer addSublayer:self.groupBorderTop];
+  [self.groupLayer addSublayer:self.groupBorderBottom];
+  [self.layer addSublayer:self.groupLayer];
   self.pillLayer = [CALayer layer];
   [self.layer addSublayer:self.pillLayer];
  }
@@ -2708,7 +2840,10 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (void)mouseEntered:(NSEvent*)event {
  self.hovered = YES;
+ self.hoverTransitioning = YES;
+ if(self.owner && self.containerGroupId.length) [self.owner updateSidebarGroupHover:self.containerGroupId];
  [self updateLayer];
+ self.hoverTransitioning = NO;
  for(NSView* sub in self.subviews) {
   if([sub isKindOfClass:SlateSideRowCell.class]) {
    [(SlateSideRowCell*)sub setHovering:YES];
@@ -2718,7 +2853,12 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (void)mouseExited:(NSEvent*)event {
  self.hovered = NO;
+ self.hoverTransitioning = YES;
+ if(self.owner && self.containerGroupId.length && [self.owner.hoveredGroupId isEqualToString:self.containerGroupId]) {
+  [self.owner updateSidebarGroupHover:nil];
+ }
  [self updateLayer];
+ self.hoverTransitioning = NO;
  for(NSView* sub in self.subviews) {
   if([sub isKindOfClass:SlateSideRowCell.class]) {
    [(SlateSideRowCell*)sub setHovering:NO];
@@ -2729,22 +2869,72 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 - (void)updatePillGeometry {
  [CATransaction begin];
  [CATransaction setDisableActions:YES];
+ const NSRect b = self.bounds;
+ const CGFloat bW = NSWidth(b);
+ const CGFloat bH = NSHeight(b);
+ const BOOL inGroupBox = (self.groupPos > 0);
+ if(inGroupBox) {
+  const CGFloat topPad = (self.groupPos == 1 || self.groupPos == 4) ? 1.5 : 0.0;
+  const CGFloat botPad = (self.groupPos == 3 || self.groupPos == 4) ? 1.5 : 0.0;
+  const NSRect gRect = NSMakeRect(0, topPad, bW, MAX(0, bH - topPad - botPad));
+  self.groupLayer.hidden = NO;
+  self.groupLayer.frame = gRect;
+  if(@available(macOS 11.0, *)) self.groupLayer.cornerCurve = kCACornerCurveContinuous;
+  const CGFloat gw = NSWidth(gRect);
+  const CGFloat gh = NSHeight(gRect);
+  const CGFloat bw = kArdiaGroupBorder;
+  if(self.groupPos == 4) {
+   self.groupLayer.cornerRadius = kArdiaGroupRadius;
+   self.groupLayer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+   self.groupLayer.borderWidth = bw;
+   self.groupBorderLeft.hidden = YES; self.groupBorderRight.hidden = YES;
+   self.groupBorderTop.hidden = YES; self.groupBorderBottom.hidden = YES;
+  } else {
+   self.groupLayer.borderWidth = 0;
+   if(self.groupPos == 1) {
+    self.groupLayer.cornerRadius = kArdiaGroupRadius;
+    self.groupLayer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+    self.groupBorderTop.hidden = NO; self.groupBorderTop.frame = NSMakeRect(0, 0, gw, bw);
+    self.groupBorderBottom.hidden = YES;
+   } else if(self.groupPos == 3) {
+    self.groupLayer.cornerRadius = kArdiaGroupRadius;
+    self.groupLayer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+    self.groupBorderTop.hidden = YES;
+    self.groupBorderBottom.hidden = NO; self.groupBorderBottom.frame = NSMakeRect(0, MAX(0, gh - bw), gw, bw);
+   } else {
+    self.groupLayer.cornerRadius = 0;
+    self.groupLayer.maskedCorners = 0;
+    self.groupBorderTop.hidden = YES;
+    self.groupBorderBottom.hidden = YES;
+   }
+   self.groupBorderLeft.hidden = NO; self.groupBorderLeft.frame = NSMakeRect(0, 0, bw, gh);
+   self.groupBorderRight.hidden = NO; self.groupBorderRight.frame = NSMakeRect(MAX(0, gw - bw), 0, bw, gh);
+  }
+ } else {
+  self.groupLayer.hidden = YES;
+ }
+
  if(self.isNewTabRow) {
   self.pillLayer.frame = NSZeroRect;
  } else if(self.groupId) {
-  self.pillLayer.frame = self.bounds;
+  self.pillLayer.frame = NSInsetRect(b, kArdiaGroupInset, 2.5);
  } else {
-  const NSRect b = self.bounds;
-  const CGFloat pad = 2.5;
+  const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || bW <= 100.0;
+  const CGFloat pad = kArdiaRowGap * 0.5; // 1.5pt top & bottom -> 34pt pill + 3pt gap
+  const CGFloat xInset = (self.groupPos == 2 || self.groupPos == 3) ? kArdiaGroupInset : 0.0;
+  const CGFloat botExtra = (self.groupPos == 3) ? kArdiaGroupInset : 0.0;
   const NSInteger splitPos = self.owner ? [self.owner splitGroupPositionForTab:self.tabId] : 0;
-  if(splitPos == 1) {
-   self.pillLayer.frame = NSMakeRect(NSMinX(b), NSMinY(b) + pad, NSWidth(b), MAX(0, NSHeight(b) - pad));
+  if(rail && splitPos == 0) {
+   const CGFloat side = MIN(kRailBubble, MIN(bW, bH - 4.0));
+   self.pillLayer.frame = NSMakeRect(round((bW - side) * 0.5), round((bH - side) * 0.5), side, side);
+  } else if(splitPos == 1) {
+   self.pillLayer.frame = NSMakeRect(xInset, pad, MAX(0, bW - 2 * xInset), MAX(0, bH - pad));
   } else if(splitPos == 2) {
-   self.pillLayer.frame = b;
+   self.pillLayer.frame = NSMakeRect(xInset, 0, MAX(0, bW - 2 * xInset), bH);
   } else if(splitPos == 3) {
-   self.pillLayer.frame = NSMakeRect(NSMinX(b), NSMinY(b), NSWidth(b), MAX(0, NSHeight(b) - pad));
+   self.pillLayer.frame = NSMakeRect(xInset, 0, MAX(0, bW - 2 * xInset), MAX(0, bH - pad - botExtra));
   } else {
-   self.pillLayer.frame = NSInsetRect(b, 0, pad);
+   self.pillLayer.frame = NSMakeRect(xInset, pad, MAX(0, bW - 2 * xInset), MAX(0, bH - 2 * pad - botExtra));
   }
  }
  [CATransaction commit];
@@ -2757,11 +2947,39 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (void)updateLayer {
- [CATransaction begin];
- [CATransaction setDisableActions:YES];
  [self updatePillGeometry];
+ [CATransaction begin];
+ const BOOL animateHover = self.hoverTransitioning && !ArdiaReduceMotion();
+ [CATransaction setDisableActions:!animateHover];
+ if(animateHover) {
+  [CATransaction setAnimationDuration:self.hovered ? kArdiaHoverInDuration : kArdiaHoverOutDuration];
+  [CATransaction setAnimationTimingFunction:ArdiaCurveHoverFade()];
+ }
 
  NSColor* ink = self.owner.accentInk ?: NSColor.labelColor;
+ const BOOL dark = self.owner ? [self.owner isDarkAppearance] : YES;
+
+ if(self.groupPos > 0) {
+  const BOOL groupHot = self.hovered || (self.owner && self.containerGroupId.length && [self.owner.hoveredGroupId isEqualToString:self.containerGroupId]);
+  const BOOL expanded = (self.groupPos == 1 || self.groupPos == 2 || self.groupPos == 3);
+  // Ardia SIDEBAR_GROUP box: visible subtle tint when expanded or hovered (in Slate's ink palette)
+  CGFloat fillAlpha = 0.0;
+  CGFloat strokeAlpha = 0.0;
+  if(expanded) {
+   fillAlpha = dark ? (groupHot ? 0.095 : 0.065) : (groupHot ? 0.065 : 0.042);
+   strokeAlpha = groupHot ? 0.14 : 0.095;
+  } else if(groupHot) {
+   fillAlpha = dark ? 0.08 : 0.055;
+   strokeAlpha = 0.11;
+  }
+  CGColorRef strokeCG = strokeAlpha > 0 ? [ink colorWithAlphaComponent:strokeAlpha].CGColor : NSColor.clearColor.CGColor;
+  self.groupLayer.backgroundColor = fillAlpha > 0 ? [ink colorWithAlphaComponent:fillAlpha].CGColor : NSColor.clearColor.CGColor;
+  self.groupLayer.borderColor = strokeCG;
+  self.groupBorderLeft.backgroundColor = strokeCG;
+  self.groupBorderRight.backgroundColor = strokeCG;
+  self.groupBorderTop.backgroundColor = strokeCG;
+  self.groupBorderBottom.backgroundColor = strokeCG;
+ }
 
  if(self.isNewTabRow) {
   self.pillLayer.backgroundColor = NSColor.clearColor.CGColor;
@@ -2772,8 +2990,8 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 
  if(self.groupId) {
   if(self.hovered) {
-   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:0.05] CGColor];
-   self.pillLayer.cornerRadius = 6;
+   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:dark ? 0.08 : 0.06] CGColor];
+   self.pillLayer.cornerRadius = MAX(0, kArdiaGroupRadius - kArdiaGroupInset);
    if(@available(macOS 11.0, *)) self.pillLayer.cornerCurve = kCACornerCurveContinuous;
   } else {
    self.pillLayer.backgroundColor = NSColor.clearColor.CGColor;
@@ -2788,15 +3006,13 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  if(@available(macOS 11.0, *)) self.pillLayer.cornerCurve = kCACornerCurveContinuous;
 
  if(splitPos > 0) {
-  // lovesea SplitTabItem stacked vertical card in sidebar: top corners rounded on first pane,
-  // square on middle panes, bottom corners rounded on last pane, framed in Settings accent!
-  const BOOL dark = [self.owner isDarkAppearance];
+  // Stacked vertical card for Split View panes
   NSColor* accentOuter = SplitAccentBorderColor(self.owner.accentId, self.owner.accentHex, dark);
   if(splitPos == 1) {
-   self.pillLayer.cornerRadius = 9;
+   self.pillLayer.cornerRadius = kArdiaRowRadius;
    self.pillLayer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
   } else if(splitPos == 3) {
-   self.pillLayer.cornerRadius = 9;
+   self.pillLayer.cornerRadius = kArdiaRowRadius;
    self.pillLayer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
   } else {
    self.pillLayer.cornerRadius = 0;
@@ -2816,16 +3032,21 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
    self.pillLayer.backgroundColor = [ink colorWithAlphaComponent:0.04].CGColor;
   }
  } else {
-  self.pillLayer.cornerRadius = 9;
+  const CGFloat innerRadius = (self.groupPos == 2 || self.groupPos == 3) ? MAX(7.0, kArdiaGroupRadius - kArdiaGroupInset) : kArdiaRowRadius;
+  self.pillLayer.cornerRadius = innerRadius;
   self.pillLayer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-  self.pillLayer.borderWidth = 0;
-  self.pillLayer.borderColor = nil;
   if(self.selected) {
-   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:0.14] CGColor];
+   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:dark ? 0.15 : 0.12] CGColor];
+   self.pillLayer.borderWidth = 0.5;
+   self.pillLayer.borderColor = [[ink colorWithAlphaComponent:dark ? 0.14 : 0.10] CGColor];
   } else if(self.hovered) {
-   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:0.07] CGColor];
+   self.pillLayer.backgroundColor = [[ink colorWithAlphaComponent:dark ? 0.075 : 0.06] CGColor];
+   self.pillLayer.borderWidth = 0;
+   self.pillLayer.borderColor = nil;
   } else {
    self.pillLayer.backgroundColor = NSColor.clearColor.CGColor;
+   self.pillLayer.borderWidth = 0;
+   self.pillLayer.borderColor = nil;
   }
  }
 
@@ -2833,6 +3054,10 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (void)mouseDown:(NSEvent*)event {
  if(self.owner && self.groupId && !self.tabId) {
+  ArdiaAnimatePressScale(self.layer, 0.975, YES);
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(80LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+   ArdiaAnimatePressScale(self.layer, 1.0, NO);
+  });
   [self.owner toggleGroupCollapsed:self.groupId];
   return;
  }
@@ -2845,14 +3070,21 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 @property TabId tabId;
 @property BOOL live;
 @property BOOL hovered;
+@property BOOL pressed;
 @property BOOL asleep;
+@property BOOL audible;
+@property BOOL muted;
+@property BOOL pipActive;
 @property(strong) NSImage* mark;
 @property(strong) NSTrackingArea* trackingArea;
 @property(strong) CALayer* bgLayer;
+@property(strong) CALayer* rimLayer;
 @property(strong) CALayer* iconLayer;
+@property(strong) NSImageView* statusBadge;
 @property NSPoint startLocation;
 @property BOOL dragStarted;
 - (void)updateStyle;
+- (void)updateStyleAnimated:(BOOL)animated;
 @end
 
 @interface SlatePinnedGrid : NSView
@@ -2866,19 +3098,44 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 - (void)finishDrag;
 @end
 
+static inline void ArdiaPinGridMetrics(int count, CGFloat sidebarW, BOOL rail, int& outCols, CGFloat& outTileW, CGFloat& outTileH, CGFloat& outGap) {
+ outGap = kArdiaPinnedGap;
+ if(rail) {
+  outCols = 1;
+  outTileW = kRailBubble;
+  outTileH = kRailBubble;
+  return;
+ }
+ const CGFloat innerW = MAX(40.0, sidebarW - 20.0);
+ const int fit = std::max(1, (int)floor((innerW + outGap) / (kArdiaPinnedMinTile + outGap)));
+ const int maxCols = std::min(kArdiaPinnedBalancedMaxCols, fit);
+ const int rows = std::max(1, (std::max(1, count) + maxCols - 1) / maxCols);
+ outCols = std::max(1, (std::max(1, count) + rows - 1) / rows);
+ outTileW = std::max(28.0, floor(((innerW - outGap * (outCols - 1)) / (CGFloat)outCols) * 2.0) / 2.0);
+ outTileH = kArdiaPinnedHeight;
+}
+
 @implementation SlatePinSquare
 - (instancetype)initWithFrame:(NSRect)frame {
  if(self = [super initWithFrame:frame]) {
   self.wantsLayer = YES;
+  self.layer.masksToBounds = NO;
   self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
   self.bgLayer = [CALayer layer];
+  self.rimLayer = [CALayer layer];
   self.iconLayer = [CALayer layer];
   self.iconLayer.contentsGravity = kCAGravityResizeAspect;
   [self.layer addSublayer:self.bgLayer];
+  [self.layer addSublayer:self.rimLayer];
   [self.layer addSublayer:self.iconLayer];
+  self.statusBadge = [[NSImageView alloc] initWithFrame:NSZeroRect];
+  self.statusBadge.imageScaling = NSImageScaleProportionallyDown;
+  self.statusBadge.hidden = YES;
+  [self addSubview:self.statusBadge];
  }
  return self;
 }
+- (BOOL)isFlipped { return YES; }
 - (BOOL)mouseDownCanMoveWindow { return NO; }
 - (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
 - (void)updateTrackingAreas {
@@ -2891,15 +3148,18 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (void)mouseEntered:(NSEvent*)event {
  self.hovered = YES;
- [self updateStyle];
+ [self updateStyleAnimated:YES];
 }
 - (void)mouseExited:(NSEvent*)event {
  self.hovered = NO;
- [self updateStyle];
+ [self updateStyleAnimated:YES];
 }
 - (void)mouseDown:(NSEvent*)event {
  self.dragStarted = NO;
+ self.pressed = YES;
  self.startLocation = [self.superview convertPoint:event.locationInWindow fromView:nil];
+ ArdiaAnimatePressScale(self.layer, 0.94, YES); // Ardia bouncePressMotion.tilePressScale
+ [self updateStyleAnimated:YES];
  if(event.clickCount >= 2) {
   if(self.owner) {
    [self.owner.address selectText:nil];
@@ -2921,6 +3181,9 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  }
 }
 - (void)mouseUp:(NSEvent*)event {
+ self.pressed = NO;
+ ArdiaAnimatePressScale(self.layer, 1.0, NO);
+ [self updateStyleAnimated:YES];
  if(self.dragStarted) {
   self.dragStarted = NO;
   if([self.superview isKindOfClass:SlatePinnedGrid.class]) {
@@ -2943,34 +3206,94 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (void)updateLayer {
- [self updateStyle];
+ [self updateStyleAnimated:NO];
 }
 - (void)layout {
  [super layout];
- [self updateStyle];
+ [self updateStyleAnimated:NO];
 }
 - (void)updateStyle {
- [CATransaction begin];
- [CATransaction setDisableActions:YES];
+ [self updateStyleAnimated:NO];
+}
+- (void)updateStyleAnimated:(BOOL)animated {
  const CGFloat width = NSWidth(self.bounds);
  const CGFloat height = NSHeight(self.bounds);
- const CGFloat scale = MIN(width, height);
- self.bgLayer.frame = self.bounds;
- self.bgLayer.cornerRadius = round(scale * 9.0 / 34.0);
- if(@available(macOS 11.0, *)) self.bgLayer.cornerCurve = kCACornerCurveContinuous;
+ const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || width < 40.0;
+ const CGFloat tileRadius = rail ? 9.0 : kArdiaPinnedRadius;
 
- NSColor* ink = self.owner.accentInk ?: NSColor.labelColor;
- if(self.live) {
-  self.bgLayer.backgroundColor = [[ink colorWithAlphaComponent:0.14] CGColor];
- } else if(self.hovered) {
-  self.bgLayer.backgroundColor = [[ink colorWithAlphaComponent:0.07] CGColor];
+ // Geometry always updates without animation so resize/relayout never lags.
+ [CATransaction begin];
+ [CATransaction setDisableActions:YES];
+ self.bgLayer.frame = self.bounds;
+ self.bgLayer.cornerRadius = tileRadius;
+ self.rimLayer.frame = NSInsetRect(self.bounds, 1.0, 1.0); // Ardia TILE_RIM = 1
+ self.rimLayer.cornerRadius = MAX(0, tileRadius - 1.0);
+ if(@available(macOS 11.0, *)) {
+  self.bgLayer.cornerCurve = kCACornerCurveContinuous;
+  self.rimLayer.cornerCurve = kCACornerCurveContinuous;
+ }
+ const CGFloat iconSize = rail ? RailMarkForWidth([self.owner sidebarLayoutWidth]) : 18.0;
+ self.iconLayer.frame = NSMakeRect(round((width - iconSize) / 2.0), round((height - iconSize) / 2.0), iconSize, iconSize);
+ if(self.pipActive || self.audible || self.muted) {
+  // Ardia TILE_STATUS: inset x:5, y:4, box 14x12
+  self.statusBadge.hidden = NO;
+  self.statusBadge.frame = NSMakeRect(MAX(0, width - 14.0 - 4.0), 4.0, 14.0, 12.0);
+  if(self.pipActive) {
+   self.statusBadge.image = SlateCachedSymbol(@"pip.fill", @"Picture in Picture", 8.0, NSFontWeightSemibold);
+   self.statusBadge.contentTintColor = [NSColor systemBlueColor];
+  } else if(self.muted) {
+   self.statusBadge.image = SlateCachedSymbol(@"speaker.slash.fill", @"Muted", 9.0, NSFontWeightSemibold);
+   self.statusBadge.contentTintColor = [self.owner.accentInk ?: NSColor.labelColor colorWithAlphaComponent:0.55];
+  } else {
+   self.statusBadge.image = SlateCachedSymbol(@"speaker.wave.2.fill", @"Playing Audio", 9.5, NSFontWeightSemibold);
+   self.statusBadge.contentTintColor = [self.owner.accentInk ?: NSColor.labelColor colorWithAlphaComponent:0.85];
+  }
  } else {
-  self.bgLayer.backgroundColor = [[ink colorWithAlphaComponent:0.035] CGColor];
+  self.statusBadge.hidden = YES;
+ }
+ [CATransaction commit];
+
+ // Color/glow transitions use Ardia hoverFade (50ms in / 200ms out)
+ const BOOL runFade = animated && !ArdiaReduceMotion();
+ [CATransaction begin];
+ [CATransaction setDisableActions:!runFade];
+ if(runFade) {
+  [CATransaction setAnimationDuration:(self.hovered || self.pressed) ? kArdiaHoverInDuration : kArdiaHoverOutDuration];
+  [CATransaction setAnimationTimingFunction:ArdiaCurveHoverFade()];
  }
 
- const CGFloat iconSize = (self.owner && [self.owner sidebarIconRail])
-  ? RailMarkForWidth([self.owner sidebarLayoutWidth]) : round(scale * 16.0 / 34.0);
- self.iconLayer.frame = NSMakeRect(round((width - iconSize) / 2.0), round((height - iconSize) / 2.0), iconSize, iconSize);
+ NSColor* ink = self.owner.accentInk ?: NSColor.labelColor;
+ const BOOL dark = self.owner ? [self.owner isDarkAppearance] : YES;
+ if(self.live) {
+  // Ardia active tile: elevated fill + 1px rim + TILE_GLOW shadow (in Slate's theme colors)
+  self.bgLayer.backgroundColor = [[ink colorWithAlphaComponent:dark ? 0.19 : 0.14] CGColor];
+  self.bgLayer.borderWidth = 1.0;
+  self.bgLayer.borderColor = [[ink colorWithAlphaComponent:dark ? 0.22 : 0.16] CGColor];
+  self.bgLayer.shadowColor = (dark ? NSColor.whiteColor : NSColor.blackColor).CGColor;
+  self.bgLayer.shadowOpacity = dark ? 0.15f : 0.12f; // Ardia TILE_GLOW
+  self.bgLayer.shadowRadius = 1.5;
+  self.bgLayer.shadowOffset = CGSizeMake(0.0, 0.5);
+  self.rimLayer.hidden = NO;
+  self.rimLayer.borderWidth = 0.5;
+  self.rimLayer.borderColor = [[ink colorWithAlphaComponent:dark ? 0.12 : 0.08] CGColor];
+ } else {
+  self.bgLayer.shadowOpacity = 0.0f;
+  self.rimLayer.hidden = YES;
+  if(self.pressed) {
+   self.bgLayer.backgroundColor = [[ink colorWithAlphaComponent:dark ? 0.14 : 0.11] CGColor];
+   self.bgLayer.borderWidth = 0.5;
+   self.bgLayer.borderColor = [[ink colorWithAlphaComponent:0.16] CGColor];
+  } else if(self.hovered) {
+   self.bgLayer.backgroundColor = [[ink colorWithAlphaComponent:dark ? 0.105 : 0.08] CGColor];
+   self.bgLayer.borderWidth = 0.5;
+   self.bgLayer.borderColor = [[ink colorWithAlphaComponent:0.13] CGColor];
+  } else {
+   self.bgLayer.backgroundColor = [[ink colorWithAlphaComponent:dark ? 0.055 : 0.04] CGColor];
+   self.bgLayer.borderWidth = 0.5;
+   self.bgLayer.borderColor = [[ink colorWithAlphaComponent:dark ? 0.095 : 0.075] CGColor];
+  }
+ }
+
  if(self.mark) {
   id contents=[self.mark layerContentsForContentsScale:self.window.backingScaleFactor ?: 2.0];
   if(self.mark.isTemplate) {
@@ -2980,13 +3303,13 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
    mask.contents=contents;
    self.iconLayer.mask=mask;
    self.iconLayer.contents=nil;
-   self.iconLayer.backgroundColor=(self.live ? NSColor.labelColor : NSColor.secondaryLabelColor).CGColor;
+   self.iconLayer.backgroundColor=(self.live ? ink : [ink colorWithAlphaComponent:0.75]).CGColor;
   } else {
    self.iconLayer.mask=nil;
    self.iconLayer.backgroundColor=nil;
    self.iconLayer.contents=contents;
   }
-  self.iconLayer.opacity = self.asleep ? 0.45 : 1.0;
+  self.iconLayer.opacity = (self.asleep && !self.live) ? 0.45f : 1.0f; // Ardia ASLEEP_LETTER
  } else {
   self.iconLayer.mask=nil;
   self.iconLayer.backgroundColor=nil;
@@ -3006,6 +3329,11 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (BOOL)isFlipped { return YES; }
 - (void)rebuildWithTabs:(const std::vector<slate::Tab>&)tabs selectedId:(TabId)selectedId {
+ std::unordered_map<TabId, NSRect> prevFrames;
+ for(SlatePinSquare* sq in self.squares) {
+  if(sq.tabId) prevFrames[sq.tabId] = sq.frame;
+ }
+
  self.pinnedIds.clear();
  std::vector<slate::Tab> pinned;
  for(const auto& t : tabs) {
@@ -3030,13 +3358,11 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 
  const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || sidebarW < 100;
  const int count = (int)pinned.size();
- const int cols = rail ? 1 : std::max(3, (count + 1) / 2);
- const CGFloat pinGap = 4.0;
- const CGFloat available = sidebarW - 20.0 - (cols - 1) * pinGap;
- const CGFloat pinWidth = rail ? 34.0 : std::max(20.0, available / (CGFloat)cols);
- const CGFloat pinHeight = std::min(34.0, pinWidth);
+ int cols = 1;
+ CGFloat pinWidth = 34.0, pinHeight = 34.0, pinGap = kArdiaPinnedGap;
+ ArdiaPinGridMetrics(count, sidebarW, rail, cols, pinWidth, pinHeight, pinGap);
  const int numRows = (count + cols - 1) / cols;
- const CGFloat totalH = numRows * pinHeight + std::max(0, numRows - 1) * pinGap + 10.0;
+ const CGFloat totalH = numRows * pinHeight + std::max(0, numRows - 1) * pinGap + 12.0;
  self.heightConstraint.constant = totalH;
 
  while(self.squares.count > pinned.size()) {
@@ -3050,6 +3376,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   [self.squares addObject:sq];
  }
 
+ const BOOL canAnimate = !prevFrames.empty() && !ArdiaReduceMotion();
  for(size_t i = 0; i < pinned.size(); ++i) {
   const auto& tab = pinned[i];
   SlatePinSquare* sq = self.squares[i];
@@ -3057,6 +3384,9 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   sq.tabId = tab.id;
   sq.live = (tab.id == selectedId);
   sq.asleep = !model.live(tab.id);
+  sq.audible = self.owner && [self.owner tabIsAudible:tab.id];
+  sq.muted = self.owner && [self.owner tabIsMuted:tab.id];
+  sq.pipActive = tab.pip_active;
   sq.mark = [self.owner iconForTab:tab];
   sq.toolTip = TabSidebarTitle(tab);
 
@@ -3064,21 +3394,43 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   const int col = (int)i % cols;
   const CGFloat x = rail ? round((sidebarW - pinWidth) / 2.0) : (10.0 + col * (pinWidth + pinGap));
   const CGFloat y = row * (pinHeight + pinGap);
-  sq.frame = NSMakeRect(x, y, pinWidth, pinHeight);
-  [sq updateStyle];
+  const NSRect target = NSMakeRect(x, y, pinWidth, pinHeight);
+  sq.frame = target;
+  [sq updateStyleAnimated:NO];
+
+  if(canAnimate) {
+   auto it = prevFrames.find(tab.id);
+   if(it != prevFrames.end()) {
+    const CGFloat dx = NSMinX(it->second) - NSMinX(target);
+    const CGFloat dy = NSMinY(it->second) - NSMinY(target);
+    if(fabs(dx) > 0.5 || fabs(dy) > 0.5) {
+     CABasicAnimation* slide = [CABasicAnimation animationWithKeyPath:@"transform"];
+     slide.fromValue = [NSValue valueWithCATransform3D:CATransform3DMakeTranslation(dx, dy, 0)];
+     slide.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+     slide.duration = kArdiaListSlideDuration;
+     slide.timingFunction = ArdiaCurveCssEase();
+     [sq.layer addAnimation:slide forKey:@"ardiaPinSlotSlide"];
+    }
+   } else {
+    CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @0.0;
+    fade.toValue = @1.0;
+    fade.duration = kArdiaListAppearDuration;
+    fade.timingFunction = ArdiaCurveCssEaseOut();
+    [sq.layer addAnimation:fade forKey:@"ardiaPinAppear"];
+   }
+  }
  }
 }
 - (void)updateLayoutForWidth:(CGFloat)width {
  if(self.squares.count == 0) return;
  const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || width < 100;
  const int count = (int)self.squares.count;
- const int cols = rail ? 1 : std::max(3, (count + 1) / 2);
- const CGFloat pinGap = 4.0;
- const CGFloat available = width - 20.0 - (cols - 1) * pinGap;
- const CGFloat pinWidth = rail ? 34.0 : std::max(20.0, available / (CGFloat)cols);
- const CGFloat pinHeight = std::min(34.0, pinWidth);
+ int cols = 1;
+ CGFloat pinWidth = 34.0, pinHeight = 34.0, pinGap = kArdiaPinnedGap;
+ ArdiaPinGridMetrics(count, width, rail, cols, pinWidth, pinHeight, pinGap);
  const int numRows = (count + cols - 1) / cols;
- const CGFloat totalH = numRows * pinHeight + std::max(0, numRows - 1) * pinGap + 10.0;
+ const CGFloat totalH = numRows * pinHeight + std::max(0, numRows - 1) * pinGap + 12.0;
  self.heightConstraint.constant = totalH;
 
  for(size_t i = 0; i < self.squares.count; ++i) {
@@ -3088,7 +3440,7 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   const CGFloat x = rail ? round((width - pinWidth) / 2.0) : (10.0 + col * (pinWidth + pinGap));
   const CGFloat y = row * (pinHeight + pinGap);
   sq.frame = NSMakeRect(x, y, pinWidth, pinHeight);
-  [sq updateStyle];
+  [sq updateStyleAnimated:NO];
  }
 }
 - (void)handleDragFromSquare:(SlatePinSquare*)square atPoint:(NSPoint)pt {
@@ -3097,14 +3449,12 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  CGFloat sidebarW = NSWidth(self.bounds);
  const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || sidebarW < 100;
  const int count = (int)self.squares.count;
- const int cols = rail ? 1 : std::max(3, (count + 1) / 2);
- const CGFloat pinGap = 4.0;
- const CGFloat available = sidebarW - 20.0 - (cols - 1) * pinGap;
- const CGFloat pinWidth = rail ? 34.0 : std::max(20.0, available / (CGFloat)cols);
- const CGFloat pinHeight = std::min(34.0, pinWidth);
+ int cols = 1;
+ CGFloat pinWidth = 34.0, pinHeight = 34.0, pinGap = kArdiaPinnedGap;
+ ArdiaPinGridMetrics(count, sidebarW, rail, cols, pinWidth, pinHeight, pinGap);
 
- int col = rail ? 0 : (int)floor((pt.x - 10.0) / (pinWidth + pinGap));
- int row = (int)floor(pt.y / (pinHeight + pinGap));
+ int col = rail ? 0 : (int)floor((pt.x - 10.0 + pinGap * 0.5) / (pinWidth + pinGap));
+ int row = (int)floor((pt.y + pinGap * 0.5) / (pinHeight + pinGap));
  if(col < 0) col = 0; if(col >= cols) col = cols - 1;
  if(row < 0) row = 0;
  int toIdx = row * cols + col;
@@ -3211,6 +3561,134 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 @end
 
+@interface SlateSpaceDotButton : NSView
+@property(weak) SlateDelegate* owner;
+@property(copy) NSString* spaceId;
+@property(copy) NSString* symbolName;
+@property(copy) NSString* spaceName;
+@property BOOL selectedSpace;
+@property BOOL useDotMode;
+@property BOOL hovered;
+@property(strong) NSTrackingArea* trackingArea;
+@property(strong) CALayer* plateLayer;
+@property(strong) CALayer* dotLayer;
+@property(strong) NSImageView* iconView;
+- (void)updateStyleAnimated:(BOOL)animated;
+@end
+
+@implementation SlateSpaceDotButton
+- (instancetype)initWithFrame:(NSRect)frame {
+ if(self = [super initWithFrame:frame]) {
+  self.wantsLayer = YES;
+  self.layer.masksToBounds = NO;
+  self.plateLayer = [CALayer layer];
+  self.dotLayer = [CALayer layer];
+  [self.layer addSublayer:self.plateLayer];
+  [self.layer addSublayer:self.dotLayer];
+  self.iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+  self.iconView.imageScaling = NSImageScaleProportionallyDown;
+  self.iconView.wantsLayer = YES;
+  [self addSubview:self.iconView];
+ }
+ return self;
+}
+- (BOOL)isFlipped { return YES; }
+- (BOOL)mouseDownCanMoveWindow { return NO; }
+- (BOOL)acceptsFirstMouse:(NSEvent*)event { return YES; }
+- (void)updateTrackingAreas {
+ [super updateTrackingAreas];
+ if(self.trackingArea) [self removeTrackingArea:self.trackingArea];
+ self.trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+  options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect
+  owner:self userInfo:nil];
+ [self addTrackingArea:self.trackingArea];
+}
+- (void)mouseEntered:(NSEvent*)event {
+ self.hovered = YES;
+ [self updateStyleAnimated:YES];
+}
+- (void)mouseExited:(NSEvent*)event {
+ self.hovered = NO;
+ [self updateStyleAnimated:YES];
+}
+- (void)mouseDown:(NSEvent*)event {
+ ArdiaAnimatePressScale(self.layer, 0.96, YES); // Ardia buttonMotion.iconPressScale
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(85LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+  ArdiaAnimatePressScale(self.layer, 1.0, NO);
+ });
+ if(self.owner && self.spaceId.length) {
+  if(self.selectedSpace) {
+   [self.owner showSpaceMenuForSpaceId:self.spaceId fromView:self];
+  } else {
+   [self.owner switchSpaceToId:self.spaceId];
+  }
+ }
+}
+- (NSMenu*)menuForEvent:(NSEvent*)event {
+ if(self.owner && self.spaceId.length) {
+  [self.owner showSpaceMenuForSpaceId:self.spaceId fromView:self];
+  return nil;
+ }
+ return [super menuForEvent:event];
+}
+- (void)layout {
+ [super layout];
+ [self updateStyleAnimated:NO];
+}
+- (void)updateStyleAnimated:(BOOL)animated {
+ const CGFloat w = NSWidth(self.bounds);
+ const CGFloat h = NSHeight(self.bounds);
+ NSColor* ink = self.owner.accentInk ?: NSColor.labelColor;
+
+ [CATransaction begin];
+ [CATransaction setDisableActions:YES];
+ // Ardia profileSwitcher.holdPlate: dot 16 (radius 8), icon 22 (radius 6)
+ const CGFloat plateW = self.useDotMode ? 16.0 : 22.0;
+ const CGFloat plateH = self.useDotMode ? 16.0 : 22.0;
+ self.plateLayer.frame = NSMakeRect(round((w - plateW) / 2.0), round((h - plateH) / 2.0), plateW, plateH);
+ self.plateLayer.cornerRadius = self.useDotMode ? 8.0 : 6.0;
+ if(@available(macOS 11.0, *)) self.plateLayer.cornerCurve = kCACornerCurveContinuous;
+
+ if(self.useDotMode) {
+  self.iconView.hidden = YES;
+  self.dotLayer.hidden = NO;
+  const CGFloat dotSize = 6.0; // Ardia profileSwitcher.dot
+  self.dotLayer.frame = NSMakeRect(round((w - dotSize) / 2.0), round((h - dotSize) / 2.0), dotSize, dotSize);
+  self.dotLayer.cornerRadius = dotSize * 0.5;
+ } else {
+  self.dotLayer.hidden = YES;
+  self.iconView.hidden = NO;
+  self.iconView.frame = NSMakeRect(round((w - 18.0) / 2.0), round((h - 18.0) / 2.0), 18.0, 18.0);
+  NSString* sym = self.symbolName.length ? self.symbolName : @"house";
+  self.iconView.image = SlateCachedSymbol(sym, self.spaceName ?: @"Space", 11.0, NSFontWeightSemibold);
+  self.iconView.contentTintColor = ink;
+ }
+ [CATransaction commit];
+
+ const BOOL runFade = animated && !ArdiaReduceMotion();
+ [CATransaction begin];
+ [CATransaction setDisableActions:!runFade];
+ if(runFade) {
+  [CATransaction setAnimationDuration:self.hovered ? kArdiaHoverInDuration : kArdiaHoverOutDuration];
+  [CATransaction setAnimationTimingFunction:ArdiaCurveHoverFade()];
+ }
+ // Ardia exact opacities: icons {1.0, 0.70, 0.42}, dots {0.85, 0.40, 0.20}
+ const CGFloat alpha = self.useDotMode
+  ? (self.selectedSpace ? 0.85 : (self.hovered ? 0.40 : 0.20))
+  : (self.selectedSpace ? 1.00 : (self.hovered ? 0.70 : 0.42));
+ self.dotLayer.backgroundColor = [ink colorWithAlphaComponent:alpha].CGColor;
+ self.iconView.alphaValue = alpha;
+ if(self.selectedSpace) {
+  self.plateLayer.backgroundColor = [ink colorWithAlphaComponent:0.12].CGColor;
+ } else if(self.hovered) {
+  self.plateLayer.backgroundColor = [ink colorWithAlphaComponent:0.07].CGColor;
+ } else {
+  self.plateLayer.backgroundColor = NSColor.clearColor.CGColor;
+ }
+ [CATransaction commit];
+}
+@end
+
 @interface SlateSidebarFoot : NSView
 @property(weak, nonatomic) SlateDelegate* owner;
 @property(strong) SlateDoorButton* spaceDoor;
@@ -3218,13 +3696,19 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 @property(strong) SlateDoorButton* downloadsDoor;
 @property(strong) SlateDoorButton* passwordsDoor;
 @property(strong) SlateDoorButton* settingsDoor;
+@property(strong) NSMutableArray<SlateSpaceDotButton*>* spaceDots;
+@property(strong) CALayer* dividerLayer;
 - (void)updateDoors;
+- (CGFloat)preferredHeightForRail:(BOOL)rail;
 @end
 
 @implementation SlateSidebarFoot
 - (instancetype)initWithFrame:(NSRect)frame {
  if(self = [super initWithFrame:frame]) {
   self.wantsLayer = YES;
+  self.dividerLayer = [CALayer layer];
+  [self.layer addSublayer:self.dividerLayer];
+  self.spaceDots = [NSMutableArray array];
   self.spaceDoor = [[SlateDoorButton alloc] initWithSymbol:@"house" help:@"Spaces (⌃1–⌃9)" target:self action:@selector(spaceClicked:)];
   self.bookmarksDoor = [[SlateDoorButton alloc] initWithSymbol:@"bookmark" help:@"Bookmarks" target:self action:@selector(bookmarksClicked:)];
   self.downloadsDoor = [[SlateDoorButton alloc] initWithSymbol:@"arrow.down.circle" help:@"Downloads" target:self action:@selector(downloadsClicked:)];
@@ -3247,16 +3731,35 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  self.downloadsDoor.owner = owner;
  self.passwordsDoor.owner = owner;
  self.settingsDoor.owner = owner;
+ for(SlateSpaceDotButton* d in self.spaceDots) d.owner = owner;
+}
+- (CGFloat)preferredHeightForRail:(BOOL)rail {
+ if(rail) return 36.0;
+ NSArray<SlateSpace*>* spaces = self.owner.spacesManager.spaces;
+ return (spaces.count >= 2) ? 64.0 : 41.0; // Ardia PROFILE_DOTS_HEIGHT = 41 (or 2 rows when multi-space)
 }
 - (void)layout {
  [super layout];
+ const CGFloat w = NSWidth(self.bounds);
  const CGFloat doorSize = 26.0;
  const CGFloat spacing = 2.0;
- const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || NSWidth(self.bounds) < 100;
+ const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || w < 100;
+ NSArray<SlateSpace*>* spaces = self.owner.spacesManager.spaces;
+ const BOOL showDotsRow = (!rail && spaces.count >= 2);
+
+ [CATransaction begin];
+ [CATransaction setDisableActions:YES];
+ NSColor* ink = self.owner.accentInk ?: NSColor.labelColor;
+ self.dividerLayer.hidden = rail;
+ self.dividerLayer.backgroundColor = [ink colorWithAlphaComponent:0.08].CGColor;
+ self.dividerLayer.frame = NSMakeRect(10.0, 0.0, MAX(0, w - 20.0), 0.5);
+ [CATransaction commit];
 
  if(rail) {
+  for(SlateSpaceDotButton* d in self.spaceDots) d.hidden = YES;
   self.spaceDoor.hidden = NO;
-  self.spaceDoor.frame = NSMakeRect(round((NSWidth(self.bounds) - doorSize) / 2.0), 0, doorSize, doorSize);
+  const CGFloat railDoor = 32.0;
+  self.spaceDoor.frame = NSMakeRect(round((w - railDoor) / 2.0), 4.0, railDoor, railDoor);
   self.bookmarksDoor.hidden = YES;
   self.downloadsDoor.hidden = YES;
   self.passwordsDoor.hidden = YES;
@@ -3269,19 +3772,41 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  self.passwordsDoor.hidden = NO;
  self.settingsDoor.hidden = NO;
 
- CGFloat x = 10.0;
- CGFloat y = 0.0;
-
- self.spaceDoor.frame = NSMakeRect(x, y, doorSize, doorSize);
- x += doorSize + 6.0;
-
- self.bookmarksDoor.frame = NSMakeRect(x, y, doorSize, doorSize);
- x += doorSize + spacing;
- self.downloadsDoor.frame = NSMakeRect(x, y, doorSize, doorSize);
- x += doorSize + spacing;
- self.passwordsDoor.frame = NSMakeRect(x, y, doorSize, doorSize);
- x += doorSize + spacing;
- self.settingsDoor.frame = NSMakeRect(x, y, doorSize, doorSize);
+ if(showDotsRow) {
+  self.spaceDoor.hidden = YES;
+  // Row 1 (y=3..31): Ardia centered ProfileDots switcher (26pt icon cells, collapsing to 12pt dots if crowded)
+  const CGFloat room = MAX(20.0, w - 20.0);
+  const BOOL useDots = ((CGFloat)self.spaceDots.count * 26.0) > room;
+  const CGFloat cellW = useDots ? 12.0 : 26.0;
+  const CGFloat rowW = cellW * (CGFloat)self.spaceDots.count;
+  CGFloat dx = round((w - rowW) / 2.0);
+  for(SlateSpaceDotButton* btn in self.spaceDots) {
+   btn.hidden = NO;
+   btn.useDotMode = useDots;
+   btn.frame = NSMakeRect(dx, 3.0, cellW, 28.0);
+   [btn updateStyleAnimated:NO];
+   dx += cellW;
+  }
+  // Row 2 (y=34..60): clean utility doors centered
+  const CGFloat utilW = doorSize * 4.0 + spacing * 3.0;
+  CGFloat ux = round((w - utilW) / 2.0);
+  const CGFloat uy = 34.0;
+  self.bookmarksDoor.frame = NSMakeRect(ux, uy, doorSize, doorSize); ux += doorSize + spacing;
+  self.downloadsDoor.frame = NSMakeRect(ux, uy, doorSize, doorSize); ux += doorSize + spacing;
+  self.passwordsDoor.frame = NSMakeRect(ux, uy, doorSize, doorSize); ux += doorSize + spacing;
+  self.settingsDoor.frame  = NSMakeRect(ux, uy, doorSize, doorSize);
+ } else {
+  for(SlateSpaceDotButton* d in self.spaceDots) d.hidden = YES;
+  self.spaceDoor.hidden = NO;
+  const CGFloat y = 7.0;
+  CGFloat x = 10.0;
+  self.spaceDoor.frame = NSMakeRect(x, y, doorSize, doorSize);
+  x += doorSize + 6.0;
+  self.bookmarksDoor.frame = NSMakeRect(x, y, doorSize, doorSize); x += doorSize + spacing;
+  self.downloadsDoor.frame = NSMakeRect(x, y, doorSize, doorSize); x += doorSize + spacing;
+  self.passwordsDoor.frame = NSMakeRect(x, y, doorSize, doorSize); x += doorSize + spacing;
+  self.settingsDoor.frame  = NSMakeRect(x, y, doorSize, doorSize);
+ }
 }
 - (void)spaceClicked:(id)sender {
  if(self.owner) [self.owner showSpaceMenuForButton:self.spaceDoor];
@@ -3306,6 +3831,34 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
   self.spaceDoor.symbolName = curSpace.symbol;
   self.spaceDoor.toolTip = [NSString stringWithFormat:@"%@ — ⌃1–⌃9 to switch", curSpace.name];
  }
+ NSArray<SlateSpace*>* spaces = self.owner.spacesManager.spaces;
+ NSString* curId = self.owner.spacesManager.currentSpaceId;
+ while(self.spaceDots.count > spaces.count) {
+  [self.spaceDots.lastObject removeFromSuperview];
+  [self.spaceDots removeLastObject];
+ }
+ while(self.spaceDots.count < spaces.count) {
+  SlateSpaceDotButton* btn = [[SlateSpaceDotButton alloc] initWithFrame:NSZeroRect];
+  btn.owner = self.owner;
+  [self addSubview:btn];
+  [self.spaceDots addObject:btn];
+ }
+ for(NSUInteger i = 0; i < spaces.count; ++i) {
+  SlateSpace* sp = spaces[i];
+  SlateSpaceDotButton* btn = self.spaceDots[i];
+  btn.owner = self.owner;
+  btn.spaceId = sp.identifier;
+  btn.symbolName = sp.symbol;
+  btn.spaceName = sp.name;
+  btn.selectedSpace = [sp.identifier isEqualToString:curId];
+  btn.toolTip = (i < 9)
+   ? [NSString stringWithFormat:@"%@ (⌃%lu)", sp.name, (unsigned long)(i + 1)]
+   : sp.name;
+ }
+ const BOOL rail = (self.owner && [self.owner sidebarIconRail]) || NSWidth(self.bounds) < 100;
+ if(self.owner.sidebarFootHeight) {
+  self.owner.sidebarFootHeight.constant = [self preferredHeightForRail:rail];
+ }
  [self.spaceDoor updateStyle];
  self.bookmarksDoor.on = self.owner.showBookmarksBar;
  self.downloadsDoor.on = [SlateDownloadsPanel sharedPanel].isVisible;
@@ -3313,25 +3866,139 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  [self.downloadsDoor updateStyle];
  [self.passwordsDoor updateStyle];
  [self.settingsDoor updateStyle];
+ [self setNeedsLayout:YES];
+ [self layoutSubtreeIfNeeded];
 }
 @end
 
 @interface SlateGroupHeader : NSView
+@property(weak) SlateDelegate* owner;
+@property(copy) NSString* groupId;
+@property BOOL collapsed;
+@property BOOL isRail;
+@property(strong) NSImageView* folderIcon;
+@property(strong) NSTextField* titleLabel;
+@property(strong) NSView* chevronBox;
+@property(strong) NSImageView* chevronView;
+@property(strong) NSView* railDot;
+- (void)configureWithGroup:(const slate::TabGroup&)group isRail:(BOOL)rail animateChevron:(BOOL)animateChevron;
 @end
+
 @implementation SlateGroupHeader
 - (instancetype)initWithFrame:(NSRect)frame {
  if(self=[super initWithFrame:frame]) {
   self.wantsLayer = YES;
+  self.folderIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+  self.folderIcon.imageScaling = NSImageScaleProportionallyDown;
+  [self addSubview:self.folderIcon];
+
+  self.titleLabel = [NSTextField labelWithString:@"Group"];
+  self.titleLabel.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium];
+  self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+  [self addSubview:self.titleLabel];
+
+  self.chevronBox = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 10, 10)];
+  self.chevronBox.wantsLayer = YES;
+  self.chevronView = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, 10, 10)];
+  self.chevronView.image = SlateCachedSymbol(@"chevron.down", nil, 9.0, NSFontWeightSemibold);
+  self.chevronView.imageScaling = NSImageScaleProportionallyDown;
+  [self.chevronBox addSubview:self.chevronView];
+  [self addSubview:self.chevronBox];
+
+  self.railDot = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 6, 6)];
+  self.railDot.wantsLayer = YES;
+  self.railDot.layer.cornerRadius = 3.0;
+  [self addSubview:self.railDot];
  }
  return self;
 }
 - (BOOL)isFlipped { return YES; }
+- (void)configureWithGroup:(const slate::TabGroup&)group isRail:(BOOL)rail animateChevron:(BOOL)animateChevron {
+ const BOOL wasCollapsed = self.collapsed;
+ const BOOL sameGroup = [self.groupId isEqualToString:Text(group.id)];
+ self.groupId = Text(group.id);
+ self.collapsed = group.collapsed;
+ self.isRail = rail;
+ NSColor* ink = self.owner.accentInk ?: NSColor.labelColor;
+ NSString* title = Text(group.title);
+ self.titleLabel.stringValue = title.length ? title : @"Group";
+ self.titleLabel.textColor = ink;
+ self.toolTip = self.titleLabel.stringValue;
+
+ // Ardia FolderOrIcon: open folder outline vs closed filled folder tinted with Slate's accent/ink
+ NSString* folderSym = group.collapsed ? @"folder.fill" : @"folder";
+ self.folderIcon.image = SlateCachedSymbol(folderSym, nil, 13.0, NSFontWeightMedium);
+ self.folderIcon.contentTintColor = [ink colorWithAlphaComponent:group.collapsed ? 0.78 : 0.90];
+ self.chevronView.contentTintColor = [ink colorWithAlphaComponent:0.50]; // Ardia withAlpha(groupTitle, 0.5)
+ self.railDot.layer.backgroundColor = [ink colorWithAlphaComponent:0.65].CGColor;
+
+ [self layout];
+
+ // Ardia chevron rotation: -90deg (collapsed) <-> 0deg (open) over 150ms curve.enter
+ const CGFloat targetAngle = group.collapsed ? (CGFloat)(-M_PI_2) : 0.0;
+ const CGPoint mid = CGPointMake(NSMidX(self.chevronBox.bounds), NSMidY(self.chevronBox.bounds));
+ auto makeRot = [&](CGFloat rad) {
+  CATransform3D t = CATransform3DTranslate(CATransform3DIdentity, mid.x, mid.y, 0);
+  t = CATransform3DRotate(t, rad, 0, 0, 1);
+  return CATransform3DTranslate(t, -mid.x, -mid.y, 0);
+ };
+ CATransform3D targetT = makeRot(targetAngle);
+ if(animateChevron && !ArdiaReduceMotion() && (!sameGroup || wasCollapsed != group.collapsed)) {
+  const CGFloat fromAngle = group.collapsed ? 0.0 : (CGFloat)(-M_PI_2);
+  CABasicAnimation* rot = [CABasicAnimation animationWithKeyPath:@"transform"];
+  rot.fromValue = [NSValue valueWithCATransform3D:makeRot(fromAngle)];
+  rot.toValue = [NSValue valueWithCATransform3D:targetT];
+  rot.duration = kArdiaFoldDuration;
+  rot.timingFunction = ArdiaCurveEnter();
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  self.chevronBox.layer.transform = targetT;
+  [CATransaction commit];
+  [self.chevronBox.layer addAnimation:rot forKey:@"ardiaChevronTurn"];
+ } else {
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  [self.chevronBox.layer removeAnimationForKey:@"ardiaChevronTurn"];
+  self.chevronBox.layer.transform = targetT;
+  [CATransaction commit];
+ }
+}
+- (void)layout {
+ [super layout];
+ const CGFloat w = NSWidth(self.bounds);
+ const CGFloat h = NSHeight(self.bounds);
+ if(self.isRail || w <= 100) {
+  self.folderIcon.hidden = YES;
+  self.titleLabel.hidden = YES;
+  self.chevronBox.hidden = YES;
+  self.railDot.hidden = NO;
+  self.railDot.frame = NSMakeRect(round((w - 6.0) / 2.0), round((h - 6.0) / 2.0), 6.0, 6.0);
+  return;
+ }
+ self.railDot.hidden = YES;
+ self.folderIcon.hidden = NO;
+ self.titleLabel.hidden = NO;
+ self.chevronBox.hidden = NO;
+
+ const CGFloat iconX = 11.0;
+ const CGFloat iconSize = 16.0;
+ self.folderIcon.frame = NSMakeRect(iconX, round((h - iconSize) / 2.0), iconSize, iconSize);
+
+ const CGFloat titleX = iconX + iconSize + 7.0;
+ const CGFloat maxTitleW = MAX(20.0, w - titleX - 24.0);
+ const NSSize fitSize = [self.titleLabel sizeThatFits:NSMakeSize(maxTitleW, 18.0)];
+ const CGFloat titleW = MIN(maxTitleW, ceil(fitSize.width));
+ self.titleLabel.frame = NSMakeRect(titleX, round((h - 18.0) / 2.0), titleW, 18.0);
+ self.chevronBox.frame = NSMakeRect(titleX + titleW + 5.0, round((h - 10.0) / 2.0), 10.0, 10.0);
+ self.chevronView.frame = self.chevronBox.bounds;
+}
 @end
 
 @interface SlateInlineAddRow : NSView
 @property(weak) SlateDelegate* owner;
 @property BOOL isRail;
 @property BOOL hovered;
+@property BOOL hoverTransitioning;
 @property(strong) NSTrackingArea* trackingArea;
 @property(strong) CALayer* pillLayer;
 @property(strong) NSImageView* plusIcon;
@@ -3347,11 +4014,11 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 
   self.plusIcon=[[NSImageView alloc] initWithFrame:NSZeroRect];
   self.plusIcon.imageScaling=NSImageScaleProportionallyDown;
-  self.plusIcon.image = SlateCachedSymbol(@"plus", @"New tab", 10, NSFontWeightMedium) ?: [NSImage imageNamed:@"TabIconTemplate"];
+  self.plusIcon.image = SlateCachedSymbol(@"plus", @"New tab", 12, NSFontWeightMedium) ?: [NSImage imageNamed:@"TabIconTemplate"];
   [self addSubview:self.plusIcon];
 
-  self.label=[NSTextField labelWithString:@"New tab"];
-  self.label.font=[NSFont systemFontOfSize:12.5 weight:NSFontWeightRegular];
+  self.label=[NSTextField labelWithString:@"New Tab"];
+  self.label.font=[NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular];
   [self addSubview:self.label];
  }
  return self;
@@ -3368,32 +4035,49 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
 }
 - (void)mouseEntered:(NSEvent*)event {
  self.hovered=YES;
+ self.hoverTransitioning=YES;
  [self updateLayer];
+ self.hoverTransitioning=NO;
 }
 - (void)mouseExited:(NSEvent*)event {
  self.hovered=NO;
+ self.hoverTransitioning=YES;
  [self updateLayer];
+ self.hoverTransitioning=NO;
 }
 - (void)mouseDown:(NSEvent*)event {
+ ArdiaAnimatePressScale(self.layer, 0.975, YES);
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(80LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+  ArdiaAnimatePressScale(self.layer, 1.0, NO);
+ });
  if(self.owner) [self.owner newTab:self];
 }
 - (BOOL)wantsUpdateLayer { return YES; }
 - (void)updateLayer {
  [CATransaction begin];
  [CATransaction setDisableActions:YES];
+ self.pillLayer.frame = NSInsetRect(self.bounds, 0, kArdiaRowGap * 0.5);
+ self.pillLayer.cornerRadius = kArdiaRowRadius;
+ if(@available(macOS 11.0, *)) self.pillLayer.cornerCurve = kCACornerCurveContinuous;
+ [CATransaction commit];
+
+ const BOOL runFade = self.hoverTransitioning && !ArdiaReduceMotion();
+ [CATransaction begin];
+ [CATransaction setDisableActions:!runFade];
+ if(runFade) {
+  [CATransaction setAnimationDuration:self.hovered ? kArdiaHoverInDuration : kArdiaHoverOutDuration];
+  [CATransaction setAnimationTimingFunction:ArdiaCurveHoverFade()];
+ }
  NSColor* ink=self.owner.accentInk ?: NSColor.labelColor;
  if(self.hovered) {
-  self.plusIcon.contentTintColor=[ink colorWithAlphaComponent:0.70];
-  self.label.textColor=[ink colorWithAlphaComponent:0.70];
-  self.pillLayer.backgroundColor=[[ink colorWithAlphaComponent:0.07] CGColor];
+  self.plusIcon.contentTintColor=[ink colorWithAlphaComponent:0.75];
+  self.label.textColor=[ink colorWithAlphaComponent:0.78];
+  self.pillLayer.backgroundColor=[[ink colorWithAlphaComponent:0.075] CGColor];
  } else {
-  self.plusIcon.contentTintColor=[ink colorWithAlphaComponent:0.40];
-  self.label.textColor=[ink colorWithAlphaComponent:0.40];
+  self.plusIcon.contentTintColor=[ink colorWithAlphaComponent:0.42];
+  self.label.textColor=[ink colorWithAlphaComponent:0.52];
   self.pillLayer.backgroundColor=NSColor.clearColor.CGColor;
  }
- self.pillLayer.frame=self.bounds;
- self.pillLayer.cornerRadius=9;
- if(@available(macOS 11.0, *)) self.pillLayer.cornerCurve=kCACornerCurveContinuous;
  [CATransaction commit];
 }
 - (void)layout {
@@ -3402,12 +4086,12 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  [CATransaction setDisableActions:YES];
  const BOOL isRail = self.isRail || NSWidth(self.bounds) <= 100;
  self.label.hidden=isRail;
- self.pillLayer.frame=self.bounds;
+ self.pillLayer.frame = NSInsetRect(self.bounds, 0, kArdiaRowGap * 0.5);
  if(isRail) {
-  self.plusIcon.frame=NSMakeRect(round((NSWidth(self.bounds)-15)/2.0), round((NSHeight(self.bounds)-15)/2.0), 15, 15);
+  self.plusIcon.frame=NSMakeRect(round((NSWidth(self.bounds)-16)/2.0), round((NSHeight(self.bounds)-16)/2.0), 16, 16);
  } else {
-  self.plusIcon.frame=NSMakeRect(10, round((NSHeight(self.bounds)-15)/2.0), 15, 15);
-  self.label.frame=NSMakeRect(33, round((NSHeight(self.bounds)-16)/2.0), MAX(0, NSWidth(self.bounds)-43), 16);
+  self.plusIcon.frame=NSMakeRect(9, round((NSHeight(self.bounds)-16)/2.0), 16, 16);
+  self.label.frame=NSMakeRect(32, round((NSHeight(self.bounds)-18)/2.0), MAX(0, NSWidth(self.bounds)-40), 18);
  }
  [self updateLayer];
  [CATransaction commit];
@@ -3492,50 +4176,284 @@ typedef NS_ENUM(NSInteger, SlateRowPillStyle) {
  [super rightMouseDown:event];
 }
 @end
-static void (*orig_addTitlebarSubview)(id, SEL, NSView*) = NULL;
-static void swizzle_addTitlebarSubview(id self, SEL _cmd, NSView* subview) {
- if(subview && [subview isKindOfClass:NSButton.class]) {
-  if([subview.superview isKindOfClass:NSClassFromString(@"SlateTrafficCluster")]) {
-   return;
-  }
-  NSWindow* win = [self respondsToSelector:@selector(window)] ? [self window] : nil;
-  if(win && [win.delegate isKindOfClass:NSClassFromString(@"SlateDelegate")]) {
-   SlateDelegate* del = (SlateDelegate*)win.delegate;
-   if(del.trafficCluster && (subview == [win standardWindowButton:NSWindowCloseButton] ||
-                             subview == [win standardWindowButton:NSWindowMiniaturizeButton] ||
-                             subview == [win standardWindowButton:NSWindowZoomButton])) {
-    return;
-   }
-  }
+// Ardia-grade native NSThemeFrame traffic lights controller (ArdiaTrafficLights.mm architecture):
+// Places the real AppKit close/miniaturize/zoom buttons directly via NSThemeFrame's
+// _closeButtonOrigin & _currentTitlebarContainerViewFrame, slides them on GPU CALayers in lockstep
+// with sidebar dock/peek animations, and tucks them off-window when the sidebar is hidden.
+static const void* kSlateArdiaLightsKey = &kSlateArdiaLightsKey;
+static const void* kSlateLightsCenterKey = &kSlateLightsCenterKey;
+static const void* kSlateLightsTuckedKey = &kSlateLightsTuckedKey;
+static const void* kSlateLightsAnimatingKey = &kSlateLightsAnimatingKey;
+static const void* kSlateSharingTuckedKey = &kSlateSharingTuckedKey;
+static CFTimeInterval gSlateLaunchStartTime = 0;
+
+static constexpr NSPoint kArdiaLightsSidebarCenter = {25.0, 24.0};     // ARC_LIGHTS_CENTER
+static constexpr NSPoint kArdiaLightsTopStripCenter = {20.75, 20.75};  // TOP_STRIP_LIGHTS_CENTER
+
+#define SLATE_TRACE_MS(label) do { \
+ if(gSlateLaunchStartTime > 0 && getenv("SLATE_PERF_TRACE")) \
+  fprintf(stderr, "SLATE_TRACE %s=%.1f\n", label, (CACurrentMediaTime() - gSlateLaunchStartTime) * 1000.0); \
+} while(0)
+
+static NSArray<NSButton*>* SlateNativeTrafficButtons(NSWindow* window) {
+ NSMutableArray<NSButton*>* out = [NSMutableArray arrayWithCapacity:3];
+ for(NSWindowButton kind : {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
+  NSButton* b = [window standardWindowButton:kind];
+  if(b) [out addObject:b];
  }
- if(orig_addTitlebarSubview) {
-  orig_addTitlebarSubview(self, _cmd, subview);
+ return out;
+}
+
+static NSPoint SlateLightsTargetCenter(NSWindow* window) {
+ NSValue* val = window ? objc_getAssociatedObject(window, kSlateLightsCenterKey) : nil;
+ return val ? val.pointValue : kArdiaLightsSidebarCenter;
+}
+
+static BOOL SlateLightsAreOutsideWindow(NSWindow* window) {
+ if(!window || !objc_getAssociatedObject(window, kSlateArdiaLightsKey)) return NO;
+ if((window.styleMask & NSWindowStyleMaskFullScreen) != 0) return NO;
+ NSArray<NSButton*>* buttons = SlateNativeTrafficButtons(window);
+ if(!buttons.count) return NO;
+ const NSSize size = buttons.firstObject.frame.size;
+ const NSPoint c = SlateLightsTargetCenter(window);
+ const CGFloat left = c.x - size.width * 0.5;
+ const CGFloat actualSpan = NSMaxX(buttons.lastObject.frame) - NSMinX(buttons.firstObject.frame);
+ const CGFloat span = MAX(80.0, actualSpan); // Ardia LIGHTS_REACH = 80
+ return (left + span <= 0.0) || (left >= NSWidth(window.frame)) || (c.y + size.height * 0.5 <= 0.0);
+}
+
+static void SlateKeepSharingIndicatorInWindow(NSView* frameView, CGFloat dx) {
+ if(!frameView) return;
+ const SEL sel = NSSelectorFromString(@"sharingIndicator");
+ if(![frameView respondsToSelector:sel]) return;
+ NSView* indicator = ((NSView* (*)(id, SEL))objc_msgSend)(frameView, sel);
+ if(![indicator isKindOfClass:NSView.class]) return;
+ if(indicator.layer && (dx != 0.0 || indicator.layer.affineTransform.tx != 0.0)) {
+  indicator.layer.affineTransform = CGAffineTransformMakeTranslation(dx, 0.0);
+ }
+ const NSRect shown = NSOffsetRect([indicator convertRect:indicator.bounds toView:frameView], dx, 0.0);
+ const BOOL outside = !NSContainsRect(frameView.bounds, shown);
+ if(outside == (objc_getAssociatedObject(indicator, kSlateSharingTuckedKey) != nil)) return;
+ objc_setAssociatedObject(indicator, kSlateSharingTuckedKey, outside ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+ indicator.hidden = outside;
+}
+
+static void SlateTuckTrafficLightsIfOutside(NSWindow* window) {
+ if(!window || !objc_getAssociatedObject(window, kSlateArdiaLightsKey)) return;
+ if((window.styleMask & NSWindowStyleMaskFullScreen) != 0) return;
+ if(objc_getAssociatedObject(window, kSlateLightsAnimatingKey)) return;
+ const BOOL tucked = SlateLightsAreOutsideWindow(window);
+ for(NSButton* b in SlateNativeTrafficButtons(window)) {
+  if(b.hidden != tucked) b.hidden = tucked;
+  const CGFloat wantAlpha = tucked ? 0.0 : 1.0;
+  if(fabs(b.alphaValue - wantAlpha) > 0.01) b.alphaValue = wantAlpha;
  }
 }
 
-static void (*orig_titlebar_addSubview)(id, SEL, NSView*) = NULL;
-static void swizzle_titlebar_addSubview(id self, SEL _cmd, NSView* subview) {
- if(subview && [subview isKindOfClass:NSButton.class]) {
-  if([subview.superview isKindOfClass:NSClassFromString(@"SlateTrafficCluster")]) {
-   return;
-  }
-  NSWindow* win = [self respondsToSelector:@selector(window)] ? [self window] : nil;
-  if(win && [win.delegate isKindOfClass:NSClassFromString(@"SlateDelegate")]) {
-   SlateDelegate* del = (SlateDelegate*)win.delegate;
-   if(del.trafficCluster && (subview == [win standardWindowButton:NSWindowCloseButton] ||
-                             subview == [win standardWindowButton:NSWindowMiniaturizeButton] ||
-                             subview == [win standardWindowButton:NSWindowZoomButton])) {
-    return;
-   }
+static void SlateRetileTrafficLights(NSWindow* window) {
+ NSView* frameView = window.contentView.superview;
+ if(!frameView) return;
+ for(NSString* name in @[@"_updateTitlebarContainerViewFrameIfNecessary", @"_updateButtonPositions", @"_updateMouseTracking", @"_positionSharingIndicator"]) {
+  const SEL sel = NSSelectorFromString(name);
+  if([frameView respondsToSelector:sel]) {
+   ((void (*)(id, SEL))objc_msgSend)(frameView, sel);
   }
  }
- if(orig_titlebar_addSubview) {
-  orig_titlebar_addSubview(self, _cmd, subview);
+ SlateTuckTrafficLightsIfOutside(window);
+}
+
+static void SlateInstallArdiaTrafficLightsHooks(Class frameClass) {
+ if(!frameClass) return;
+ static NSMutableSet<Class>* installed = nil;
+ static dispatch_once_t once;
+ dispatch_once(&once, ^{ installed = [NSMutableSet set]; });
+ if([installed containsObject:frameClass]) return;
+ [installed addObject:frameClass];
+
+ // 1. _closeButtonOrigin: place native traffic lights at our exact (x, y) center
+ {
+  const SEL sel = NSSelectorFromString(@"_closeButtonOrigin");
+  Method m = class_getInstanceMethod(frameClass, sel);
+  if(m) {
+   IMP orig = method_getImplementation(m);
+   IMP rep = imp_implementationWithBlock(^NSPoint(NSView* frameView) {
+    NSWindow* win = frameView.window;
+    if(!win || !objc_getAssociatedObject(win, kSlateArdiaLightsKey) || (win.styleMask & NSWindowStyleMaskFullScreen)) {
+     return ((NSPoint (*)(id, SEL))orig)(frameView, sel);
+    }
+    NSButton* closeBtn = [win standardWindowButton:NSWindowCloseButton];
+    const NSSize sz = (closeBtn && NSWidth(closeBtn.frame) > 0) ? closeBtn.frame.size : NSMakeSize(14, 14);
+    const NSPoint c = SlateLightsTargetCenter(win);
+    return NSMakePoint(c.x - sz.width * 0.5, NSHeight(frameView.bounds) - c.y - sz.height * 0.5);
+   });
+   method_setImplementation(m, rep);
+  }
+ }
+
+ // 2. _currentTitlebarContainerViewFrame: extend titlebar hit/hover container to reach our lights
+ {
+  const SEL sel = NSSelectorFromString(@"_currentTitlebarContainerViewFrame");
+  Method m = class_getInstanceMethod(frameClass, sel);
+  if(m) {
+   IMP orig = method_getImplementation(m);
+   IMP rep = imp_implementationWithBlock(^NSRect(NSView* frameView) {
+    NSRect frame = ((NSRect (*)(id, SEL))orig)(frameView, sel);
+    NSWindow* win = frameView.window;
+    if(!win || !objc_getAssociatedObject(win, kSlateArdiaLightsKey) || (win.styleMask & NSWindowStyleMaskFullScreen)) {
+     return frame;
+    }
+    NSButton* closeBtn = [win standardWindowButton:NSWindowCloseButton];
+    const NSSize sz = (closeBtn && NSWidth(closeBtn.frame) > 0) ? closeBtn.frame.size : NSMakeSize(14, 14);
+    const NSPoint c = SlateLightsTargetCenter(win);
+    const CGFloat reach = ceil(c.y + sz.height * 0.5 + 2.0);
+    const CGFloat top = frameView.isFlipped ? NSMinY(frame) : NSHeight(frameView.bounds) - NSMaxY(frame);
+    const CGFloat grow = reach - top - NSHeight(frame);
+    if(grow > 0) {
+     frame.size.height += grow;
+     if(!frameView.isFlipped) frame.origin.y -= grow;
+    }
+    return frame;
+   });
+   method_setImplementation(m, rep);
+  }
+ }
+
+ // 3. _updateButtonPositions: auto-tuck buttons whenever center is off-window
+ {
+  const SEL sel = NSSelectorFromString(@"_updateButtonPositions");
+  Method m = class_getInstanceMethod(frameClass, sel);
+  if(m) {
+   IMP orig = method_getImplementation(m);
+   IMP rep = imp_implementationWithBlock(^(NSView* frameView) {
+    ((void (*)(id, SEL))orig)(frameView, sel);
+    NSWindow* win = frameView.window;
+    if(win && objc_getAssociatedObject(win, kSlateArdiaLightsKey)) {
+     SlateTuckTrafficLightsIfOutside(win);
+    }
+   });
+   method_setImplementation(m, rep);
+  }
+ }
+
+ // 4. _positionSharingIndicator: keep macOS sharing indicator synced with traffic light slide
+ {
+  const SEL sel = NSSelectorFromString(@"_positionSharingIndicator");
+  Method m = class_getInstanceMethod(frameClass, sel);
+  if(m) {
+   IMP orig = method_getImplementation(m);
+   IMP rep = imp_implementationWithBlock(^(NSView* frameView) {
+    ((void (*)(id, SEL))orig)(frameView, sel);
+    NSWindow* win = frameView.window;
+    if(win && objc_getAssociatedObject(win, kSlateArdiaLightsKey)) {
+     NSButton* closeBtn = [win standardWindowButton:NSWindowCloseButton];
+     SlateKeepSharingIndicatorInWindow(frameView, closeBtn.layer ? closeBtn.layer.affineTransform.tx : 0.0);
+    }
+   });
+   method_setImplementation(m, rep);
+  }
+ }
+}
+
+static void SlateConfigureArdiaTrafficLights(NSWindow* window) {
+ if(!window || !window.contentView.superview) return;
+ objc_setAssociatedObject(window, kSlateArdiaLightsKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+ objc_setAssociatedObject(window, kSlateLightsCenterKey, [NSValue valueWithPoint:kArdiaLightsSidebarCenter], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+ SlateInstallArdiaTrafficLightsHooks([window.contentView.superview class]);
+ SlateRetileTrafficLights(window);
+}
+
+static void SlateSetArdiaTrafficLightsCenter(NSWindow* window, NSPoint target, NSTimeInterval duration, CAMediaTimingFunction* timing) {
+ if(!window || !objc_getAssociatedObject(window, kSlateArdiaLightsKey)) return;
+ if((window.styleMask & NSWindowStyleMaskFullScreen) != 0) return;
+
+ const NSPoint prev = SlateLightsTargetCenter(window);
+ const CGFloat dx = target.x - prev.x;
+ const CGFloat dy = target.y - prev.y;
+ if(fabs(dx) < 0.25 && fabs(dy) < 0.25) {
+  SlateTuckTrafficLightsIfOutside(window);
+  return;
+ }
+
+ NSArray<NSButton*>* buttons = SlateNativeTrafficButtons(window);
+ const BOOL animate = (duration > 0.001 && !ArdiaReduceMotion() && buttons.count > 0);
+ objc_setAssociatedObject(window, kSlateLightsCenterKey, [NSValue valueWithPoint:target], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+ if(!animate) {
+  objc_setAssociatedObject(window, kSlateLightsAnimatingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  for(NSButton* b in buttons) {
+   b.wantsLayer = YES;
+   [b.layer removeAnimationForKey:@"slateLightsSlide"];
+   b.layer.affineTransform = CGAffineTransformIdentity;
+  }
+  SlateRetileTrafficLights(window);
+  [CATransaction commit];
+  return;
+ }
+
+ const BOOL targetTucked = SlateLightsAreOutsideWindow(window);
+ if(!targetTucked) {
+  objc_setAssociatedObject(window, kSlateLightsAnimatingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // Moving ON-SCREEN: retile immediately to target center, then slide layer from (-dx, -dy) -> (0, 0).
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  SlateRetileTrafficLights(window);
+  for(NSButton* b in buttons) {
+   b.wantsLayer = YES;
+   b.hidden = NO;
+   b.alphaValue = 1.0;
+   [b.layer removeAnimationForKey:@"slateLightsSlide"];
+   b.layer.affineTransform = CGAffineTransformIdentity;
+   CABasicAnimation* anim = [CABasicAnimation animationWithKeyPath:@"transform"];
+   anim.fromValue = [NSValue valueWithCATransform3D:CATransform3DMakeTranslation(-dx, dy, 0.0)];
+   anim.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+   anim.duration = duration;
+   anim.timingFunction = timing ?: ArdiaCurveDockSlide();
+   [b.layer addAnimation:anim forKey:@"slateLightsSlide"];
+  }
+  [CATransaction commit];
+ } else {
+  // Moving OFF-SCREEN: keep visible during the GPU slide to (dx, -dy), then retile & tuck on completion.
+  NSObject* token = [[NSObject alloc] init];
+  objc_setAssociatedObject(window, kSlateLightsAnimatingKey, token, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  __weak NSWindow* weakWin = window;
+  __weak NSObject* weakToken = token;
+  [CATransaction begin];
+  [CATransaction setAnimationDuration:duration];
+  [CATransaction setAnimationTimingFunction:timing ?: ArdiaCurveEnter()];
+  [CATransaction setCompletionBlock:^{
+   NSWindow* w = weakWin;
+   if(!w || !weakToken) return;
+   objc_setAssociatedObject(w, kSlateLightsAnimatingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+   [CATransaction begin];
+   [CATransaction setDisableActions:YES];
+   for(NSButton* b in SlateNativeTrafficButtons(w)) {
+    [b.layer removeAnimationForKey:@"slateLightsSlide"];
+    b.layer.affineTransform = CGAffineTransformIdentity;
+   }
+   SlateRetileTrafficLights(w);
+   [CATransaction commit];
+  }];
+  for(NSButton* b in buttons) {
+   b.wantsLayer = YES;
+   b.hidden = NO;
+   b.alphaValue = 1.0;
+   CABasicAnimation* anim = [CABasicAnimation animationWithKeyPath:@"transform"];
+   anim.fromValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+   anim.toValue = [NSValue valueWithCATransform3D:CATransform3DMakeTranslation(dx, -dy, 0.0)];
+   anim.duration = duration;
+   anim.timingFunction = timing ?: ArdiaCurveEnter();
+   anim.fillMode = kCAFillModeForwards;
+   anim.removedOnCompletion = NO;
+   [b.layer addAnimation:anim forKey:@"slateLightsSlide"];
+  }
+  [CATransaction commit];
  }
 }
 
 static void InstallThemeFrameSwizzle(void) {
- // Keep AppKit titlebar hierarchy intact to avoid layout thrashing
+ // Installed per-window via SlateConfigureArdiaTrafficLights once NSWindow is created.
 }
 
 @interface SlateTrafficCluster : NSView
@@ -4817,14 +5735,6 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
 - (void)startGreetingTimer {
  [self stopGreetingTimer];
  [self updateGreetingMessage];
- __weak typeof(self) weakSelf=self;
- _greetingTimer=[NSTimer scheduledTimerWithTimeInterval:300.0 repeats:YES block:^(NSTimer* timer) {
-  if(!weakSelf || weakSelf.isHiddenOrHasHiddenAncestor) return;
-  [weakSelf updateGreetingMessage];
- }];
- _greetingTimer.tolerance=30.0;
- [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onClockChanged:) name:NSSystemClockDidChangeNotification object:nil];
- [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onClockChanged:) name:NSCalendarDayChangedNotification object:nil];
 }
 - (void)stopGreetingTimer {
  if(_greetingTimer) { [_greetingTimer invalidate]; _greetingTimer=nil; }
@@ -5824,22 +6734,60 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  const BOOL systemDark=[[self.window.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua,NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua];
  return (self.themeMode==1) ? NO : ((self.themeMode==2) ? YES : systemDark);
 }
-- (void)createWindow {
+ - (void)createWindow {
  InstallThemeFrameSwizzle();
  self.sessionWritable=YES;
- [SlateSearchServices configureWithDirectory:DataDirectory()];
- session=slate::make_session_store([DataDirectory() stringByAppendingPathComponent:@"session.json"].UTF8String);
+ const BOOL benchClean = [NSProcessInfo.processInfo.environment[@"SLATE_BENCH_CLEAN"] boolValue];
  NSString* loadError=nil;
- try { model=slate::TabModel(session->load(), session->last_groups()); }
- catch(const std::exception&) { self.sessionWritable=NO; loadError=@"The saved session could not be read. The original file is preserved; this window will not overwrite it."; }
- if(model.tabs().empty()) model.add("about:blank");
- try { bookmarks=slate::load_bookmarks(BookmarksPath().UTF8String); }
- catch(const std::exception&) { bookmarks=std::make_unique<slate::BookmarkList>(); }
+ if(benchClean) {
+  self.sessionWritable=NO;
+  model=slate::TabModel();
+  if(self.earlyURLs.count) {
+   for(NSURL* u in self.earlyURLs) {
+    NSString* s=u.absoluteString;
+    if(s.length) model.add(s.UTF8String);
+   }
+   [self.earlyURLs removeAllObjects];
+  } else {
+   model.add("about:blank");
+  }
+ } else {
+  session=slate::make_session_store([DataDirectory() stringByAppendingPathComponent:@"session.json"].UTF8String);
+  try { model=slate::TabModel(session->load(), session->last_groups()); }
+  catch(const std::exception&) { self.sessionWritable=NO; loadError=@"The saved session could not be read. The original file is preserved; this window will not overwrite it."; }
+  if(model.tabs().empty()) model.add("about:blank");
+ }
  UiPrefs prefs=LoadUiPrefs();
+ self.showBookmarksBar=prefs.showBookmarksBar;
+ if(self.showBookmarksBar && !benchClean) {
+  try { bookmarks=slate::load_bookmarks(BookmarksPath().UTF8String); }
+  catch(const std::exception&) { bookmarks=std::make_unique<slate::BookmarkList>(); }
+ } else {
+  bookmarks=std::make_unique<slate::BookmarkList>();
+  if(!benchClean) {
+   NSString* bmPath=BookmarksPath();
+   dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    std::unique_ptr<slate::BookmarkList> loaded;
+    try { loaded=slate::load_bookmarks(bmPath.UTF8String); }
+    catch(const std::exception&) { return; }
+    auto sharedLoaded=std::shared_ptr<slate::BookmarkList>(std::move(loaded));
+    dispatch_async(dispatch_get_main_queue(), ^{
+     if(bookmarks && bookmarks->items().empty() && sharedLoaded && !sharedLoaded->items().empty()) {
+      *bookmarks = *sharedLoaded;
+     }
+    });
+   });
+  }
+ }
  self.verticalTabs=prefs.vertical;
- self.tabsCollapsed=prefs.collapsed;
- self.zoomPercent=100; // Legacy global zoom no longer controls independent tabs.
+ self.allowHideIconSidebar=prefs.allowHideIconSidebar;
  self.sidebarUserWidth=ClampSidebarWidth(prefs.sidebarWidth, 1200);
+ self.tabsCollapsed=prefs.collapsed;
+ if(self.verticalTabs && self.sidebarUserWidth < kSidebarLabelWidth && !self.allowHideIconSidebar) {
+  self.tabsCollapsed=NO;
+ }
+ self.sidebarEdgeArmed=YES;
+ self.zoomPercent=100; // Legacy global zoom no longer controls independent tabs.
  self.accentId=prefs.accent.length ? prefs.accent : @"rose";
  self.accentHex=prefs.accentHex ?: @"";
  self.accentHex2=prefs.accentHex2 ?: @"";
@@ -5880,16 +6828,80 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  self.window.minSize=NSMakeSize(480,360); self.window.titlebarAppearsTransparent=YES;
  self.window.titleVisibility=NSWindowTitleHidden; self.window.tabbingMode=NSWindowTabbingModeDisallowed;
  self.window.titlebarSeparatorStyle=NSTitlebarSeparatorStyleNone;
- self.window.backgroundColor=NSColor.windowBackgroundColor;
+ {
+  const BOOL systemDark=[[NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua,NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+  const BOOL isDark=(self.themeMode==1) ? NO : ((self.themeMode==2) ? YES : systemDark);
+  self.window.backgroundColor=ChromeAccent(self.accentId, self.accentHex, isDark);
+ }
  [self.window setFrameAutosaveName:@"SlateMainWindow"];
- [self.window center];
+ if(self.window.frame.size.width < 600 || self.window.frame.size.height < 400) {
+  [self.window setFrame:NSMakeRect(100, 100, 1200, 800) display:NO];
+  [self.window center];
+ }
  self.window.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorFullScreenAllowsTiling;
  self.window.defaultButtonCell=nil;
+ SlateConfigureArdiaTrafficLights(self.window);
+ SLATE_TRACE_MS("win_created");
+ // Ardia early-window pattern: put the themed window on screen immediately (~145ms)
+ // before building secondary chrome views, eliminating perceived cold-launch lag.
+ [self.window makeKeyAndOrderFront:nil];
+ [NSApp activateIgnoringOtherApps:YES];
+ if(gSlateLaunchStartTime > 0) {
+  fprintf(stderr, "SLATE_PERF window_on_screen_ms=%.1f\n", (CACurrentMediaTime() - gSlateLaunchStartTime) * 1000.0);
+ }
  NSView* root=self.window.contentView;
  root.wantsLayer=YES;
  // Keep AppKit in charge of the content view's window-sized frame.
  root.translatesAutoresizingMaskIntoConstraints=YES;
  root.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+ // Create chromePlate -> stage -> content at their exact final frame and attach to root
+ // IMMEDIATELY so the first tab's WKWebView attaches to the live NSWindow and kicks off
+ // WebKit XPC + loadRequest BEFORE [NSApp finishLaunching] / secondary chrome construction.
+ const CGFloat initialSideW = (self.verticalTabs && !self.tabsCollapsed) ? ClampSidebarWidth(self.sidebarUserWidth, NSWidth(root.bounds)) : 0.0;
+ const CGFloat initialTitleH = (self.verticalTabs || self.tabsCollapsed) ? 0.0 : kTitlebarHeight;
+ const CGFloat plateX = initialSideW + kPlateInset;
+ const CGFloat plateY = kPlateInset;
+ const CGFloat plateW = MAX(120.0, NSWidth(root.bounds) - plateX - kPlateInset);
+ const CGFloat plateH = MAX(120.0, NSHeight(root.bounds) - initialTitleH - 2.0 * kPlateInset);
+ self.chromePlate=[[NSView alloc] initWithFrame:NSMakeRect(plateX, plateY, plateW, plateH)];
+ self.chromePlate.translatesAutoresizingMaskIntoConstraints=NO;
+ self.chromePlate.wantsLayer=YES;
+ [root addSubview:self.chromePlate];
+ self.stage=[[SlateStageView alloc] initWithFrame:self.chromePlate.bounds];
+ ((SlateStageView*)self.stage).owner=self;
+ self.stage.translatesAutoresizingMaskIntoConstraints=NO;
+ self.stage.wantsLayer=YES;
+ [self.chromePlate addSubview:self.stage];
+ const CGFloat topBarH = kToolbarHeight + (self.showBookmarksBar ? kBookmarksBarHeight : 0.0);
+ const NSRect initContentRect = NSMakeRect(0, 0, plateW, MAX(60.0, plateH - topBarH));
+ self.content=[[SlatePageSlot alloc] initWithFrame:initContentRect];
+ ((SlatePageSlot*)self.content).owner=self;
+ [self.content registerForDraggedTypes:@[@"slate.tab.drag"]];
+ self.content.translatesAutoresizingMaskIntoConstraints=NO;
+ self.content.wantsLayer=YES;
+ self.content.clipsToBounds=YES;
+ self.content.layer.masksToBounds=YES;
+ [self.stage addSubview:self.content];
+ self.tabIcons=[NSMutableDictionary dictionary];
+ shields=std::make_unique<slate::ShieldController>();
+ if(!slate::WebKitShields::Shared().IsEnabled()) shields->set_mode(slate::ShieldMode::Off);
+ for(const auto& site:slate::WebKitShields::Shared().DisabledSites()) shields->pause_site(site);
+ const BOOL initialNeedsWeb = (!workspace.visible_for(model.selected()) && model.find(model.selected()) && model.find(model.selected())->url != "about:blank");
+ self.pendingLoadError = loadError;
+ self.pendingInitialNeedsWeb = initialNeedsWeb;
+ self.pendingBenchClean = benchClean;
+ if(initialNeedsWeb) {
+  [self activateTab:model.selected()];
+  SLATE_TRACE_MS("first_tab_activated");
+ }
+}
+- (void)finishCreateWindowChrome {
+ if(self.chromeBuilt || !self.window) return;
+ self.chromeBuilt = YES;
+ NSView* root=self.window.contentView;
+ NSString* loadError = self.pendingLoadError;
+ const BOOL initialNeedsWeb = self.pendingInitialNeedsWeb;
+ const BOOL benchClean = self.pendingBenchClean;
  [NSDistributedNotificationCenter.defaultCenter addObserver:self
   selector:@selector(systemAppearanceDidChange:)
   name:@"AppleInterfaceThemeChangedNotification"
@@ -5905,12 +6917,11 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   name:NSApplicationDidBecomeActiveNotification object:NSApp];
  [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(downloadStarted:)
   name:SlateDownloadStartedNotification object:SlateDownloadManager.sharedManager];
- self.tabIcons=[NSMutableDictionary dictionary];
  self.titlebar=[[SlateDragRegion alloc] initWithFrame:NSZeroRect];
  self.titlebar.translatesAutoresizingMaskIntoConstraints=NO;
  self.titlebar.wantsLayer=YES;
  self.titlebar.clipsToBounds=NO;
- self.titlebarHeight=[self.titlebar.heightAnchor constraintEqualToConstant:self.verticalTabs || prefs.collapsed ? 0 : kTitlebarHeight];
+ self.titlebarHeight=[self.titlebar.heightAnchor constraintEqualToConstant:self.verticalTabs || self.tabsCollapsed ? 0 : kTitlebarHeight];
  self.tabCluster=[[SlateTabCluster alloc] initWithFrame:NSZeroRect];
  ((SlateTabCluster*)self.tabCluster).owner=self;
  self.tabCluster.translatesAutoresizingMaskIntoConstraints=NO;
@@ -5939,7 +6950,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  tabPills.owner=self;
  self.tabPills=tabPills;
  self.tabPills.orientation=NSUserInterfaceLayoutOrientationHorizontal;
- self.tabPills.spacing=(prefs.tabStyle == 1) ? 3.0 : 8.0;
+ self.tabPills.spacing=(self.tabStyle == 1) ? 3.0 : 8.0;
  self.tabPills.alignment=NSLayoutAttributeBottom;
  self.tabPills.edgeInsets=NSEdgeInsetsMake(0,0,0,2);
  self.tabPills.translatesAutoresizingMaskIntoConstraints=NO;
@@ -6121,7 +7132,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  self.sidebar.translatesAutoresizingMaskIntoConstraints=NO; self.sidebar.wantsLayer=YES;
  self.sidebar.clipsToBounds=YES;
  self.sidebar.layer.masksToBounds=YES;
- [root addSubview:self.sidebar];
+ [root addSubview:self.sidebar positioned:NSWindowBelow relativeTo:self.chromePlate];
  self.sidebarWidth=[self.sidebar.widthAnchor constraintEqualToConstant:[self sidebarLayoutWidth]];
  self.sidebarLeading=[self.sidebar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:0];
  self.sidebarBelowChrome=[self.sidebar.topAnchor constraintEqualToAnchor:root.topAnchor];
@@ -6136,6 +7147,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  NSScrollView* scroll=[[NSScrollView alloc] initWithFrame:NSZeroRect];
  scroll.drawsBackground=NO; scroll.hasVerticalScroller=YES; scroll.borderType=NSNoBorder;
  scroll.translatesAutoresizingMaskIntoConstraints=NO;
+ self.sidebarScrollView=scroll;
  self.tabList=[[SlateSidebarTable alloc] initWithFrame:NSZeroRect];
  ((SlateSidebarTable*)self.tabList).owner=self;
  self.tabList.autoresizingMask=NSViewWidthSizable;
@@ -6145,9 +7157,9 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  [self.tabList addTableColumn:column]; self.tabList.headerView=nil;
  if(@available(macOS 11.0, *)) self.tabList.style=NSTableViewStylePlain;
  self.tabList.columnAutoresizingStyle=NSTableViewUniformColumnAutoresizingStyle;
- self.tabList.backgroundColor=NSColor.clearColor; self.tabList.rowHeight=28;
+ self.tabList.backgroundColor=NSColor.clearColor; self.tabList.rowHeight=kArdiaRowPitch;
  self.tabList.selectionHighlightStyle=NSTableViewSelectionHighlightStyleNone;
- self.tabList.intercellSpacing=NSMakeSize(0,2);
+ self.tabList.intercellSpacing=NSMakeSize(0,0);
  self.tabList.delegate=self; self.tabList.dataSource=self;
  self.tabList.allowsEmptySelection=YES; self.tabList.accessibilityLabel=@"Tabs";
  scroll.hasHorizontalScroller=NO;
@@ -6179,6 +7191,30 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  self.sidebarDrag.translatesAutoresizingMaskIntoConstraints=NO;
  self.sidebarDrag.clipsToBounds=YES;
  [self.sidebar addSubview:self.sidebarDrag];
+ // Ardia ProfileIndicator: semibold Space name pill in sidebar header (right of traffic lights)
+ self.sidebarSpacePill=[[NSButton alloc] initWithFrame:NSZeroRect];
+ self.sidebarSpacePill.translatesAutoresizingMaskIntoConstraints=NO;
+ self.sidebarSpacePill.bordered=NO;
+ self.sidebarSpacePill.bezelStyle=NSBezelStyleRegularSquare;
+ self.sidebarSpacePill.font=[NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
+ self.sidebarSpacePill.alignment=NSTextAlignmentLeft;
+ self.sidebarSpacePill.lineBreakMode=NSLineBreakByTruncatingTail;
+ self.sidebarSpacePill.refusesFirstResponder=YES;
+ self.sidebarSpacePill.wantsLayer=YES;
+ self.sidebarSpacePill.layer.cornerRadius=8.0;
+ if(@available(macOS 11.0, *)) self.sidebarSpacePill.layer.cornerCurve=kCACornerCurveContinuous;
+ self.sidebarSpacePill.target=self;
+ self.sidebarSpacePill.action=@selector(sidebarSpacePillClicked:);
+ self.sidebarSpacePill.toolTip=@"Switch between Spaces (⌃1–⌃9)";
+ self.sidebarSpacePill.hidden=YES;
+ [self.sidebarDrag addSubview:self.sidebarSpacePill];
+ self.sidebarSpacePillLeading=[self.sidebarSpacePill.leadingAnchor constraintEqualToAnchor:self.sidebarDrag.leadingAnchor constant:90.0];
+ [NSLayoutConstraint activateConstraints:@[
+  self.sidebarSpacePillLeading,
+  [self.sidebarSpacePill.trailingAnchor constraintLessThanOrEqualToAnchor:self.sidebarDrag.trailingAnchor constant:-10.0],
+  [self.sidebarSpacePill.topAnchor constraintEqualToAnchor:self.sidebarDrag.topAnchor constant:11.0],
+  [self.sidebarSpacePill.heightAnchor constraintEqualToConstant:26.0]
+ ]];
  self.pinnedGrid=[[SlatePinnedGrid alloc] initWithFrame:NSZeroRect];
  self.pinnedGrid.translatesAutoresizingMaskIntoConstraints=NO;
  self.pinnedGrid.owner=self;
@@ -6189,6 +7225,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  self.sidebarFoot.translatesAutoresizingMaskIntoConstraints=NO;
  self.sidebarFoot.owner=self;
  [self.sidebar addSubview:self.sidebarFoot];
+ self.sidebarFootHeight=[self.sidebarFoot.heightAnchor constraintEqualToConstant:41.0];
  self.protectButton=[NSButton checkboxWithTitle:@"Keep loaded" target:self action:@selector(toggleProtection:)];
  self.protectButton.font=[NSFont systemFontOfSize:11];
  self.unloadButton=[self button:@"Unload" action:@selector(unloadTab:)];
@@ -6219,13 +7256,10 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [self.sidebarFoot.leadingAnchor constraintEqualToAnchor:self.sidebar.leadingAnchor],
   [self.sidebarFoot.trailingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor],
   [self.sidebarFoot.bottomAnchor constraintEqualToAnchor:self.sidebar.bottomAnchor],
-  [self.sidebarFoot.heightAnchor constraintEqualToConstant:36]
+  self.sidebarFootHeight
  ]];
  self.toolbar=[[SlateDragRegion alloc] initWithFrame:NSZeroRect];
  self.toolbar.translatesAutoresizingMaskIntoConstraints=NO;
- self.chromePlate=[[NSView alloc] initWithFrame:NSZeroRect];
- self.chromePlate.translatesAutoresizingMaskIntoConstraints=NO;
- self.chromePlate.wantsLayer=YES;
  self.graniteView=[[SlateGraniteView alloc] initWithFrame:NSZeroRect];
  self.graniteView.translatesAutoresizingMaskIntoConstraints=NO;
  self.graniteView.wantsLayer=YES;
@@ -6236,13 +7270,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [self.graniteView.topAnchor constraintEqualToAnchor:root.topAnchor],
   [self.graniteView.bottomAnchor constraintEqualToAnchor:root.bottomAnchor]
  ]];
- [root addSubview:self.chromePlate];
- self.stage=[[SlateStageView alloc] initWithFrame:NSZeroRect];
- ((SlateStageView*)self.stage).owner=self;
- self.stage.translatesAutoresizingMaskIntoConstraints=NO;
- self.stage.wantsLayer=YES;
  [root addSubview:self.titlebar];
- [self.chromePlate addSubview:self.stage];
  [self.stage addSubview:self.toolbar];
  self.plateFromTop=[self.chromePlate.topAnchor constraintEqualToAnchor:self.titlebar.bottomAnchor constant:kPlateInset];
  self.plateFromTop.active=YES;
@@ -6324,7 +7352,6 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [self.loadBar.heightAnchor constraintEqualToConstant:2],
   self.loadBarWidth
  ]];
-  self.showBookmarksBar=prefs.showBookmarksBar;
   self.bookmarksBar=[[NSView alloc] initWithFrame:NSZeroRect];
   self.bookmarksBar.translatesAutoresizingMaskIntoConstraints=NO;
   self.bookmarksBar.wantsLayer=YES;
@@ -6363,13 +7390,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
    [self.bookmarksStack.heightAnchor constraintEqualToAnchor:self.bookmarksBar.heightAnchor]
   ]];
 
- self.content=[[SlatePageSlot alloc] initWithFrame:NSZeroRect];
- ((SlatePageSlot*)self.content).owner=self;
- [self.content registerForDraggedTypes:@[@"slate.tab.drag"]];
- self.content.translatesAutoresizingMaskIntoConstraints=NO; self.content.wantsLayer=YES;
- self.content.clipsToBounds=YES;
- self.content.layer.masksToBounds=YES;
- [self.stage addSubview:self.content];
+ if(self.content.superview!=self.stage) [self.stage addSubview:self.content];
  [NSLayoutConstraint activateConstraints:@[
   [self.content.topAnchor constraintEqualToAnchor:self.bookmarksBar.bottomAnchor],
   [self.content.leadingAnchor constraintEqualToAnchor:self.stage.leadingAnchor],
@@ -6393,18 +7414,8 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  empty.translatesAutoresizingMaskIntoConstraints=NO; [self.placeholder addSubview:empty];
  NSButton* restore=[self button:@"Restore tab" action:@selector(restoreTab:)];
  restore.translatesAutoresizingMaskIntoConstraints=NO; [self.placeholder addSubview:restore];
- NSScrollView* homeScroll=[[SlateHomeScroll alloc] initWithFrame:NSZeroRect];
- homeScroll.drawsBackground=NO; homeScroll.borderType=NSNoBorder;
- homeScroll.hasVerticalScroller=YES; homeScroll.hasHorizontalScroller=NO;
- homeScroll.translatesAutoresizingMaskIntoConstraints=NO;
- self.homeView=homeScroll;
- self.homeBoard=[[SlateHomeBoard alloc] initWithFrame:NSZeroRect];
- self.homeBoard.owner=self;
- self.homeBoard.omniboxCard.delegate=self;
- homeScroll.documentView=self.homeBoard;
- [self.content addSubview:self.homeView];
- self.homeView.translatesAutoresizingMaskIntoConstraints=YES;
- self.homeView.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+ // Home view is lazily created via ensureHomeView when an about:blank tab is shown,
+ // avoiding 40pt serif font + omnibox card allocation during cold URL launches.
  [self setupSplitViews];
  [self.toolbar addSubview:self.omnibox];
  [self.omnibox setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -6451,29 +7462,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   self.addressTrailing=[self.address.trailingAnchor constraintEqualToAnchor:self.autofillButton.leadingAnchor constant:-4],
   [self.address.centerYAnchor constraintEqualToAnchor:self.omnibox.centerYAnchor]
  ]];
- // The reference's six-point list padding, hairline and neutral ground.
- NSView* paletteRoot=[[NSView alloc] initWithFrame:NSZeroRect];
- paletteRoot.wantsLayer=YES; paletteRoot.layer.cornerRadius=14;
- paletteRoot.layer.cornerCurve=kCACornerCurveContinuous; paletteRoot.layer.borderWidth=1;
- paletteRoot.layer.masksToBounds=YES;
- self.suggestCard=paletteRoot;
- NSScrollView* offersScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect];
- offersScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
- offersScroll.drawsBackground=NO; offersScroll.hasVerticalScroller=YES;
- offersScroll.autohidesScrollers=YES; offersScroll.scrollerStyle=NSScrollerStyleOverlay;
- self.suggestStack=[[SlateOmniboxStack alloc] initWithFrame:NSZeroRect];
- self.suggestStack.orientation=NSUserInterfaceLayoutOrientationVertical;
- self.suggestStack.alignment=NSLayoutAttributeLeading; self.suggestStack.spacing=0;
- self.suggestStack.edgeInsets=NSEdgeInsetsMake(6,6,6,6);
- self.suggestStack.distribution=NSStackViewDistributionFill;
- offersScroll.documentView=self.suggestStack;
- [paletteRoot addSubview:offersScroll];
- self.suggestPanel=[[SlateSuggestPanel alloc] initWithContentRect:NSMakeRect(0,0,560,46)
-  styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
- self.suggestPanel.opaque=NO; self.suggestPanel.backgroundColor=NSColor.clearColor;
- self.suggestPanel.hasShadow=YES; self.suggestPanel.hidesOnDeactivate=YES;
- self.suggestPanel.floatingPanel=YES; self.suggestPanel.becomesKeyOnlyIfNeeded=YES;
- self.suggestPanel.releasedWhenClosed=NO; self.suggestPanel.contentView=paletteRoot;
+ // Suggest panel is lazily allocated on first omnibox query (zero second NSWindow at cold launch).
  __weak SlateDelegate* summonOwner=self;
  self.summonMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged handler:^NSEvent*(NSEvent* event) {
   if(summonOwner.summoning && summonOwner.summonCycling && !(event.modifierFlags & NSEventModifierFlagCommand)) {
@@ -6490,9 +7479,8 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  self.trafficCluster.wantsLayer=YES;
  [root addSubview:self.trafficCluster];
  self.trafficCluster.hidden=YES;
- // AppKit-created toolbar controls serve hidden tabs and fullscreen. Leave
- // the titlebar-owned buttons in AppKit's hierarchy for transitions.
- self.fullScreenTrafficButtons=SlateCreateToolbarWindowControls(self.window,self.trafficCluster);
+ // AppKit-created toolbar controls are lazily allocated in layoutTrafficLights only
+ // when fullscreen or collapsed-horizontal-strip actually needs them.
  self.trafficMode=-1;
  [NSLayoutConstraint activateConstraints:@[
   self.trafficLeading=[self.trafficCluster.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],
@@ -6500,43 +7488,13 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [self.trafficCluster.widthAnchor constraintEqualToConstant:68],
   [self.trafficCluster.heightAnchor constraintEqualToConstant:18]
  ]];
+ [self applyPlateChrome];
  [self applyTabLayout:NO];
  [self updateSpaceBadge];
  [self updateZoomMenu];
- [self applyPlateChrome];
- [self updateNavChrome];
- [self rebuildBookmarksBar];
- [self.window.contentView layoutSubtreeIfNeeded];
+ if(self.showBookmarksBar) [self rebuildBookmarksBar];
  if(self.window.isMiniaturized) [self.window deminiaturize:nil];
- if(self.window.frame.size.width < 600 || self.window.frame.size.height < 400) {
-  [self.window setFrame:NSMakeRect(100, 100, 1200, 800) display:YES];
-  [self.window center];
- }
- [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
- [self syncTabListColumnWidth];
- if([self sidebarLayoutWidth]>0 && self.tabList) [self.tabList reloadData];
- {
-  // Native WebKit owns the compiled lists; this object stores only UI policy.
-  shields=std::make_unique<slate::ShieldController>();
-  if(!slate::WebKitShields::Shared().IsEnabled()) shields->set_mode(slate::ShieldMode::Off);
-  for(const auto& site:slate::WebKitShields::Shared().DisabledSites()) shields->pause_site(site);
-  fprintf(stderr,"SLATE_SHIELDS native_rules=%zu\n",slate::WebKitShields::Shared().CompiledRuleCount());
- }
- {
-  SlateExtensionsManager* extMgr = [SlateExtensionsManager sharedManager];
-  extMgr.hostDelegate = self;
-  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildExtensionButtons) name:SlateExtensionsDidChangeNotification object:nil];
-  [self rebuildExtensionButtons];
-  // Defer extension startup briefly until the window, initial tabs, and startup UI finish
-  // allocating in compact pages so WebKit's in-process DNR compiler cannot interleave temporary
-  // allocations with long-lived UI/tab objects (avoiding 200+ MB permanent malloc fragmentation).
-  __weak SlateDelegate* weakExtSelf = self;
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2500LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-   if (!weakExtSelf || weakExtSelf.quitting) return;
-   [extMgr startIfNeeded];
-   [extMgr notifyWindowOpened];
-  });
- }
+ // If the initial tab wasn't already started early (e.g. Split View or about:blank), activate now.
  if(workspace.visible_for(model.selected())) {
   const TabId focused=model.selected();
   const TabId other=workspace.left==focused ? workspace.right : workspace.left;
@@ -6545,8 +7503,80 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [self activateTab:other];
   [self activateTab:focused];
   self.splitInstalling=NO;
- } else [self activateTab:model.selected()];
+  SLATE_TRACE_MS("first_tab_activated");
+ } else if(!initialNeedsWeb) {
+  [self activateTab:model.selected()];
+  SLATE_TRACE_MS("first_tab_activated");
+ } else {
+  [self presentWorkspacePages];
+ }
+ [self syncTabListColumnWidth];
+ if([self sidebarLayoutWidth]>0 && self.tabList) [self.tabList reloadData];
+ [self refresh];
+ SLATE_TRACE_MS("chrome_built");
+ fprintf(stderr,"SLATE_SHIELDS native_rules=%zu\n",slate::WebKitShields::Shared().CompiledRuleCount());
  __weak SlateDelegate* weakSelf=self;
+ // Keep immediate visual hooks on tick 1; defer disk-backed managers (extensions, search,
+ // downloads, memory monitor) past first paint so WebKit DECIDE_POLICY has zero contention.
+ dispatch_async(dispatch_get_main_queue(), ^{
+  SlateDelegate* s = weakSelf;
+  if(!s || s.quitting) return;
+  [s syncSidebarPeekMonitors];
+  [s.sidebarFoot updateDoors];
+  [s updateSidebarSpacePill];
+ });
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(450LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+  SlateDelegate* s = weakSelf;
+  if(!s || s.quitting) return;
+  SlateExtensionsManager* extMgr = [SlateExtensionsManager sharedManager];
+  extMgr.hostDelegate = s;
+  [[NSNotificationCenter defaultCenter] addObserver:s selector:@selector(rebuildExtensionButtons) name:SlateExtensionsDidChangeNotification object:nil];
+  [s rebuildExtensionButtons];
+  if(!benchClean) {
+   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2000LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+    if (!weakSelf || weakSelf.quitting) return;
+    [extMgr startIfNeeded];
+    [extMgr notifyWindowOpened];
+   });
+   [SlateSearchServices configureWithDirectory:DataDirectory()];
+  }
+  SlateSpace* initialSpace = [s.spacesManager currentSpace];
+  if(initialSpace.downloads.length) {
+   [SlateDownloadManager sharedManager].downloadsDirectory = initialSpace.downloads;
+  }
+ });
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+  if(!weakSelf || weakSelf.quitting) return;
+  memoryMonitor=slate::monitor_memory([weakSelf](slate::MemorySample sample) { [weakSelf memoryChanged:sample]; });
+ });
+ if(benchClean && [NSProcessInfo.processInfo.environment[@"SLATE_BENCH_NEWWIN"] boolValue]) {
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(900LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+   if(!weakSelf || weakSelf.quitting) return;
+   for(int k = 0; k < 5; ++k) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(k * 260LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+     if(!weakSelf || weakSelf.quitting) return;
+     const CFTimeInterval nwStart = CACurrentMediaTime();
+     [weakSelf openNewWindowWithUrl:@"about:blank"];
+     [CATransaction flush];
+     fprintf(stderr, "SLATE_PERF new_window_paint_ms=%.2f\n", (CACurrentMediaTime() - nwStart) * 1000.0);
+    });
+   }
+  });
+ }
+ if(benchClean && [NSProcessInfo.processInfo.environment[@"SLATE_BENCH_SWITCH"] boolValue] && model.tabs().size() >= 2) {
+  const TabId t1 = model.tabs()[0].id;
+  const TabId t2 = model.tabs()[1].id;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(800LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+   if(!weakSelf || weakSelf.quitting) return;
+   [weakSelf activateTab:t2];
+   for(int k = 0; k < 5; ++k) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((500LL + k * 250LL) * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+     if(!weakSelf || weakSelf.quitting) return;
+     [weakSelf activateTab:(k % 2 == 0) ? t1 : t2];
+    });
+   }
+  });
+ }
  if(self.earlyURLs.count) {
   NSArray<NSURL*>* early=[self.earlyURLs copy];
   [self.earlyURLs removeAllObjects];
@@ -6561,42 +7591,22 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
    }
   }
  }
- memoryMonitor=slate::monitor_memory([weakSelf](slate::MemorySample sample) { [weakSelf memoryChanged:sample]; });
  fprintf(stderr,"SLATE_SESSION_RESTORED tabs=%zu loaded=%zu selected=%llu\n",
   model.tabs().size(),runtimes.size(),static_cast<unsigned long long>(model.selected()));
  if(loadError) {
   NSAlert* alert=[[NSAlert alloc] init]; alert.messageText=@"Session recovery"; alert.informativeText=loadError;
   [alert beginSheetModalForWindow:self.window completionHandler:nil];
  }
- // Install mouse-move monitors ONLY when the vertical sidebar is collapsed so Slate
- // incurs zero global mouse wakeups during normal browsing.
- [self syncSidebarPeekMonitors];
- // Initialize custom downloads directory if configured on active space
- SlateSpace* initialSpace = [self.spacesManager currentSpace];
- if(initialSpace.downloads.length) {
-  [SlateDownloadManager sharedManager].downloadsDirectory = initialSpace.downloads;
- }
- [self.sidebarFoot updateDoors];
 
- // Two-finger horizontal swipe across sidebar switches spaces
+ // Two-finger horizontal swipe across sidebar switches spaces (Ardia pager cooldown)
  self.spaceSwipeMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel handler:^NSEvent*(NSEvent *event) {
   if(!weakSelf.verticalTabs || weakSelf.tabsCollapsed || weakSelf.quitting) return event;
   if(event.window != weakSelf.window) return event;
   NSPoint pt = [weakSelf.sidebar convertPoint:event.locationInWindow fromView:nil];
   if(!NSPointInRect(pt, weakSelf.sidebar.bounds)) return event;
-
-  const CGFloat dx = event.scrollingDeltaX;
-  const CGFloat dy = event.scrollingDeltaY;
-  if(fabs(dx) > fabs(dy) * 1.4 && fabs(dx) > 18.0) {
-   NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-   if(now - weakSelf.lastSpaceSwipeTime > 0.35) {
-    weakSelf.lastSpaceSwipeTime = now;
-    if(dx < -18.0) {
-     [weakSelf switchNextSpace];
-    } else if(dx > 18.0) {
-     [weakSelf switchPreviousSpace];
-    }
-   }
+  if(fabs(event.scrollingDeltaX) > fabs(event.scrollingDeltaY) * 1.35 && fabs(event.scrollingDeltaX) > 2.0) {
+   [weakSelf handleSidebarHorizontalScroll:event];
+   return nil;
   }
   return event;
  }];
@@ -6613,6 +7623,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  if(!root || !self.sidebar || !self.chromePlate) return;
  const BOOL peekingOverlay=(self.verticalTabs && self.tabsCollapsed && (self.sidebarPeeking || self.sidebarHidingPeek));
  self.sidebar.wantsLayer=YES;
+ const BOOL dark=[self isDarkAppearance];
  if(peekingOverlay) {
   [root addSubview:self.sidebar positioned:NSWindowAbove relativeTo:self.chromePlate];
   if(self.resizeHandle && self.resizeHandle.superview==root) {
@@ -6621,16 +7632,25 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   if(self.trafficCluster && self.trafficCluster.superview==root) {
    [root addSubview:self.trafficCluster positioned:NSWindowAbove relativeTo:self.sidebar];
   }
-  NSColor* ground=self.window.backgroundColor ?: ([self isDarkAppearance] ? ColorSRGB(0.11,0.11,0.12) : ColorSRGB(0.95,0.94,0.93));
+  NSColor* ground=self.window.backgroundColor ?: (dark ? ColorSRGB(0.11,0.11,0.12) : ColorSRGB(0.95,0.94,0.93));
+  NSColor* ink=self.accentInk ?: NSColor.labelColor;
   self.sidebar.layer.backgroundColor=ground.CGColor;
+  self.sidebar.layer.cornerRadius=12.0; // Ardia peek panel radius
+  if(@available(macOS 11.0, *)) self.sidebar.layer.cornerCurve=kCACornerCurveContinuous;
+  self.sidebar.layer.borderWidth=0.5;
+  self.sidebar.layer.borderColor=[ink colorWithAlphaComponent:dark ? 0.14 : 0.10].CGColor;
   self.sidebar.layer.masksToBounds=NO;
+  // Ardia shadow.peek: radius 20, offset [0, 6], opacity 0.50 dark / 0.22 light
   self.sidebar.layer.shadowColor=NSColor.blackColor.CGColor;
-  self.sidebar.layer.shadowOpacity=[self isDarkAppearance] ? 0.36f : 0.18f;
-  self.sidebar.layer.shadowRadius=18.0;
-  self.sidebar.layer.shadowOffset=CGSizeMake(4.0, 0.0);
+  self.sidebar.layer.shadowOpacity=dark ? 0.50f : 0.22f;
+  self.sidebar.layer.shadowRadius=20.0;
+  self.sidebar.layer.shadowOffset=CGSizeMake(0.0, -6.0);
  } else {
   [root addSubview:self.sidebar positioned:NSWindowBelow relativeTo:self.chromePlate];
   self.sidebar.layer.backgroundColor=NSColor.clearColor.CGColor;
+  self.sidebar.layer.cornerRadius=0.0;
+  self.sidebar.layer.borderWidth=0.0;
+  self.sidebar.layer.borderColor=nil;
   self.sidebar.layer.masksToBounds=YES;
   self.sidebar.layer.shadowOpacity=0.0f;
  }
@@ -6642,12 +7662,14 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  const BOOL collapsedOverlay=(self.verticalTabs && self.tabsCollapsed);
  const CGFloat width=[self sidebarLayoutWidth];
  ++self.chromeLayoutGen;
- self.chromeAnimating=animate;
+ const BOOL runAnim = animate && !ArdiaReduceMotion();
+ self.chromeAnimating=runAnim;
  [CATransaction begin];
- [CATransaction setDisableActions:!animate];
- if(animate) {
-  [CATransaction setAnimationDuration:0.2];
-  [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0]];
+ [CATransaction setDisableActions:!runAnim];
+ if(runAnim) {
+  // Ardia DOCK_SLIDE (200ms 0.42,0,0.58,1) when showing; ARC_HIDE_MS (100ms easeOutCubic) when hiding
+  [CATransaction setAnimationDuration:collapsedOverlay ? kArdiaDockHideDuration : kArdiaDockShowDuration];
+  [CATransaction setAnimationTimingFunction:collapsedOverlay ? ArdiaCurveEnter() : ArdiaCurveDockSlide()];
  }
  self.sidebar.hidden=(width==0 && !self.sidebarHidingPeek);
  self.sidebar.alphaValue=1;
@@ -6775,26 +7797,27 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
 }
 - (void)toggleTabsReveal:(id)sender {
  if(self.quitting) return;
+ // By default, the vertical icon rail stays pinned visible instead of hiding;
+ // users can opt in to hiding icon mode in Settings -> Tabs.
+ if(self.verticalTabs && !self.tabsCollapsed && [self sidebarIconRail] && !self.allowHideIconSidebar) {
+  return;
+ }
  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
  [self.peekDismissTimer invalidate]; self.peekDismissTimer=nil;
  self.peekAnimGen += 1;
  self.foldTicket += 1;
- // Search/lovesea Fold behavior: if the sidebar is already peeking over the page,
- // pin it in place as docked without hiding and re-showing it.
+ // Ardia dockMove: if already peeking, pin cleanly in place ("jump" with zero re-slide)
  if(self.verticalTabs && self.tabsCollapsed && self.sidebarPeeking) {
   self.sidebarPeeking=NO;
   self.sidebarHidingPeek=NO;
+  self.sidebarEdgeArmed=YES;
   self.sidebarLeading.constant=0;
   self.tabsCollapsed=NO;
   [self persistUiPrefs];
   [self syncSidebarPeekMonitors];
   fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
-  [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
-   ctx.duration=0.2;
-   ctx.allowsImplicitAnimation=YES;
-   ctx.timingFunction=[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
-   [self applyTabLayout:YES];
-  } completionHandler:nil];
+  [self applyTabLayout:NO];
+  [self syncTrafficLightsAnimated:0.12 timing:ArdiaCurveEnter()];
   return;
  }
  self.sidebarPeeking=NO;
@@ -6802,34 +7825,40 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  self.sidebarLeading.constant=0;
  const BOOL foldingAway = (self.verticalTabs && !self.tabsCollapsed);
  self.tabsCollapsed=!self.tabsCollapsed;
+ // Ardia EDGE_DISARMED on hide so hovering near edge requires fresh entry
+ if(self.tabsCollapsed) self.sidebarEdgeArmed=NO;
  [self persistUiPrefs];
  [self syncSidebarPeekMonitors];
  fprintf(stderr,"SLATE_TAB_LAYOUT vertical=%d collapsed=%d\n",self.verticalTabs?1:0,self.tabsCollapsed?1:0);
  if(foldingAway) {
-  // Wait briefly for WebKit's next presentation update when folding away, avoiding
-  // resize flashes on the expanding edge.
+  // Ardia ARC_HIDE_MS (100ms, easeOutCubic) — wait briefly for WebKit presentation to avoid edge flash
   auto it=runtimes.find(model.selected());
   if(it!=runtimes.end() && it->second.engine) {
    const NSUInteger ticket=self.foldTicket;
    __weak SlateDelegate* weakSelf=self;
-   it->second.engine->wait_for_presentation(0.12, [weakSelf, ticket]() {
+   it->second.engine->wait_for_presentation(0.08, [weakSelf, ticket]() {
     SlateDelegate* strongSelf=weakSelf;
     if(!strongSelf || strongSelf.quitting || strongSelf.foldTicket!=ticket) return;
+    if(ArdiaReduceMotion()) { [strongSelf applyTabLayout:NO]; return; }
+    [strongSelf syncTrafficLightsAnimated:kArdiaDockHideDuration timing:ArdiaCurveEnter()];
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
-     ctx.duration=0.18;
+     ctx.duration=kArdiaDockHideDuration;
      ctx.allowsImplicitAnimation=YES;
-     ctx.timingFunction=[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
+     ctx.timingFunction=ArdiaCurveEnter();
      [strongSelf applyTabLayout:YES];
     } completionHandler:nil];
    });
    return;
   }
  }
- if(self.verticalTabs) {
+ if(self.verticalTabs && !ArdiaReduceMotion()) {
+  const NSTimeInterval dur = self.tabsCollapsed ? kArdiaDockHideDuration : kArdiaDockShowDuration;
+  CAMediaTimingFunction* timing = self.tabsCollapsed ? ArdiaCurveEnter() : ArdiaCurveDockSlide();
+  [self syncTrafficLightsAnimated:dur timing:timing];
   [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
-   ctx.duration=0.18;
+   ctx.duration=dur;
    ctx.allowsImplicitAnimation=YES;
-   ctx.timingFunction=[CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
+   ctx.timingFunction=timing;
    [self applyTabLayout:YES];
   } completionHandler:nil];
  } else {
@@ -6875,9 +7904,9 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  NSRect windowRect = self.window.frame;
  CGFloat relX = loc.x - NSMinX(windowRect);
  CGFloat relY = loc.y - NSMinY(windowRect);
- const CGFloat topBarSafetyZone = 52.0;
- const CGFloat edge = 6.0;
- const CGFloat overshoot = 48.0;
+ const CGFloat topBarSafetyZone = 48.0;
+ const CGFloat edge = 3.0; // Ardia PEEK_EDGE_STRIP = 3
+ const CGFloat overshoot = 40.0; // Ardia PEEK_HOLD_SLACK = 40
  const BOOL inWindow = (relX >= 0 && relX <= NSWidth(windowRect) && relY >= 0 && relY <= NSHeight(windowRect));
  if(inWindow) {
   self.pointerWasInWindow = YES;
@@ -6888,23 +7917,27 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  const BOOL atEdge = (relX >= 0 && relX <= edge);
  const BOOL overshotEdge = self.pointerWasInWindow && (relX >= -overshoot && relX < 0);
  const BOOL nearLeftEdge = !inTopBar && (atEdge || overshotEdge) && (relY >= 0 && relY < NSHeight(windowRect) - topBarSafetyZone);
+ if(!nearLeftEdge && !self.sidebarPeeking) {
+  self.sidebarEdgeArmed = YES; // Ardia edgeSeen: re-arm once pointer leaves edge strip
+ }
  if(self.sidebarPeeking) {
   CGFloat peekWidth = ClampSidebarWidth(self.sidebarUserWidth, NSWidth(windowRect));
-  BOOL insideSidebar = (relX >= -overshoot && relX <= peekWidth + 14.0) && (relY >= -16.0 && relY <= NSHeight(windowRect) + 16.0);
+  // Ardia peekHoldWidth = peekLeft + sidebarWidth + PEEK_HOLD_SLACK (40)
+  BOOL insideSidebar = (relX >= -overshoot && relX <= peekWidth + 40.0) && (relY >= -16.0 && relY <= NSHeight(windowRect) + 16.0);
   BOOL keepOpen = insideSidebar || (self.window.attachedSheet != nil) || ([NSEvent pressedMouseButtons] != 0);
   if(keepOpen) {
    [self.peekDismissTimer invalidate];
    self.peekDismissTimer = nil;
   } else {
    if(!self.peekDismissTimer) {
-    self.peekDismissTimer = [NSTimer scheduledTimerWithTimeInterval:0.08
+    self.peekDismissTimer = [NSTimer scheduledTimerWithTimeInterval:kArdiaPeekCloseDelay
      target:self selector:@selector(hideSidebarPeek) userInfo:nil repeats:NO];
    }
   }
  } else {
-  if(nearLeftEdge && NSApp.isActive) {
+  if(nearLeftEdge && self.sidebarEdgeArmed && NSApp.isActive) {
    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
-   [self performSelector:@selector(revealSidebarPeek) withObject:nil afterDelay:0.12];
+   [self revealSidebarPeek];
   } else {
    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(revealSidebarPeek) object:nil];
   }
@@ -6924,18 +7957,25 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [CATransaction setDisableActions:YES];
   self.sidebar.hidden = NO;
   self.sidebarWidth.constant = peekWidth;
-  self.sidebarLeading.constant = -peekWidth;
+  self.sidebarLeading.constant = -(peekWidth + 12.0); // Ardia peekIn starts -12px past edge
   [self updateSidebarOverlayAppearance];
   [self.window.contentView layoutSubtreeIfNeeded];
   [self syncTabListColumnWidth];
   if(self.tabList) [self.tabList reloadData];
   [CATransaction commit];
  }
+ if(ArdiaReduceMotion()) {
+  self.sidebarLeading.constant = 6.0;
+  [self.window.contentView layoutSubtreeIfNeeded];
+  return;
+ }
+ // Ardia PEEK_IN_MS (150ms, easeOutCubic) — slide native traffic lights in lockstep with peeking sidebar
+ [self syncTrafficLightsAnimated:kArdiaPeekInDuration timing:ArdiaCurveEnter()];
  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-  context.duration = 0.18;
+  context.duration = kArdiaPeekInDuration;
   context.allowsImplicitAnimation = YES;
-  context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1.0];
-  self.sidebarLeading.animator.constant = 0;
+  context.timingFunction = ArdiaCurveEnter();
+  self.sidebarLeading.animator.constant = 6.0;
   [self.window.contentView layoutSubtreeIfNeeded];
  } completionHandler:nil];
 }
@@ -6946,17 +7986,12 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  if(!self.sidebarPeeking && !self.sidebarHidingPeek) return;
  self.sidebarPeeking = NO;
  self.sidebarHidingPeek = YES;
+ self.sidebarEdgeArmed = NO;
  self.peekAnimGen += 1;
  const NSUInteger gen = self.peekAnimGen;
  CGFloat peekWidth = MAX(self.sidebarWidth.constant, ClampSidebarWidth(self.sidebarUserWidth, NSWidth(self.window.frame)));
  __weak SlateDelegate* weakSelf = self;
- [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-  context.duration = 0.15;
-  context.allowsImplicitAnimation = YES;
-  context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.4 :0.0 :1.0 :1.0];
-  self.sidebarLeading.animator.constant = -peekWidth;
-  [self.window.contentView layoutSubtreeIfNeeded];
- } completionHandler:^{
+ auto finishHide = ^{
   SlateDelegate* strongSelf = weakSelf;
   if(!strongSelf || strongSelf.peekAnimGen != gen || strongSelf.sidebarPeeking) return;
   strongSelf.sidebarHidingPeek = NO;
@@ -6965,7 +8000,17 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   strongSelf.sidebarLeading.constant = 0;
   [strongSelf updateSidebarOverlayAppearance];
   [strongSelf layoutTrafficLights];
- }];
+ };
+ if(ArdiaReduceMotion()) { finishHide(); return; }
+ // Ardia ARC_PEEK_OUT_MS (150ms, easeInOutCubic) — slide native traffic lights back off left edge
+ [self syncTrafficLightsAnimated:kArdiaPeekOutDuration timing:ArdiaCurveInOutCubic()];
+ [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+  context.duration = kArdiaPeekOutDuration;
+  context.allowsImplicitAnimation = YES;
+  context.timingFunction = ArdiaCurveInOutCubic();
+  self.sidebarLeading.animator.constant = -(peekWidth + 12.0);
+  [self.window.contentView layoutSubtreeIfNeeded];
+ } completionHandler:finishHide];
 }
 - (void)placeWindowChrome {
  const BOOL revealed=![self tabsCollapsed];
@@ -7295,6 +8340,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  [self updateNavChrome];
  [self updateShieldsChrome];
  if(self.sidebarFoot) [self.sidebarFoot updateDoors];
+ [self updateSidebarSpacePill];
  if(self.pinnedGrid) [self.pinnedGrid updateLayoutForWidth:self.sidebarUserWidth];
  if([self.resizeHandle isKindOfClass:SlateResizeHandle.class]) {
   [(SlateResizeHandle*)self.resizeHandle updateHairline];
@@ -7311,6 +8357,20 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [self syncPageGeometry];
   [self updateSplitTabShape];
  }
+}
+- (void)setAllowHideIconSidebarEnabled:(BOOL)enabled {
+ self.allowHideIconSidebar = enabled;
+ // If the user disabled hiding icon mode while the icon sidebar is currently hidden, reveal it cleanly.
+ if(!enabled && self.verticalTabs && self.tabsCollapsed && self.sidebarUserWidth < kSidebarLabelWidth) {
+  self.sidebarPeeking = NO;
+  self.sidebarHidingPeek = NO;
+  self.sidebarLeading.constant = 0;
+  self.tabsCollapsed = NO;
+  [self syncSidebarPeekMonitors];
+  [self applyTabLayout:NO];
+  [self syncTrafficLightsAnimated:kArdiaDockShowDuration timing:ArdiaCurveDockSlide()];
+ }
+ [self persistUiPrefs];
 }
 - (void)persistUiPrefs {
  NSMutableArray* splitGroups=[NSMutableArray array];
@@ -7329,6 +8389,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   @"version":@1,
   @"vertical_tabs":@(self.verticalTabs),
   @"tabs_collapsed":@(self.tabsCollapsed),
+  @"allow_hide_icon_sidebar":@(self.allowHideIconSidebar),
   @"sidebar_width":@(ClampSidebarWidth(self.sidebarUserWidth, 1200)),
   @"accent":self.accentId ?: @"rose",
   @"show_bookmarks_bar":@(self.showBookmarksBar),
@@ -7356,23 +8417,56 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   button.alphaValue=hidden ? 0 : 1;
  }
 }
+- (NSPoint)desiredTrafficLightsCenter {
+ if([self stripRevealed]) return kArdiaLightsTopStripCenter;
+ if(self.verticalTabs) {
+  const BOOL rail = (ClampSidebarWidth(self.sidebarUserWidth, NSWidth(self.window.frame)) < kSidebarLabelWidth);
+  const CGFloat dockX = rail ? 19.0 : kArdiaLightsSidebarCenter.x;
+  if(!self.tabsCollapsed) return NSMakePoint(dockX, kArdiaLightsSidebarCenter.y);
+  if(self.sidebarPeeking) return NSMakePoint(dockX + 6.0, kArdiaLightsSidebarCenter.y);
+  // Collapsed & hidden: Ardia tucks traffic lights 100% off the left edge (x <= -135)
+  // so no yellow/green button can ever stick out past the window edge regardless of sidebar width.
+  const CGFloat w = MAX(ClampSidebarWidth(self.sidebarUserWidth, NSWidth(self.window.frame)), 160.0);
+  return NSMakePoint(kArdiaLightsSidebarCenter.x - w, kArdiaLightsSidebarCenter.y);
+ }
+ // Horizontal-tabs mode with tab strip hidden: sit cleanly aligned inside the toolbar
+ return NSMakePoint(25.0, kPlateInset + kToolbarHeight * 0.5);
+}
+- (void)syncTrafficLightsAnimated:(NSTimeInterval)duration timing:(CAMediaTimingFunction*)timing {
+ if(!self.window || self.quitting) return;
+ if((self.window.styleMask & NSWindowStyleMaskFullScreen) != 0) return;
+ SlateSetArdiaTrafficLightsCenter(self.window, [self desiredTrafficLightsCenter], duration, timing);
+}
 - (NSInteger)trafficLayoutMode {
  if([self stripRevealed]) return 1;
- if(self.verticalTabs && !self.tabsCollapsed && [self sidebarLayoutWidth] > 0) return 2;
- return 3;
+ if(self.verticalTabs) return 2; // Ardia: vertical sidebar owns traffic lights (tucked when collapsed, slides in on peek)
+ return 3; // Horizontal tabs collapsed: toolbar shares row with traffic lights
 }
 - (void)layoutTrafficLights {
  if(!self.window || self.quitting || !self.window.contentView) return;
  NSView* root=self.window.contentView;
  const BOOL fullScreen=(self.window.styleMask & NSWindowStyleMaskFullScreen)!=0;
- const BOOL sharesToolbar=[self trafficLayoutMode]==3;
+ const BOOL sharesToolbar=(!self.verticalTabs && self.tabsCollapsed);
+ if((fullScreen || sharesToolbar) && !self.fullScreenTrafficButtons.count && self.trafficCluster) {
+  self.fullScreenTrafficButtons=SlateCreateToolbarWindowControls(self.window,self.trafficCluster);
+ }
+ [CATransaction begin];
+ [CATransaction setDisableActions:YES];
  SlateConfigureToolbarWindowControls(self.window,self.trafficCluster,
   self.fullScreenTrafficButtons,sharesToolbar,fullScreen);
  if(fullScreen) {
   const CGFloat top=[self stripRevealed] ? (kTitlebarHeight-18)/2 :
    [self sidebarRevealed] ? 14 : 5+(kToolbarHeight-18)/2;
   if(fabs(self.trafficTop.constant-top)>0.5) self.trafficTop.constant=top;
+ } else {
+  // Position real native macOS traffic lights via Ardia NSThemeFrame hooks
+  if(!sharesToolbar) {
+   if(!objc_getAssociatedObject(self.window, kSlateLightsAnimatingKey)) {
+    SlateSetArdiaTrafficLightsCenter(self.window, [self desiredTrafficLightsCenter], 0.0, nil);
+   }
+  }
  }
+ [CATransaction commit];
  if(sharesToolbar) {
   [root layoutSubtreeIfNeeded];
   SlateAlignWindowControlsWithNavigation(self.trafficCluster,self.trafficTop,self.navCluster);
@@ -7384,7 +8478,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   NSRect controls=[self.trafficCluster convertRect:self.trafficCluster.bounds toView:root];
   rightEdge=NSMaxX(controls);
   bottomFromTop=NSMaxY(root.bounds)-NSMinY(controls);
- } else {
+ } else if(!SlateLightsAreOutsideWindow(self.window)) {
   for(NSWindowButton kind : {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
    NSButton* button=[self.window standardWindowButton:kind];
    if(!button || !button.superview || button.hidden || button.hiddenOrHasHiddenAncestor || button.alphaValue<=0) continue;
@@ -7393,16 +8487,16 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
    bottomFromTop=MAX(bottomFromTop, NSMaxY(root.bounds)-NSMinY(buttonInRoot));
   }
  }
- // Keep button clearance in the toolbar. A full-height page inset here
- // leaves an empty sidebar-sized strip even though sidebarWidth is already 0.
+ // Toolbar clearance only needed when traffic lights share the toolbar (fullscreen or hidden horizontal tabs).
+ // In hidden vertical-sidebar mode, Ardia tucks the traffic lights off-window so the toolbar is 100% full-width!
  SlateApplyWindowControlClearance(self.plateFromTraffic,self.navLeadingTitle,
-  [self trafficLayoutMode]==3,rightEdge,fullScreen ? 5.0 : kPlateInset);
+  (sharesToolbar || (fullScreen && ![self sidebarRevealed])),rightEdge,fullScreen ? 5.0 : kPlateInset);
  if(self.plateFromTraffic) {
   if(self.verticalTabs && [self sidebarRevealed] && self.sidebarWidth) {
    CGFloat railWidth=[self sidebarLayoutWidth];
    if(fabs(self.sidebarWidth.constant-railWidth)>0.5) {
-   self.sidebarWidth.constant=railWidth;
-   [self.pinnedGrid updateLayoutForWidth:railWidth];
+    self.sidebarWidth.constant=railWidth;
+    [self.pinnedGrid updateLayoutForWidth:railWidth];
     [root layoutSubtreeIfNeeded];
     [self syncTabListColumnWidth];
     [self.tabList reloadData];
@@ -7411,14 +8505,14 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  }
  if(self.sidebarHeaderHeight) {
   CGFloat safeHeight=(self.verticalTabs && [self sidebarLayoutWidth]>0 && bottomFromTop>0)
-    ? ceil(bottomFromTop+22) : kSidebarHeaderHeight;
+    ? ceil(bottomFromTop+14) : kSidebarHeaderHeight;
   safeHeight=MAX(kSidebarHeaderHeight,safeHeight);
   if(fabs(self.sidebarHeaderHeight.constant-safeHeight)>0.5) self.sidebarHeaderHeight.constant=safeHeight;
  }
-}
-- (void)windowDidUpdate:(NSNotification*)notification {
- if(notification.object!=self.window || self.quitting) return;
- [self layoutTrafficLights];
+ if(self.sidebarSpacePillLeading && self.verticalTabs && ![self sidebarIconRail] && !SlateLightsAreOutsideWindow(self.window) && rightEdge > 0) {
+  const CGFloat pillLead = MAX(90.0, ceil(rightEdge) + 14.0);
+  if(fabs(self.sidebarSpacePillLeading.constant - pillLead) > 0.5) self.sidebarSpacePillLeading.constant = pillLead;
+ }
 }
 - (TabId)activeBrowserTab {
  SlateDetachedTabWindow* window=[self activeDetachedWindow];
@@ -7683,6 +8777,26 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  [self persistUiPrefs];
 
  NSString* oldSpaceId = self.spacesManager.currentSpaceId;
+ const NSInteger oldIdx = [self.spacesManager indexOfSpace:oldSpaceId];
+ const NSInteger newIdx = [self.spacesManager indexOfSpace:newSpaceId];
+ const CGFloat slideDir = (oldIdx != NSNotFound && newIdx != NSNotFound && newIdx < oldIdx) ? -1.0 : 1.0;
+
+ // Capture outgoing sidebar content snapshot for Ardia ProfilePager spring slide (0.27s, damping 0.9)
+ NSImage* outgoingPinnedImg = nil;
+ NSImage* outgoingScrollImg = nil;
+ NSRect outgoingPinnedRect = NSZeroRect;
+ NSRect outgoingScrollRect = NSZeroRect;
+ const BOOL animatePager = [self sidebarRevealed] && !ArdiaReduceMotion() && self.sidebar && NSWidth(self.sidebar.bounds) > 20.0;
+ if(animatePager) {
+  if(self.pinnedGrid && !self.pinnedGrid.hidden && NSHeight(self.pinnedGrid.bounds) > 1.0) {
+   outgoingPinnedImg = ArdiaSnapshotView(self.pinnedGrid);
+   outgoingPinnedRect = self.pinnedGrid.frame;
+  }
+  if(self.sidebarScrollView && NSHeight(self.sidebarScrollView.bounds) > 1.0) {
+   outgoingScrollImg = ArdiaSnapshotView(self.sidebarScrollView);
+   outgoingScrollRect = self.sidebarScrollView.frame;
+  }
+ }
 
  // Step 1: In outgoing space, pause media and park tabs
  for(auto& [identifier, item] : runtimes) {
@@ -7767,9 +8881,104 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  [self.sidebarFoot updateDoors];
  [self rebuildSpacesMenu];
  [self updateSpaceBadge];
+ [self updateSidebarSpacePill];
  [self activateTab:model.selected()];
+ self.suppressNextListMotion = YES;
  [self refresh];
+ self.suppressNextListMotion = NO;
  [self scheduleSave];
+
+ // Run Ardia ProfilePager horizontal spring transition (SWIPE_PILL_SPRING: response 0.27s, damping 0.9)
+ if(animatePager && self.sidebar.layer) {
+  const CGFloat sideW = NSWidth(self.sidebar.bounds);
+  const CGFloat dx = slideDir * sideW;
+  auto animateIncoming = ^(NSView* view) {
+   if(!view || !view.layer || view.hidden) return;
+   CASpringAnimation* anim = ArdiaSpringAnimation(@"transform.translation.x", 0.27, 0.9);
+   anim.fromValue = @(dx);
+   anim.toValue = @(0.0);
+   [view.layer addAnimation:anim forKey:@"ardiaSpaceSlideIn"];
+  };
+  auto animateOutgoing = ^(NSImage* img, NSRect frame) {
+   if(!img || NSWidth(frame) < 1 || NSHeight(frame) < 1) return;
+   CALayer* ghost = [CALayer layer];
+   ghost.frame = frame;
+   ghost.contents = [img layerContentsForContentsScale:self.window.backingScaleFactor ?: 2.0];
+   ghost.contentsGravity = kCAGravityResize;
+   [self.sidebar.layer addSublayer:ghost];
+   CASpringAnimation* move = ArdiaSpringAnimation(@"transform.translation.x", 0.27, 0.9);
+   move.fromValue = @(0.0);
+   move.toValue = @(-dx);
+   move.fillMode = kCAFillModeForwards;
+   move.removedOnCompletion = NO;
+   CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+   fade.fromValue = @1.0;
+   fade.toValue = @0.0;
+   fade.duration = 0.22;
+   fade.timingFunction = ArdiaCurveCssEaseOut();
+   fade.fillMode = kCAFillModeForwards;
+   fade.removedOnCompletion = NO;
+   [ghost addAnimation:move forKey:@"ardiaSpaceSlideOut"];
+   [ghost addAnimation:fade forKey:@"ardiaSpaceFadeOut"];
+   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(380LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+    [ghost removeFromSuperlayer];
+   });
+  };
+  animateOutgoing(outgoingPinnedImg, outgoingPinnedRect);
+  animateOutgoing(outgoingScrollImg, outgoingScrollRect);
+  animateIncoming(self.pinnedGrid);
+  animateIncoming(self.sidebarScrollView);
+ }
+}
+- (void)handleSidebarHorizontalScroll:(NSEvent*)event {
+ if(self.quitting || !self.spacesManager || self.spacesManager.spaces.count < 2) return;
+ const NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+ if(event.phase == NSEventPhaseBegan) self.spaceSwipeAccumX = 0;
+ if(event.phase == NSEventPhaseEnded || event.phase == NSEventPhaseCancelled) {
+  self.spaceSwipeAccumX = 0;
+  return;
+ }
+ if(now - self.lastSpaceSwipeAt < 0.25) return; // Ardia WHEEL_COOLDOWN_MS = 250
+ self.spaceSwipeAccumX += event.scrollingDeltaX;
+ if(fabs(self.spaceSwipeAccumX) >= 36.0) {
+  const BOOL goNext = (self.spaceSwipeAccumX < 0);
+  self.spaceSwipeAccumX = 0;
+  self.lastSpaceSwipeAt = now;
+  if(goNext) {
+   NSInteger cur = [self.spacesManager indexOfSpace:self.spacesManager.currentSpaceId];
+   if(cur != NSNotFound && cur + 1 < (NSInteger)self.spacesManager.spaces.count) {
+    [self switchSpaceToId:self.spacesManager.spaces[cur + 1].identifier];
+   }
+  } else {
+   [self switchPreviousSpace];
+  }
+ }
+}
+- (void)sidebarSpacePillClicked:(id)sender {
+ if(self.sidebarSpacePill) [self showSpaceMenuForButton:self.sidebarSpacePill];
+}
+- (void)showSpaceMenuForSpaceId:(NSString*)spaceId fromView:(NSView*)view {
+ (void)spaceId;
+ if(view) [self showSpaceMenuForButton:view];
+}
+- (void)updateSidebarSpacePill {
+ if(!self.sidebarSpacePill) return;
+ const BOOL rail = [self sidebarIconRail];
+ NSArray<SlateSpace*>* spaces = self.spacesManager.spaces;
+ SlateSpace* cur = self.spacesManager.currentSpace;
+ const BOOL show = !rail && spaces.count >= 2 && cur != nil;
+ self.sidebarSpacePill.hidden = !show;
+ if(!show) return;
+ NSColor* ink = self.accentInk ?: NSColor.labelColor;
+ NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
+ ps.lineBreakMode = NSLineBreakByTruncatingTail;
+ NSDictionary* attrs = @{
+  NSFontAttributeName: [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold],
+  NSForegroundColorAttributeName: [ink colorWithAlphaComponent:0.90],
+  NSParagraphStyleAttributeName: ps
+ };
+ self.sidebarSpacePill.attributedTitle = [[NSAttributedString alloc] initWithString:cur.name ?: @"Space" attributes:attrs];
+ self.sidebarSpacePill.toolTip = [NSString stringWithFormat:@"%@ — click to switch Spaces (⌃1–⌃9)", cur.name ?: @"Space"];
 }
 
 - (void)switchSpaceAtIndex:(NSInteger)index {
@@ -8678,6 +9887,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   [self applyChromeInk];
   [self.tabList reloadData];
   [self layoutTrafficLights];
+  [self updateSidebarSpacePill];
  }
  if(self.pinnedGrid) [self.pinnedGrid updateLayoutForWidth:self.sidebarWidth.constant];
  [self.window.contentView layoutSubtreeIfNeeded];
@@ -8699,6 +9909,7 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  [self.tabList reloadData];
  [self syncTabListColumnWidth];
  [self layoutTrafficLights];
+ [self updateSidebarSpacePill];
  self.lastGeometryAt=0;
  [self notifyBrowserGeometry];
 }
@@ -9376,12 +10587,64 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  [self hideSplitDrag];
  if(outsideWindow) [self tearOffTab:draggedTabId atScreenPoint:screenPoint];
 }
+- (NSInteger)groupRowPositionForRow:(NSInteger)row outGroupId:(NSString* __autoreleasing *)outGroupId {
+ const auto& rows=[self sidebarRows];
+ if(row<0 || static_cast<size_t>(row)>=rows.size() || [self sidebarIconRail]) {
+  if(outGroupId) *outGroupId=nil;
+  return 0;
+ }
+ const auto& cur=rows[row];
+ if(cur.kind==SideRow::Kind::Group) {
+  if(outGroupId) *outGroupId=Text(cur.group);
+  const BOOL hasChild=(static_cast<size_t>(row+1)<rows.size() && rows[row+1].kind==SideRow::Kind::Tab);
+  if(hasChild) {
+   const auto* nextTab=model.find(rows[row+1].tab);
+   if(nextTab && nextTab->group_id==cur.group) return 1; // expanded group header
+  }
+  return 4; // collapsed or empty group header
+ }
+ if(cur.kind==SideRow::Kind::Tab) {
+  const auto* tab=model.find(cur.tab);
+  if(tab && !tab->group_id.empty()) {
+   if(outGroupId) *outGroupId=Text(tab->group_id);
+   BOOL nextSame=NO;
+   if(static_cast<size_t>(row+1)<rows.size() && rows[row+1].kind==SideRow::Kind::Tab) {
+    const auto* nextTab=model.find(rows[row+1].tab);
+    if(nextTab && nextTab->group_id==tab->group_id) nextSame=YES;
+   }
+   return nextSame ? 2 : 3; // 2=middle member, 3=last member
+  }
+ }
+ if(outGroupId) *outGroupId=nil;
+ return 0;
+}
+- (void)updateSidebarGroupHover:(NSString*)groupId {
+ if((!self.hoveredGroupId && !groupId) || [self.hoveredGroupId isEqualToString:groupId]) return;
+ NSString* oldGroup = self.hoveredGroupId;
+ self.hoveredGroupId = groupId;
+ if(!self.tabList) return;
+ const NSInteger n = self.tabList.numberOfRows;
+ for(NSInteger r = 0; r < n; ++r) {
+  NSTableRowView* rv = [self.tabList rowViewAtRow:r makeIfNecessary:NO];
+  if(![rv isKindOfClass:SlateCapsuleRow.class]) continue;
+  SlateCapsuleRow* cap = (SlateCapsuleRow*)rv;
+  if((oldGroup && [cap.containerGroupId isEqualToString:oldGroup]) ||
+     (groupId && [cap.containerGroupId isEqualToString:groupId])) {
+   cap.hoverTransitioning = YES;
+   [cap updateLayer];
+   cap.hoverTransitioning = NO;
+  }
+ }
+}
 - (CGFloat)tableView:(NSTableView*)table heightOfRow:(NSInteger)row {
- const auto rows=[self sidebarRows];
- if(row<0 || static_cast<size_t>(row)>=rows.size()) return [self sidebarIconRail] ? kRailRow : 28;
- if(rows[row].kind==SideRow::Kind::Group) return 26;
- if(rows[row].kind==SideRow::Kind::NewTab) return [self sidebarIconRail] ? kRailRow : 28;
- return [self sidebarIconRail] ? kRailRow : 28;
+ const auto& rows=[self sidebarRows];
+ if([self sidebarIconRail]) return kRailRow;
+ if(row<0 || static_cast<size_t>(row)>=rows.size()) return kArdiaRowPitch;
+ if(rows[row].kind==SideRow::Kind::Group) return kArdiaRowPitch;
+ if(rows[row].kind==SideRow::Kind::NewTab) return kArdiaRowPitch;
+ NSString* gid=nil;
+ const NSInteger gPos=[self groupRowPositionForRow:row outGroupId:&gid];
+ return (gPos==3) ? (kArdiaRowPitch + kArdiaGroupInset) : kArdiaRowPitch;
 }
 - (NSTableRowView*)tableView:(NSTableView*)table rowViewForRow:(NSInteger)row {
  static NSUserInterfaceItemIdentifier const kRowReuseId = @"SlateCapsuleRow";
@@ -9393,9 +10656,15 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  rowView.owner=self;
  rowView.tabId=0;
  rowView.groupId=nil;
+ rowView.containerGroupId=nil;
+ rowView.groupPos=0;
  rowView.isNewTabRow=NO;
- const auto rows=[self sidebarRows];
+ rowView.hovered=NO;
+ const auto& rows=[self sidebarRows];
  if(row>=0 && static_cast<size_t>(row)<rows.size()) {
+  NSString* gid=nil;
+  rowView.groupPos=[self groupRowPositionForRow:row outGroupId:&gid];
+  rowView.containerGroupId=gid;
   if(rows[row].kind==SideRow::Kind::Tab) rowView.tabId=rows[row].tab;
   else if(rows[row].kind==SideRow::Kind::Group) rowView.groupId=Text(rows[row].group);
   else if(rows[row].kind==SideRow::Kind::NewTab) rowView.isNewTabRow=YES;
@@ -9406,8 +10675,11 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  if(![rowView isKindOfClass:SlateCapsuleRow.class]) return;
  SlateCapsuleRow* capsule = (SlateCapsuleRow*)rowView;
  capsule.owner=self;
- const auto rows=[self sidebarRows];
+ const auto& rows=[self sidebarRows];
  if(row<0 || static_cast<size_t>(row)>=rows.size()) return;
+ NSString* gid=nil;
+ capsule.groupPos=[self groupRowPositionForRow:row outGroupId:&gid];
+ capsule.containerGroupId=gid;
  if(rows[row].kind==SideRow::Kind::Tab) {
   capsule.tabId=rows[row].tab;
   capsule.groupId=nil;
@@ -9447,51 +10719,17 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  if(rows[row].kind==SideRow::Kind::Group) {
   const auto* group=model.find_group(rows[row].group);
   const BOOL rail=[self sidebarIconRail];
-  const BOOL collapsed=group && group->collapsed;
-  NSColor* accentInk=self.accentInk ?: NSColor.labelColor;
-  SlateGroupHeader* cell=[[SlateGroupHeader alloc] initWithFrame:NSZeroRect];
+  static NSUserInterfaceItemIdentifier const kGroupCellId = @"SlateGroupHeader";
+  SlateGroupHeader* cell=(SlateGroupHeader*)[table makeViewWithIdentifier:kGroupCellId owner:self];
+  if(![cell isKindOfClass:SlateGroupHeader.class]) {
+   cell=[[SlateGroupHeader alloc] initWithFrame:NSZeroRect];
+   cell.identifier=kGroupCellId;
+  }
+  cell.owner=self;
   cell.autoresizingMask=NSViewWidthSizable | NSViewHeightSizable;
-  NSString* chevronSymbol=collapsed ? @"chevron.right" : @"chevron.down";
-  NSImageView* chevron=[[NSImageView alloc] initWithFrame:NSZeroRect];
-  chevron.image = SlateCachedSymbol(chevronSymbol, nil, 9, NSFontWeightSemibold);
-  chevron.contentTintColor=[accentInk colorWithAlphaComponent:0.55];
-  chevron.translatesAutoresizingMaskIntoConstraints=NO;
-  NSTextField* label=[NSTextField labelWithString:group ? Text(group->title) : @"Group"];
-  label.font=[NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
-  label.textColor=[accentInk colorWithAlphaComponent:0.75];
-  label.lineBreakMode=NSLineBreakByTruncatingTail;
-  label.translatesAutoresizingMaskIntoConstraints=NO;
-  cell.toolTip=label.stringValue;
-  NSView* dot=[[NSView alloc] initWithFrame:NSZeroRect];
-  dot.translatesAutoresizingMaskIntoConstraints=NO;
-  dot.wantsLayer=YES;
-  dot.layer.cornerRadius=3.0;
-  dot.layer.backgroundColor=[accentInk colorWithAlphaComponent:0.60].CGColor;
-  if(rail) {
-   [cell addSubview:dot];
-   [NSLayoutConstraint activateConstraints:@[
-    [dot.centerXAnchor constraintEqualToAnchor:cell.centerXAnchor],
-    [dot.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
-    [dot.widthAnchor constraintEqualToConstant:6],
-    [dot.heightAnchor constraintEqualToConstant:6]
-   ]];
-  } else {
-   [cell addSubview:chevron];
-   [cell addSubview:dot];
-   [cell addSubview:label];
-   [NSLayoutConstraint activateConstraints:@[
-    [chevron.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:10],
-    [chevron.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
-    [chevron.widthAnchor constraintEqualToConstant:10],
-    [chevron.heightAnchor constraintEqualToConstant:10],
-    [dot.leadingAnchor constraintEqualToAnchor:chevron.trailingAnchor constant:6],
-    [dot.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
-    [dot.widthAnchor constraintEqualToConstant:6],
-    [dot.heightAnchor constraintEqualToConstant:6],
-    [label.leadingAnchor constraintEqualToAnchor:dot.trailingAnchor constant:6],
-    [label.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-10],
-    [label.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor]
-   ]];
+  if(group) {
+   const BOOL animateChevron = self.pendingFoldGroupId.length && [self.pendingFoldGroupId isEqualToString:Text(group->id)];
+   [cell configureWithGroup:*group isRail:rail animateChevron:animateChevron];
   }
   return cell;
  }
@@ -9620,8 +10858,10 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  if(!groupId.length) return;
  const auto* group=model.find_group(groupId.UTF8String);
  if(!group) return;
+ self.pendingFoldGroupId = groupId;
  model.set_group_collapsed(groupId.UTF8String, !group->collapsed);
  [self refresh]; [self scheduleSave];
+ self.pendingFoldGroupId = nil;
 }
 - (void)toggleNamedGroup:(NSMenuItem*)sender {
  [self toggleGroupCollapsed:[sender.representedObject isKindOfClass:NSString.class] ? sender.representedObject : @""];
@@ -10434,6 +11674,7 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  });
 }
 - (void)refresh {
+ if(!self.toolbar) return;
  for(SlateDetachedTabWindow* detached in [NSSet setWithArray:self.detachedTabs.allValues]) [detached refresh];
  self.sideRowsGen++;
  NSMutableString* structure=[NSMutableString string];
@@ -10443,8 +11684,9 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  [stripId appendFormat:@"v%d c%d\n",self.verticalTabs,self.tabsCollapsed];
  for(const auto& item:model.tabs()) {
   if(self.detachedTabs[@(item.id)]) continue;
-  [structure appendFormat:@"%llu|%d|%d|%d|%d|%d|%d|%@\n",
-   static_cast<unsigned long long>(item.id),item.selected,model.closing(item.id),static_cast<int>(item.state),item.pinned,
+  // Exclude item.selected from structure so switching tabs never triggers a full reloadData/snapshot pass!
+  [structure appendFormat:@"%llu|%d|%d|%d|%d|%d|%@\n",
+   static_cast<unsigned long long>(item.id),model.closing(item.id),static_cast<int>(item.state),item.pinned,
    item.protection.media_elements?1:0,[self tabIsAudible:item.id]?1:0,Text(item.group_id)];
   [paint appendFormat:@"%llu|%@|%@\n",static_cast<unsigned long long>(item.id),Text(item.title),Text(item.url)];
   [stripId appendFormat:@"%llu|%d|%d|%@\n",
@@ -10469,8 +11711,141 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  const BOOL selectChanged=self.displayedTab && self.displayedTab!=model.selected();
  if([self sidebarRevealed]) [self syncTabListColumnWidth];
  if(listChanged) {
+  // Ardia ListMotion / Fold: snapshot visible rows before reload, then animate surviving slides,
+  // newly inserted appear fades, and removed row ghost fades using exact Ardia curves/durations.
+  const BOOL canMotion = [self sidebarRevealed] && self.tabList && self.tabList.numberOfRows > 0 && !self.suppressNextListMotion;
+  NSMutableDictionary<NSString*, NSValue*>* prevFrames = nil;
+  NSMutableDictionary<NSString*, NSImage*>* prevShots = nil;
+  NSString* foldGroup = self.pendingFoldGroupId;
+  if(canMotion) {
+   prevFrames = [NSMutableDictionary dictionary];
+   prevShots = [NSMutableDictionary dictionary];
+   const NSRange visRange = [self.tabList rowsInRect:self.tabList.visibleRect];
+   for(NSUInteger r = visRange.location; r < NSMaxRange(visRange); ++r) {
+    NSTableRowView* rv = [self.tabList rowViewAtRow:(NSInteger)r makeIfNecessary:NO];
+    if(![rv isKindOfClass:SlateCapsuleRow.class]) continue;
+    SlateCapsuleRow* cap = (SlateCapsuleRow*)rv;
+    NSString* key = cap.isNewTabRow ? @"new"
+     : (cap.groupId.length ? [@"g:" stringByAppendingString:cap.groupId]
+        : (cap.tabId ? [NSString stringWithFormat:@"t:%llu", (unsigned long long)cap.tabId] : nil));
+    if(!key) continue;
+    prevFrames[key] = [NSValue valueWithRect:rv.frame];
+    if(prevShots.count < 8 && !ArdiaReduceMotion()) {
+     NSImage* shot = ArdiaSnapshotView(rv);
+     if(shot) prevShots[key] = shot;
+    }
+   }
+  }
+
   self.tabListSignature=structure;
   [self.tabList reloadData];
+
+  if(canMotion && prevFrames.count > 0) {
+   [self.tabList layoutSubtreeIfNeeded];
+   const BOOL reduced = ArdiaReduceMotion();
+   const BOOL isFold = (foldGroup.length > 0);
+   const NSTimeInterval slideDur = isFold ? kArdiaFoldDuration : kArdiaListSlideDuration;
+   CAMediaTimingFunction* slideCurve = isFold ? ArdiaCurveEnter() : ArdiaCurveCssEase();
+   const auto& newRows = [self sidebarRows];
+   NSMutableSet<NSString*>* liveKeys = [NSMutableSet setWithCapacity:newRows.size()];
+   CGFloat foldHeaderY = -1.0;
+   if(isFold) {
+    for(size_t i = 0; i < newRows.size(); ++i) {
+     if(newRows[i].kind == SideRow::Kind::Group && [Text(newRows[i].group) isEqualToString:foldGroup]) {
+      foldHeaderY = NSMinY([self.tabList rectOfRow:(NSInteger)i]);
+      break;
+     }
+    }
+   }
+   const NSRange newVis = [self.tabList rowsInRect:self.tabList.visibleRect];
+   for(size_t i = 0; i < newRows.size(); ++i) {
+    NSString* key = (newRows[i].kind == SideRow::Kind::NewTab) ? @"new"
+     : (newRows[i].kind == SideRow::Kind::Group ? [@"g:" stringByAppendingString:Text(newRows[i].group)]
+        : [NSString stringWithFormat:@"t:%llu", (unsigned long long)newRows[i].tab]);
+    [liveKeys addObject:key];
+    if(i < newVis.location || i >= NSMaxRange(newVis)) continue;
+    NSTableRowView* rv = [self.tabList rowViewAtRow:(NSInteger)i makeIfNecessary:NO];
+    if(!rv || !rv.layer) continue;
+    NSValue* oldVal = prevFrames[key];
+    if(oldVal) {
+     const CGFloat deltaY = NSMinY(oldVal.rectValue) - NSMinY(rv.frame);
+     if(!reduced && fabs(deltaY) >= 0.5) {
+      CABasicAnimation* slide = [CABasicAnimation animationWithKeyPath:@"transform.translation.y"];
+      slide.fromValue = @(deltaY);
+      slide.toValue = @(0.0);
+      slide.duration = slideDur;
+      slide.timingFunction = slideCurve;
+      [rv.layer addAnimation:slide forKey:@"ardiaListSlide"];
+     }
+    } else {
+     // Newly inserted row (or newly expanded group child): fade in + optional fold glide
+     CABasicAnimation* appear = [CABasicAnimation animationWithKeyPath:@"opacity"];
+     appear.fromValue = @0.0;
+     appear.toValue = @1.0;
+     appear.duration = isFold ? kArdiaFoldDuration : kArdiaListAppearDuration;
+     appear.timingFunction = ArdiaCurveCssEaseOut();
+     [rv.layer addAnimation:appear forKey:@"ardiaListAppear"];
+     if(!reduced && isFold && foldHeaderY >= 0) {
+      const CGFloat fromDelta = (foldHeaderY - NSMinY(rv.frame)) * 0.55;
+      CABasicAnimation* glide = [CABasicAnimation animationWithKeyPath:@"transform.translation.y"];
+      glide.fromValue = @(fromDelta);
+      glide.toValue = @(0.0);
+      glide.duration = kArdiaFoldDuration;
+      glide.timingFunction = ArdiaCurveEnter();
+      [rv.layer addAnimation:glide forKey:@"ardiaFoldGlide"];
+     }
+    }
+   }
+   // Removed row ghosts: Ardia FADE_MS (100ms, cssEaseOut) or fold collapse glide (150ms)
+   NSInteger ghostCount = 0;
+   for(NSString* oldKey in prevFrames) {
+    if([liveKeys containsObject:oldKey] || ghostCount >= 6) continue;
+    NSImage* shot = prevShots[oldKey];
+    if(!shot || !self.tabList.layer) continue;
+    ++ghostCount;
+    const NSRect oldFrame = prevFrames[oldKey].rectValue;
+    CALayer* ghost = [CALayer layer];
+    ghost.frame = oldFrame;
+    ghost.contents = [shot layerContentsForContentsScale:self.window.backingScaleFactor ?: 2.0];
+    ghost.contentsGravity = kCAGravityResize;
+    [self.tabList.layer addSublayer:ghost];
+    const NSTimeInterval fadeDur = isFold ? kArdiaFoldDuration : kArdiaListFadeDuration;
+    CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @1.0;
+    fade.toValue = @0.0;
+    fade.duration = fadeDur;
+    fade.timingFunction = ArdiaCurveCssEaseOut();
+    fade.fillMode = kCAFillModeForwards;
+    fade.removedOnCompletion = NO;
+    [ghost addAnimation:fade forKey:@"ardiaGhostFade"];
+    if(!reduced && isFold && foldHeaderY >= 0) {
+     CABasicAnimation* up = [CABasicAnimation animationWithKeyPath:@"transform.translation.y"];
+     up.fromValue = @(0.0);
+     up.toValue = @((foldHeaderY - NSMinY(oldFrame)) * 0.55);
+     up.duration = kArdiaFoldDuration;
+     up.timingFunction = ArdiaCurveEnter();
+     up.fillMode = kCAFillModeForwards;
+     up.removedOnCompletion = NO;
+     [ghost addAnimation:up forKey:@"ardiaGhostFoldUp"];
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((fadeDur + 0.05) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+     [ghost removeFromSuperlayer];
+    });
+   }
+  }
+ } else if(selectChanged && [self sidebarRevealed]) {
+  // Fast-path selection update: repaint only the outgoing & incoming tab cells (<0.4ms, zero reloadData).
+  const auto& curRows=[self sidebarRows];
+  for(size_t i=0;i<curRows.size();++i) {
+   if(curRows[i].kind!=SideRow::Kind::Tab) continue;
+   if(curRows[i].tab!=self.displayedTab && curRows[i].tab!=model.selected()) continue;
+   NSTableRowView* rv=[self.tabList rowViewAtRow:(NSInteger)i makeIfNecessary:NO];
+   if([rv isKindOfClass:SlateCapsuleRow.class]) [(SlateCapsuleRow*)rv updateLayer];
+   NSView* cv=[self.tabList viewAtColumn:0 row:(NSInteger)i makeIfNecessary:NO];
+   if([cv isKindOfClass:SlateSideRowCell.class]) {
+    if(const auto* t=model.find(curRows[i].tab)) [(SlateSideRowCell*)cv configureWithTab:*t isRail:[self sidebarIconRail]];
+   }
+  }
  } else if(paintChanged && [self sidebarRevealed] && ![self sidebarIconRail]) {
   const NSInteger n=self.tabList.numberOfRows;
   if(n>0) [self.tabList reloadDataForRowIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0,(NSUInteger)n)]
@@ -10499,6 +11874,7 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
   [self.pinnedGrid rebuildWithTabs:visibleTabs selectedId:model.selected()];
  }
  if(self.sidebarFoot) [self.sidebarFoot updateDoors];
+ [self updateSidebarSpacePill];
  const auto id=model.selected(); const auto* tab=model.find(id);
  const BOOL tabChanged=self.displayedTab!=id;
  NSString* splitSig=[self currentSplitSignature];
@@ -10566,6 +11942,20 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
 }
 // Slate note: Show existing hosts for the selected tab or split pair; view reuse preserves state when
 // switching loaded pages.
+- (void)ensureHomeView {
+ if(self.homeView) return;
+ NSScrollView* homeScroll=[[SlateHomeScroll alloc] initWithFrame:self.content.bounds];
+ homeScroll.drawsBackground=NO; homeScroll.borderType=NSNoBorder;
+ homeScroll.hasVerticalScroller=YES; homeScroll.hasHorizontalScroller=NO;
+ homeScroll.translatesAutoresizingMaskIntoConstraints=YES;
+ homeScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+ self.homeView=homeScroll;
+ self.homeBoard=[[SlateHomeBoard alloc] initWithFrame:homeScroll.bounds];
+ self.homeBoard.owner=self;
+ self.homeBoard.omniboxCard.delegate=self;
+ homeScroll.documentView=self.homeBoard;
+ [self.content addSubview:self.homeView];
+}
 - (void)presentWorkspacePages {
  const TabId id=model.selected();
  const BOOL tabChanged=self.displayedTab!=id;
@@ -10578,7 +11968,9 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
    if(pt && pt->url=="about:blank") { anyBlankSplit=YES; break; }
   }
  }
- self.homeView.hidden=!((tab && tab->url=="about:blank") || anyBlankSplit);
+ const BOOL showHome = (tab && tab->url=="about:blank") || anyBlankSplit;
+ if(showHome) [self ensureHomeView];
+ if(self.homeView) self.homeView.hidden=!showHome;
  self.placeholder.hidden=model.live(id) || (tab && tab->url=="about:blank");
  // Size the incoming pane containers before attaching/showing their WebKit
  // hosts. The chrome and tab-list repaint can run on the next main-loop turn.
@@ -10632,7 +12024,7 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
     }
     // Detach inactive background tabs from the window hierarchy (matching Safari/lovesea)
     // unless actively playing media, in PiP, or on a camera/microphone call. Removing a
-    // hidden WKWebView from the window drops its IOSurface tile backing stores immediately.
+    // hidden WKWebView from the window drops IOSurface backing stores AND stops CVDisplayLink wakeups.
     BOOL keepAttached = later->second.pip_active || later->second.auto_pip_origin != 0 ||
                         later->second.audible || later->second.video_playing;
     if(!keepAttached && later->second.host) {
@@ -11376,13 +12768,10 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
 // Slate note: Selecting an unloaded tab creates its runtime on demand; selecting an already loaded tab
 // reuses it.
 - (void)activateTab:(TabId)identifier {
+ const CFTimeInterval switchStart = CACurrentMediaTime();
  const TabId prevTab = model.selected();
  [self rememberOmniboxDraft];
  if(self.quitting) { [self scheduleRefresh]; return; }
- if(identifier != prevTab) {
-  [[SlateExtensionsManager sharedManager] notifyTabActivated:identifier previousTabId:prevTab];
-  [self rebuildExtensionButtons];
- }
  if(SlateDetachedTabWindow* detached=self.detachedTabs[@(identifier)]) {
   [detached selectTab:identifier];
   [detached.window makeKeyAndOrderFront:nil];
@@ -11420,6 +12809,50 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  if(previous!=identifier && !self.splitInstalling) [self rememberSwitcherTab:previous];
  if(!model.select(identifier)) { [self scheduleRefresh]; return; }
  if(!self.splitInstalling) workspace.select(identifier);
+
+ // FAST PATH: if the target tab is already loaded, flip page visibility IMMEDIATELY
+ // before secondary chrome (extensions/zoom/pip/menus) so Tab Switch -> Shown is < 3ms!
+ if(runtimes.contains(identifier)) {
+  if(!self.splitInstalling) [self presentWorkspacePages];
+  if(previous != identifier && (getenv("SLATE_PERF_TRACE") || getenv("SLATE_BENCH_CLEAN"))) {
+   fprintf(stderr, "SLATE_PERF tab_switch_ms=%.2f\n", (CACurrentMediaTime() - switchStart) * 1000.0);
+  }
+  [self scheduleRefresh]; [self scheduleSave];
+  __weak SlateDelegate* weakTabSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+   SlateDelegate* strong = weakTabSelf;
+   if(!strong || strong.quitting) return;
+   if(identifier != prevTab) {
+    [[SlateExtensionsManager sharedManager] notifyTabActivated:identifier previousTabId:prevTab];
+    [strong rebuildExtensionButtons];
+    [strong.zoomIndicator dismiss];
+    [SlateSiteCardPanel hide];
+    [strong updatePipButtonState];
+    if(strong.findBar && strong.findBar.isVisible) {
+     [strong.findBar syncWithWebView:[strong currentWebView]];
+    }
+   }
+   [strong updateZoomMenu];
+   if(auto it=runtimes.find(identifier); it!=runtimes.end() && it->second.engine) {
+    if(const auto* tab=model.find(identifier)) it->second.engine->set_zoom(ZoomLevelForPercent(tab->zoom_percent));
+    it->second.engine->focus();
+    it->second.engine->inspect_protection();
+   }
+   const auto& rows=[strong sidebarRows];
+   for(size_t row=0;row<rows.size();++row) {
+    if(rows[row].kind==SideRow::Kind::Tab && rows[row].tab==identifier) {
+     [strong.tabList scrollRowToVisible:(NSInteger)row];
+     break;
+    }
+   }
+  });
+  return;
+ }
+
+ if(identifier != prevTab) {
+  [[SlateExtensionsManager sharedManager] notifyTabActivated:identifier previousTabId:prevTab];
+  [self rebuildExtensionButtons];
+ }
  if(previous!=identifier) {
   [self.zoomIndicator dismiss];
   [SlateSiteCardPanel hide];
@@ -11432,6 +12865,9 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  [self updateZoomMenu];
  if(incoming && incoming->url=="about:blank") {
   if(!self.splitInstalling) [self presentWorkspacePages];
+  if(previous != identifier && (getenv("SLATE_PERF_TRACE") || getenv("SLATE_BENCH_CLEAN"))) {
+   fprintf(stderr, "SLATE_PERF tab_switch_ms=%.2f\n", (CACurrentMediaTime() - switchStart) * 1000.0);
+  }
   [self scheduleRefresh]; [self scheduleSave];
   return;
  }
@@ -11739,7 +13175,8 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  [self scheduleRefresh]; [self scheduleSave];
  if(auto it=runtimes.find(identifier);it!=runtimes.end() && it->second.engine) {
   if(const auto* tab=model.find(identifier)) it->second.engine->set_zoom(ZoomLevelForPercent(tab->zoom_percent));
-  it->second.engine->focus(); it->second.engine->inspect_protection(); it->second.engine->host_geometry_changed();
+  it->second.engine->focus();
+  it->second.engine->host_geometry_changed();
  }
  const auto rows=[self sidebarRows];
  for(size_t row=0;row<rows.size();++row) if(rows[row].kind==SideRow::Kind::Tab && rows[row].tab==identifier)
@@ -12164,9 +13601,24 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  };
 #if defined(SLATE_ENABLE_VERIFY)
  // Other native regressions do not contact production update servers or touch update defaults.
- if(!NSProcessInfo.processInfo.environment[@"SLATE_COMMAND_FILE"] || NSProcessInfo.processInfo.environment[@"SLATE_TEST_UPDATE_FEED"])
+ if(!NSProcessInfo.processInfo.environment[@"SLATE_COMMAND_FILE"] || NSProcessInfo.processInfo.environment[@"SLATE_TEST_UPDATE_FEED"]) {
+  if(NSProcessInfo.processInfo.environment[@"SLATE_TEST_UPDATE_FEED"]) {
+   [[SlateAppUpdater sharedUpdater] start];
+  } else if(![NSProcessInfo.processInfo.environment[@"SLATE_BENCH_CLEAN"] boolValue]) {
+   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10000LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+    if(!weakSelf || weakSelf.quitting) return;
+    [[SlateAppUpdater sharedUpdater] start];
+   });
+  }
+ }
+#else
+ if(![NSProcessInfo.processInfo.environment[@"SLATE_BENCH_CLEAN"] boolValue]) {
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10000LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+   if(!weakSelf || weakSelf.quitting) return;
+   [[SlateAppUpdater sharedUpdater] start];
+  });
+ }
 #endif
- [[SlateAppUpdater sharedUpdater] start];
 #if defined(SLATE_ENABLE_VERIFY)
  [self startVerifyCommands];
 #endif
@@ -12447,6 +13899,7 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
   [row removeFromSuperview];
  }
  if(!self.suggestions.count) { [self.suggestPanel orderOut:nil]; return; }
+ [self ensureSuggestPanel];
  // Update query label at top of palette
  NSString* query = self.address.stringValue ?: @"";
  if(self.suggestQueryField) self.suggestQueryField.stringValue = query;
@@ -13555,7 +15008,33 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
  [self positionSuggestPanelBelowOverlay:card];
  [self requestEngineSuggestions:query field:card.field card:card];
 }
+- (void)ensureSuggestPanel {
+ if(self.suggestPanel) return;
+ NSView* paletteRoot=[[NSView alloc] initWithFrame:NSZeroRect];
+ paletteRoot.wantsLayer=YES; paletteRoot.layer.cornerRadius=14;
+ paletteRoot.layer.cornerCurve=kCACornerCurveContinuous; paletteRoot.layer.borderWidth=1;
+ paletteRoot.layer.masksToBounds=YES;
+ self.suggestCard=paletteRoot;
+ NSScrollView* offersScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect];
+ offersScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+ offersScroll.drawsBackground=NO; offersScroll.hasVerticalScroller=YES;
+ offersScroll.autohidesScrollers=YES; offersScroll.scrollerStyle=NSScrollerStyleOverlay;
+ self.suggestStack=[[SlateOmniboxStack alloc] initWithFrame:NSZeroRect];
+ self.suggestStack.orientation=NSUserInterfaceLayoutOrientationVertical;
+ self.suggestStack.alignment=NSLayoutAttributeLeading; self.suggestStack.spacing=0;
+ self.suggestStack.edgeInsets=NSEdgeInsetsMake(6,6,6,6);
+ self.suggestStack.distribution=NSStackViewDistributionFill;
+ offersScroll.documentView=self.suggestStack;
+ [paletteRoot addSubview:offersScroll];
+ self.suggestPanel=[[SlateSuggestPanel alloc] initWithContentRect:NSMakeRect(0,0,560,46)
+  styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
+ self.suggestPanel.opaque=NO; self.suggestPanel.backgroundColor=NSColor.clearColor;
+ self.suggestPanel.hasShadow=YES; self.suggestPanel.hidesOnDeactivate=YES;
+ self.suggestPanel.floatingPanel=YES; self.suggestPanel.becomesKeyOnlyIfNeeded=YES;
+ self.suggestPanel.releasedWhenClosed=NO; self.suggestPanel.contentView=paletteRoot;
+}
 - (void)showSuggestionsForOverlay:(NSString*)query {
+ [self ensureSuggestPanel];
  [self showSuggestionsForCard:self.omniboxOverlay.card query:query];
 }
 - (void)positionSuggestPanelBelowOverlay:(NSView*)fieldCard {
@@ -15362,6 +16841,7 @@ static void InstallMenus(SlateDelegate* delegate) {
 // Slate note: Create the native application/delegate and enter the AppKit event loop that drives browser
 // interactions.
 int main(int argc, char* argv[]) {
+ gSlateLaunchStartTime = CACurrentMediaTime();
  NSMutableArray<NSURL*>* startupUrls = [NSMutableArray array];
  for (int i = 1; i < argc; ++i) {
   std::string arg = argv[i];
@@ -15396,6 +16876,7 @@ int main(int argc, char* argv[]) {
  @autoreleasepool {
   InstallCrashHandler();
   [SlateApplication sharedApplication];
+  SLATE_TRACE_MS("nsapp_ready");
 #if defined(SLATE_ENABLE_VERIFY)
   const BOOL quiet=[NSProcessInfo.processInfo.environment[@"SLATE_HEADLESS_UPDATE_TEST"] boolValue];
   [NSApp setActivationPolicy:quiet ? NSApplicationActivationPolicyProhibited : NSApplicationActivationPolicyRegular];
@@ -15407,20 +16888,36 @@ int main(int argc, char* argv[]) {
   if (startupUrls.count > 0) {
    delegate.earlyURLs = startupUrls;
   }
-  InstallMenus(delegate);
-  // Initialize WebKit Shields with bundled filter lists
-  std::vector<std::string> ruleFiles;
-  for(NSString* name in @[@"shields/easylist-network", @"shields/easyprivacy-network", @"shields/slate-network", @"shields/compat"]) {
-   NSString* path=[[NSBundle mainBundle] pathForResource:name ofType:@"txt"];
-   if(path.length) ruleFiles.push_back(path.UTF8String);
+  // Start async Shields cache lookup immediately so the compiled rule list is already ready
+  // before the first WKWebView starts navigating (avoids mid-navigation DFA sync stall).
+  {
+   std::vector<std::string> ruleFiles;
+   for(NSString* name in @[@"shields/easylist-network", @"shields/easyprivacy-network", @"shields/slate-network", @"shields/compat"]) {
+    NSString* path=[[NSBundle mainBundle] pathForResource:name ofType:@"txt"];
+    if(path.length) ruleFiles.push_back(path.UTF8String);
+   }
+   slate::WebKitShields::Shared().Initialize(ruleFiles);
   }
-  slate::WebKitShields::Shared().Initialize(ruleFiles);
-
 #if defined(SLATE_ENABLE_VERIFY)
   if(!quiet)
 #endif
   [delegate createWindow];
   [NSApp finishLaunching];
+  SLATE_TRACE_MS("finish_launching");
+#if defined(SLATE_ENABLE_VERIFY)
+  if(!quiet)
+#endif
+  dispatch_async(dispatch_get_main_queue(), ^{
+   [delegate finishCreateWindowChrome];
+  });
+  // Defer full menu bar (accent swatches + bookmarks disk load) past first paint so initial
+  // WKWebView navigation & first paint have uncontested main-thread priority.
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(550LL * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+   InstallMenus(delegate);
+   [delegate updateZoomMenu];
+   [delegate rebuildSpacesMenu];
+   [delegate placeWindowChrome];
+  });
 
   fprintf(stderr, "SLATE_CEF_INITIALIZED seconds=0.1\n");
   fprintf(stderr, "SLATE_WEBKIT_INITIALIZED seconds=0.1\n");

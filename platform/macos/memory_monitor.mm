@@ -49,7 +49,9 @@ class MacMemoryMonitor final : public MemoryMonitor {
   } else { state_->known=false; }
   timer_=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,dispatch_get_main_queue());
   if(timer_) {
-   dispatch_source_set_timer(timer_,dispatch_time(DISPATCH_TIME_NOW,0),30*NSEC_PER_SEC,10*NSEC_PER_SEC);
+   // 60s cadence with 20s leeway lets macOS coalesce timer ticks for near-zero idle wakeups;
+   // kernel DISPATCH_SOURCE_TYPE_MEMORYPRESSURE still reacts instantaneously to Warn/Critical.
+   dispatch_source_set_timer(timer_,dispatch_time(DISPATCH_TIME_NOW,0),60*NSEC_PER_SEC,20*NSEC_PER_SEC);
    dispatch_source_set_event_handler(timer_, ^{ state->emit(); });
    dispatch_resume(timer_);
   }

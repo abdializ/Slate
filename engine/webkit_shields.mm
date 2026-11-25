@@ -6,6 +6,7 @@
 #include "engine/stealth_js.h"
 #include "engine/twitch_adblock_js.h"
 #include <malloc/malloc.h>
+#include <sys/stat.h>
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -719,56 +720,94 @@ void WebKitShields::EnsureLoaded() {
   if (!initialized_ || load_started_ || rule_list_) return;
   load_started_ = true;
   const std::vector<std::string> paths = rule_file_paths_;
-  uint64_t fingerprint = 1469598103934665603ULL;
+  auto startLookup = ^(NSString* ruleId) {
+    this->rule_identifier_ = ruleId;
+    NSString* appSupport = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+    NSString* storePath = NSProcessInfo.processInfo.environment[@"SLATE_SHIELDS_CACHE_DIR"];
+    if (!storePath.isAbsolutePath) storePath = [appSupport stringByAppendingPathComponent:@"Slate/ContentRuleLists"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:storePath withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL* storeURL = [NSURL fileURLWithPath:storePath];
+    this->store_ = [WKContentRuleListStore storeWithURL:storeURL];
+
+    // 1. Check if compiled rule list is already in persistent store cache
+    [this->store_ lookUpContentRuleListForIdentifier:this->rule_identifier_
+                                   completionHandler:^(WKContentRuleList* list, NSError* error) {
+      if (list) {
+        this->rule_list_ = list;
+        this->compiled_rule_count_ = [NSUserDefaults.standardUserDefaults integerForKey:
+          [@"SlateRuleCount-" stringByAppendingString:this->rule_identifier_]];
+        fprintf(stderr, "[SlateShields] Loaded cached compiled rule list successfully.\n");
+        this->BroadcastRuleList();
+      } else {
+        fprintf(stderr, "[SlateShields] No cached rule list, compiling in background...\n");
+        // Defer cold compilation briefly during app launch so temporary rule-compiler buffers
+        // never interleave with initial UI/tab allocations (skipped during test runs with SLATE_SHIELDS_CACHE_DIR).
+        if (getenv("SLATE_SHIELDS_CACHE_DIR")) {
+          this->CompileRules(paths);
+        } else {
+          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500LL * NSEC_PER_MSEC)),
+                         dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            this->CompileRules(paths);
+          });
+        }
+      }
+    }];
+  };
+
+  // Fast-path: check stat(size, mtime) of the 4 bundled rule files (<0.05ms) so warm
+  // launches kick off WKContentRuleListStore lookup immediately without reading ~5 MB.
+  NSMutableString* statMeta = [NSMutableString stringWithString:kSlateContentRuleListIdentifier];
   for (const auto& path : paths) {
-    NSString* file = [NSString stringWithUTF8String:path.c_str()];
-    for (unsigned char byte : std::string(file.lastPathComponent.UTF8String)) {
-      fingerprint ^= byte;
-      fingerprint *= 1099511628211ULL;
+    struct stat st{};
+    if (stat(path.c_str(), &st) == 0) {
+      NSString* name = [NSString stringWithUTF8String:path.c_str()].lastPathComponent;
+      [statMeta appendFormat:@"|%@:%lld:%ld", name, (long long)st.st_size, (long)st.st_mtimespec.tv_sec];
+    } else {
+      statMeta = nil;
+      break;
     }
-    std::ifstream input(path,std::ios::binary);
-    char buffer[8192];
-    while (input.read(buffer,sizeof(buffer)) || input.gcount()>0) {
-      for (std::streamsize i=0;i<input.gcount();++i) {
-        fingerprint ^= static_cast<unsigned char>(buffer[i]);
+  }
+  if (statMeta.length && !getenv("SLATE_SHIELDS_CACHE_DIR")) {
+    NSUserDefaults* defs = NSUserDefaults.standardUserDefaults;
+    NSString* cachedMeta = [defs stringForKey:@"SlateRuleStatMeta"];
+    NSString* cachedId = [defs stringForKey:@"SlateRuleStatId"];
+    if (cachedId.length && [cachedMeta isEqualToString:statMeta]) {
+      startLookup(cachedId);
+      return;
+    }
+  }
+
+  // Fallback (first launch / updated rule files): hash on a background queue.
+  NSString* metaCopy = [statMeta copy];
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    uint64_t fingerprint = 1469598103934665603ULL;
+    for (const auto& path : paths) {
+      NSString* file = [NSString stringWithUTF8String:path.c_str()];
+      for (unsigned char byte : std::string(file.lastPathComponent.UTF8String)) {
+        fingerprint ^= byte;
         fingerprint *= 1099511628211ULL;
       }
-    }
-    fingerprint ^= 0xff;
-    fingerprint *= 1099511628211ULL;
-  }
-  rule_identifier_ = [NSString stringWithFormat:@"%@-%016llx", kSlateContentRuleListIdentifier,
-    static_cast<unsigned long long>(fingerprint)];
-  NSString* appSupport = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
-  NSString* storePath = NSProcessInfo.processInfo.environment[@"SLATE_SHIELDS_CACHE_DIR"];
-  if (!storePath.isAbsolutePath) storePath = [appSupport stringByAppendingPathComponent:@"Slate/ContentRuleLists"];
-  [[NSFileManager defaultManager] createDirectoryAtPath:storePath withIntermediateDirectories:YES attributes:nil error:nil];
-  NSURL* storeURL = [NSURL fileURLWithPath:storePath];
-  store_ = [WKContentRuleListStore storeWithURL:storeURL];
-
-  // 1. Check if compiled rule list is already in persistent store cache
-  [store_ lookUpContentRuleListForIdentifier:rule_identifier_
-                           completionHandler:^(WKContentRuleList* list, NSError* error) {
-    if (list) {
-      this->rule_list_ = list;
-      this->compiled_rule_count_ = [NSUserDefaults.standardUserDefaults integerForKey:
-        [@"SlateRuleCount-" stringByAppendingString:this->rule_identifier_]];
-      fprintf(stderr, "[SlateShields] Loaded cached compiled rule list successfully.\n");
-      this->BroadcastRuleList();
-    } else {
-      fprintf(stderr, "[SlateShields] No cached rule list, compiling in background...\n");
-      // Defer cold compilation briefly during app launch so temporary rule-compiler buffers
-      // never interleave with initial UI/tab allocations (skipped during test runs with SLATE_SHIELDS_CACHE_DIR).
-      if (getenv("SLATE_SHIELDS_CACHE_DIR")) {
-        this->CompileRules(paths);
-      } else {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500LL * NSEC_PER_MSEC)),
-                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-          this->CompileRules(paths);
-        });
+      std::ifstream input(path,std::ios::binary);
+      char buffer[8192];
+      while (input.read(buffer,sizeof(buffer)) || input.gcount()>0) {
+        for (std::streamsize i=0;i<input.gcount();++i) {
+          fingerprint ^= static_cast<unsigned char>(buffer[i]);
+          fingerprint *= 1099511628211ULL;
+        }
       }
+      fingerprint ^= 0xff;
+      fingerprint *= 1099511628211ULL;
     }
-  }];
+    NSString* ruleId = [NSString stringWithFormat:@"%@-%016llx", kSlateContentRuleListIdentifier,
+      static_cast<unsigned long long>(fingerprint)];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (metaCopy.length && !getenv("SLATE_SHIELDS_CACHE_DIR")) {
+        [NSUserDefaults.standardUserDefaults setObject:metaCopy forKey:@"SlateRuleStatMeta"];
+        [NSUserDefaults.standardUserDefaults setObject:ruleId forKey:@"SlateRuleStatId"];
+      }
+      startLookup(ruleId);
+    });
+  });
 }
 
 // Slate note: Translate supported list rules into WebKit content-rule JSON and compile them
@@ -1299,11 +1338,14 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
 
   // Attach native Twitch HLS Web Worker ad blocker at document start when active (main frame only)
   if (active && ![disabled_sites_ containsObject:@"twitch.tv"]) {
-    NSString* twitchJs = [NSString stringWithUTF8String:kTwitchAdBlockJs];
-    WKUserScript* twitchScript = [[WKUserScript alloc] initWithSource:twitchJs
-                                                        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                     forMainFrameOnly:YES];
-    [controller addUserScript:twitchScript];
+    static WKUserScript* sTwitchScript = nil;
+    if (!sTwitchScript) {
+      NSString* twitchJs = [NSString stringWithUTF8String:kTwitchAdBlockJs];
+      sTwitchScript = [[WKUserScript alloc] initWithSource:twitchJs
+                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                          forMainFrameOnly:YES];
+    }
+    [controller addUserScript:sTwitchScript];
   }
 
   // Attach document-start YouTube ytInitialPlayerResponse ad stripper so pre-roll ads are pruned
@@ -1342,10 +1384,13 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
         } catch (e) {}
       })();
     )JS";
-    WKUserScript* ytScript = [[WKUserScript alloc] initWithSource:kYtDocStartJs
-                                                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                 forMainFrameOnly:YES];
-    [controller addUserScript:ytScript];
+    static WKUserScript* sYtScript = nil;
+    if (!sYtScript) {
+      sYtScript = [[WKUserScript alloc] initWithSource:kYtDocStartJs
+                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                      forMainFrameOnly:YES];
+    }
+    [controller addUserScript:sYtScript];
   }
 
   // Attach document-start first-party ad/sponsor/popunder config pruner for novahd.cc
@@ -1420,10 +1465,13 @@ void WebKitShields::ApplyToUserContentController(WKUserContentController* contro
         }
       })();
     )JS";
-    WKUserScript* novaScript = [[WKUserScript alloc] initWithSource:kNovaDocStartJs
-                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                   forMainFrameOnly:YES];
-    [controller addUserScript:novaScript];
+    static WKUserScript* sNovaScript = nil;
+    if (!sNovaScript) {
+      sNovaScript = [[WKUserScript alloc] initWithSource:kNovaDocStartJs
+                                           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                        forMainFrameOnly:YES];
+    }
+    [controller addUserScript:sNovaScript];
   }
 
   // Attach compiled rule list immediately if already available; lazily load if needed.

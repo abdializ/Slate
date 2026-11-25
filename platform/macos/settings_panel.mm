@@ -21,6 +21,7 @@
 @property(strong) SlateSpacesManager* spacesManager;
 @property BOOL verticalTabs;
 @property BOOL tabsCollapsed;
+@property BOOL allowHideIconSidebar;
 @property BOOL showBookmarksBar;
 @property BOOL pages120Hz;
 @property int themeMode;
@@ -32,6 +33,7 @@
 
 - (void)toggleVerticalTabs:(id)sender;
 - (void)toggleTabsReveal:(id)sender;
+- (void)setAllowHideIconSidebarEnabled:(BOOL)enabled;
 - (void)toggleBookmarksBar:(id)sender;
 - (void)togglePages120Hz:(id)sender;
 - (IBAction)trimMemoryNow:(id)sender;
@@ -275,6 +277,7 @@
 @property (nonatomic, strong) NSTextField* trimMemorySubtitle;
 @property (nonatomic, strong) NSSwitch* switchVerticalTabs;
 @property (nonatomic, strong) NSSwitch* switchCollapseTabs;
+@property (nonatomic, strong) NSSwitch* switchHideIconSidebar;
 @property (nonatomic, strong) NSSwitch* switchBookmarks;
 @property (nonatomic, strong) NSSwitch* switchShields;
 @property (nonatomic, strong) NSSwitch* switchStrictPrivacy;
@@ -462,6 +465,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   }
   if (_switchVerticalTabs) _switchVerticalTabs.state = self.slateDelegate.verticalTabs ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchCollapseTabs) _switchCollapseTabs.state = self.slateDelegate.tabsCollapsed ? NSControlStateValueOn : NSControlStateValueOff;
+  if (_switchHideIconSidebar) _switchHideIconSidebar.state = self.slateDelegate.allowHideIconSidebar ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchBookmarks) _switchBookmarks.state = self.slateDelegate.showBookmarksBar ? NSControlStateValueOn : NSControlStateValueOff;
   if (_switchShields) _switchShields.state = slate::WebKitShields::Shared().IsEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
 
@@ -621,6 +625,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
   _switch120Hz = nil;
   _switchVerticalTabs = nil;
   _switchCollapseTabs = nil;
+  _switchHideIconSidebar = nil;
   _switchBookmarks = nil;
   _switchShields = nil;
   _switchStrictPrivacy = nil;
@@ -943,7 +948,7 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 
   y += 58 + 20;
   y = [self addSectionCaptionTo:doc y:y text:@"Layout"];
-  SlateSettingsCard* layoutCard = [self addCardTo:doc y:y height:167];
+  SlateSettingsCard* layoutCard = [self addCardTo:doc y:y height:223];
   _switchVerticalTabs = [self addSwitchRowToCard:layoutCard y:0
                                            title:@"Sidebar Tabs"
                                         subtitle:@"Show tabs vertically along the left edge (⇧⌘S)"
@@ -956,13 +961,19 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
                                               on:self.slateDelegate.tabsCollapsed
                                           action:@selector(toggleCollapseTabsClicked:)];
   [self addDividerToCard:layoutCard y:111];
-  _switchBookmarks = [self addSwitchRowToCard:layoutCard y:112
+  _switchHideIconSidebar = [self addSwitchRowToCard:layoutCard y:112
+                                              title:@"Hide Sidebar in Icon Mode"
+                                           subtitle:@"Allow hiding the vertical sidebar when narrowed to icons"
+                                                 on:self.slateDelegate.allowHideIconSidebar
+                                             action:@selector(toggleHideIconSidebarClicked:)];
+  [self addDividerToCard:layoutCard y:167];
+  _switchBookmarks = [self addSwitchRowToCard:layoutCard y:168
                                         title:@"Bookmarks Bar"
                                      subtitle:@"Show bookmarks below the address bar (⇧⌘B)"
                                            on:self.slateDelegate.showBookmarksBar
                                        action:@selector(toggleBookmarksClicked:)];
 
-  [self finishCanvas:doc scroll:scroll contentHeight:y + 167];
+  [self finishCanvas:doc scroll:scroll contentHeight:y + 223];
 }
 
 - (void)tabStyleSegmentChanged:(NSSegmentedControl*)sender {
@@ -979,6 +990,13 @@ static SlateSettingsPanel* s_sharedSettingsPanel = nil;
 }
 - (void)toggleCollapseTabsClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleTabsReveal:sender];
+  [self updateFromDelegate];
+}
+- (void)toggleHideIconSidebarClicked:(NSSwitch*)sender {
+  if (self.slateDelegate) {
+    [self.slateDelegate setAllowHideIconSidebarEnabled:(sender.state == NSControlStateValueOn)];
+  }
+  [self updateFromDelegate];
 }
 - (void)toggleBookmarksClicked:(id)sender {
   if (self.slateDelegate) [self.slateDelegate toggleBookmarksBar:sender];

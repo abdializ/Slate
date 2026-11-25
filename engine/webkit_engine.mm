@@ -1011,81 +1011,100 @@ class WebKitEngine final : public BrowserEngine {
     WebKitShields::Shared().ApplyToUserContentController(config.userContentController, incognito_);
 
     // Attach high-alert privacy hardening (GPC, DNT, and WebRTC IP-leak blocking in Incognito)
-    NSString* hardeningJs = [SlatePrivacySecurity hardeningScriptForIncognito:incognito_];
-    if (hardeningJs.length > 0) {
-      WKUserScript* hardeningScript = [[WKUserScript alloc] initWithSource:hardeningJs
-                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                          forMainFrameOnly:NO];
+    static WKUserScript* sHardeningNormal = nil;
+    static WKUserScript* sHardeningIncog = nil;
+    WKUserScript* hardeningScript = incognito_ ? sHardeningIncog : sHardeningNormal;
+    if (!hardeningScript) {
+      NSString* hardeningJs = [SlatePrivacySecurity hardeningScriptForIncognito:incognito_];
+      if (hardeningJs.length > 0) {
+        hardeningScript = [[WKUserScript alloc] initWithSource:hardeningJs
+                                                 injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                              forMainFrameOnly:NO];
+        if (incognito_) sHardeningIncog = hardeningScript; else sHardeningNormal = hardeningScript;
+      }
+    }
+    if (hardeningScript) {
       [config.userContentController addUserScript:hardeningScript];
     }
 
     // Anti-flashbang dark mode styling at document start
-    NSString* antiFlashJs = @R"JS(
-      (function() {
-        try {
-          const isDark = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-          if (isDark) {
-            const style = document.createElement('style');
-            style.id = '__slate_anti_flash__';
-            style.textContent = `
-              @media (prefers-color-scheme: dark) {
-                html:not([data-slate-ready]) {
-                  background-color: #121214 !important;
-                  color-scheme: dark;
+    static WKUserScript* sAntiFlashScript = nil;
+    if (!sAntiFlashScript) {
+      NSString* antiFlashJs = @R"JS(
+        (function() {
+          try {
+            const isDark = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (isDark) {
+              const style = document.createElement('style');
+              style.id = '__slate_anti_flash__';
+              style.textContent = `
+                @media (prefers-color-scheme: dark) {
+                  html:not([data-slate-ready]) {
+                    background-color: #121214 !important;
+                    color-scheme: dark;
+                  }
                 }
-              }
-            `;
-            if (document.documentElement) {
-              document.documentElement.appendChild(style);
-            }
-            const cleanup = function() {
-              const el = document.getElementById('__slate_anti_flash__');
-              if (el) el.remove();
+              `;
               if (document.documentElement) {
-                document.documentElement.setAttribute('data-slate-ready', 'true');
+                document.documentElement.appendChild(style);
               }
-            };
-            if (document.readyState === 'loading') {
-              document.addEventListener('DOMContentLoaded', cleanup, { once: true });
-              window.addEventListener('load', cleanup, { once: true });
-            } else {
-              cleanup();
+              const cleanup = function() {
+                const el = document.getElementById('__slate_anti_flash__');
+                if (el) el.remove();
+                if (document.documentElement) {
+                  document.documentElement.setAttribute('data-slate-ready', 'true');
+                }
+              };
+              if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', cleanup, { once: true });
+                window.addEventListener('load', cleanup, { once: true });
+              } else {
+                cleanup();
+              }
             }
-          }
-        } catch(e) {}
-      })();
-    )JS";
-    WKUserScript* antiFlashScript = [[WKUserScript alloc] initWithSource:antiFlashJs
-                                                           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                        forMainFrameOnly:YES];
-    [config.userContentController addUserScript:antiFlashScript];
+          } catch(e) {}
+        })();
+      )JS";
+      sAntiFlashScript = [[WKUserScript alloc] initWithSource:antiFlashJs
+                                                injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                             forMainFrameOnly:YES];
+    }
+    [config.userContentController addUserScript:sAntiFlashScript];
 
     // Attach media monitoring script
-    NSString* mediaMonitorJs = [NSString stringWithUTF8String:slate::kMediaMonitorJs];
-
+    static WKUserScript* sMediaScript = nil;
     if (@available(macOS 11.0, *)) {
-      WKUserScript* mediaScript = [[WKUserScript alloc] initWithSource:mediaMonitorJs
-                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                      forMainFrameOnly:NO
-                                                        inContentWorld:[WKContentWorld defaultClientWorld]];
-      [config.userContentController addUserScript:mediaScript];
+      if (!sMediaScript) {
+        NSString* mediaMonitorJs = [NSString stringWithUTF8String:slate::kMediaMonitorJs];
+        sMediaScript = [[WKUserScript alloc] initWithSource:mediaMonitorJs
+                                              injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                           forMainFrameOnly:NO
+                                             inContentWorld:[WKContentWorld defaultClientWorld]];
+      }
+      [config.userContentController addUserScript:sMediaScript];
 
       // Site-scoped idle memory optimizer (Kick/Twitch/YouTube chat DOM windowing, offscreen preview cleanup,
       // and hidden muted stream suspension). Default ON; user-configurable in Settings.
       NSNumber* memOptPref = [NSUserDefaults.standardUserDefaults objectForKey:@"SlateMemoryOptimizerEnabled"];
       if (!memOptPref || memOptPref.boolValue) {
-        NSString* memOptJs = [NSString stringWithUTF8String:slate::kMemoryOptimizerJs];
-        WKUserScript* memOptScript = [[WKUserScript alloc] initWithSource:memOptJs
-                                                            injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                         forMainFrameOnly:YES
-                                                           inContentWorld:[WKContentWorld defaultClientWorld]];
-        [config.userContentController addUserScript:memOptScript];
+        static WKUserScript* sMemOptScript = nil;
+        if (!sMemOptScript) {
+          NSString* memOptJs = [NSString stringWithUTF8String:slate::kMemoryOptimizerJs];
+          sMemOptScript = [[WKUserScript alloc] initWithSource:memOptJs
+                                                 injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                              forMainFrameOnly:YES
+                                                inContentWorld:[WKContentWorld defaultClientWorld]];
+        }
+        [config.userContentController addUserScript:sMemOptScript];
       }
     } else {
-      WKUserScript* mediaScript = [[WKUserScript alloc] initWithSource:mediaMonitorJs
-                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                      forMainFrameOnly:NO];
-      [config.userContentController addUserScript:mediaScript];
+      if (!sMediaScript) {
+        NSString* mediaMonitorJs = [NSString stringWithUTF8String:slate::kMediaMonitorJs];
+        sMediaScript = [[WKUserScript alloc] initWithSource:mediaMonitorJs
+                                              injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                           forMainFrameOnly:NO];
+      }
+      [config.userContentController addUserScript:sMediaScript];
     }
 
     if (getenv("SLATE_DEBUG_CONSOLE")) {
@@ -1247,10 +1266,13 @@ class WebKitEngine final : public BrowserEngine {
         }
       })();
     )JS";
-    WKUserScript* chromeScript = [[WKUserScript alloc] initWithSource:chromeCompatJs
-                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                      forMainFrameOnly:YES];
-    [config.userContentController addUserScript:chromeScript];
+    static WKUserScript* sChromeScript = nil;
+    if (!sChromeScript) {
+      sChromeScript = [[WKUserScript alloc] initWithSource:chromeCompatJs
+                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                          forMainFrameOnly:YES];
+    }
+    [config.userContentController addUserScript:sChromeScript];
 
     // Create delegate
     delegate_ = [[SlateWebNavigationDelegate alloc] init];
@@ -1260,75 +1282,88 @@ class WebKitEngine final : public BrowserEngine {
     // Passkey suppression: when passkeys are not offered/entitled, hide PublicKeyCredential
     // so sites smoothly fall back to standard username/password forms.
     if (!SlatePasswordServices.passkeysAvailable) {
-      NSString* passkeysJs = [SlateFormRelay withoutPasskeysScript];
-      if (@available(macOS 11.0, *)) {
-        WKUserScript* passkeyScript = [[WKUserScript alloc] initWithSource:passkeysJs
-                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                          forMainFrameOnly:NO
-                                                            inContentWorld:[WKContentWorld pageWorld]];
-        [config.userContentController addUserScript:passkeyScript];
-      } else {
-        WKUserScript* passkeyScript = [[WKUserScript alloc] initWithSource:passkeysJs
-                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                          forMainFrameOnly:NO];
-        [config.userContentController addUserScript:passkeyScript];
+      static WKUserScript* sPasskeyScript = nil;
+      if (!sPasskeyScript) {
+        NSString* passkeysJs = [SlateFormRelay withoutPasskeysScript];
+        if (@available(macOS 11.0, *)) {
+          sPasskeyScript = [[WKUserScript alloc] initWithSource:passkeysJs
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                               forMainFrameOnly:NO
+                                                 inContentWorld:[WKContentWorld pageWorld]];
+        } else {
+          sPasskeyScript = [[WKUserScript alloc] initWithSource:passkeysJs
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                               forMainFrameOnly:NO];
+        }
       }
+      [config.userContentController addUserScript:sPasskeyScript];
     }
 
     // Attach FormRelay script (sign-in detection, framework-safe autofill, typing & fullscreen tracking)
-    NSString* formRelaySource = [SlateFormRelay formScript];
-    if (@available(macOS 11.0, *)) {
-      WKUserScript* formScript = [[WKUserScript alloc] initWithSource:formRelaySource
-                                                        injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                     forMainFrameOnly:NO
-                                                       inContentWorld:[WKContentWorld defaultClientWorld]];
-      [config.userContentController addUserScript:formScript];
-    } else {
-      WKUserScript* formScript = [[WKUserScript alloc] initWithSource:formRelaySource
-                                                        injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                     forMainFrameOnly:NO];
-      [config.userContentController addUserScript:formScript];
+    static WKUserScript* sFormScript = nil;
+    if (!sFormScript) {
+      NSString* formRelaySource = [SlateFormRelay formScript];
+      if (@available(macOS 11.0, *)) {
+        sFormScript = [[WKUserScript alloc] initWithSource:formRelaySource
+                                             injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                          forMainFrameOnly:NO
+                                            inContentWorld:[WKContentWorld defaultClientWorld]];
+      } else {
+        sFormScript = [[WKUserScript alloc] initWithSource:formRelaySource
+                                             injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                          forMainFrameOnly:NO];
+      }
     }
+    [config.userContentController addUserScript:sFormScript];
 
     // Attach legacy autofill script (disabled in incognito for zero footprint; main frame only)
     if (!incognito_) {
-      NSString* autofillSource = [NSString stringWithUTF8String:slate::kAutofillJs];
-      if (@available(macOS 11.0, *)) {
-        WKUserScript* autofillScript = [[WKUserScript alloc] initWithSource:autofillSource
-                                                              injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                           forMainFrameOnly:YES
-                                                             inContentWorld:[WKContentWorld defaultClientWorld]];
-        [config.userContentController addUserScript:autofillScript];
-      } else {
-        WKUserScript* autofillScript = [[WKUserScript alloc] initWithSource:autofillSource
-                                                              injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                           forMainFrameOnly:YES];
-        [config.userContentController addUserScript:autofillScript];
+      static WKUserScript* sAutofillScript = nil;
+      if (!sAutofillScript) {
+        NSString* autofillSource = [NSString stringWithUTF8String:slate::kAutofillJs];
+        if (@available(macOS 11.0, *)) {
+          sAutofillScript = [[WKUserScript alloc] initWithSource:autofillSource
+                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                forMainFrameOnly:YES
+                                                  inContentWorld:[WKContentWorld defaultClientWorld]];
+        } else {
+          sAutofillScript = [[WKUserScript alloc] initWithSource:autofillSource
+                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                forMainFrameOnly:YES];
+        }
       }
+      [config.userContentController addUserScript:sAutofillScript];
     }
 
-    NSString* pageThemeSource = [NSString stringWithUTF8String:kPageThemeJs];
-    NSString* imageDownloadSource = [NSString stringWithUTF8String:kImageDownloadJs];
-    if (@available(macOS 11.0, *)) {
-      [config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:imageDownloadSource
-          injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO
-          inContentWorld:[WKContentWorld defaultClientWorld]]];
-    } else {
-      [config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:imageDownloadSource
-          injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+    static WKUserScript* sImageDownloadScript = nil;
+    if (!sImageDownloadScript) {
+      NSString* imageDownloadSource = [NSString stringWithUTF8String:kImageDownloadJs];
+      if (@available(macOS 11.0, *)) {
+        sImageDownloadScript = [[WKUserScript alloc] initWithSource:imageDownloadSource
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO
+            inContentWorld:[WKContentWorld defaultClientWorld]];
+      } else {
+        sImageDownloadScript = [[WKUserScript alloc] initWithSource:imageDownloadSource
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
+      }
     }
-    if (@available(macOS 11.0, *)) {
-      WKUserScript* pageThemeScript = [[WKUserScript alloc] initWithSource:pageThemeSource
-                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                          forMainFrameOnly:YES
-                                                            inContentWorld:[WKContentWorld defaultClientWorld]];
-      [config.userContentController addUserScript:pageThemeScript];
-    } else {
-      WKUserScript* pageThemeScript = [[WKUserScript alloc] initWithSource:pageThemeSource
-                                                             injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
-                                                          forMainFrameOnly:YES];
-      [config.userContentController addUserScript:pageThemeScript];
+    [config.userContentController addUserScript:sImageDownloadScript];
+
+    static WKUserScript* sPageThemeScript = nil;
+    if (!sPageThemeScript) {
+      NSString* pageThemeSource = [NSString stringWithUTF8String:kPageThemeJs];
+      if (@available(macOS 11.0, *)) {
+        sPageThemeScript = [[WKUserScript alloc] initWithSource:pageThemeSource
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                               forMainFrameOnly:YES
+                                                 inContentWorld:[WKContentWorld defaultClientWorld]];
+      } else {
+        sPageThemeScript = [[WKUserScript alloc] initWithSource:pageThemeSource
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                               forMainFrameOnly:YES];
+      }
     }
+    [config.userContentController addUserScript:sPageThemeScript];
 
     if (@available(macOS 11.0, *)) {
       WKUserScript* swipeScript = [[WKUserScript alloc] initWithSource:SlateSwipeWatchScript()
@@ -1495,29 +1530,36 @@ class WebKitEngine final : public BrowserEngine {
       strongView.layer.backgroundColor = bg.CGColor;
     };
     __weak SlateWebNavigationDelegate* passwordDelegate=delegate_;
-    [SlatePasswordServices.shared configure:web_view_ privateTab:incognito_
-      accounts:^NSArray<NSDictionary<NSString*,NSString*>*>*(NSURL* origin) {
-        SlateWebNavigationDelegate* delegate=passwordDelegate;
-        NSMutableArray* rows=[NSMutableArray array];
-        if(delegate && !delegate.incognito && delegate.events && delegate.events->credential_accounts_query) {
-          auto accounts=delegate.events->credential_accounts_query();
-          if(!accounts) return nil;
-          for(const auto& account:*accounts) {
-            NSString* site=@(account.origin.c_str());
-            if(![site containsString:@"://"])site=[@"https://" stringByAppendingString:site];
-            [rows addObject:@{@"id":@(account.id.c_str()),@"user":@(account.username.c_str()),@"origin":site}];
+    __weak WKWebView* weakPasswordWeb = web_view_;
+    const BOOL passIncog = incognito_;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      WKWebView* strongWeb = weakPasswordWeb;
+      SlateWebNavigationDelegate* strongDel = passwordDelegate;
+      if (!strongWeb || !strongDel || !strongDel.events) return;
+      [SlatePasswordServices.shared configure:strongWeb privateTab:passIncog
+        accounts:^NSArray<NSDictionary<NSString*,NSString*>*>*(NSURL* origin) {
+          SlateWebNavigationDelegate* delegate=passwordDelegate;
+          NSMutableArray* rows=[NSMutableArray array];
+          if(delegate && !delegate.incognito && delegate.events && delegate.events->credential_accounts_query) {
+            auto accounts=delegate.events->credential_accounts_query();
+            if(!accounts) return nil;
+            for(const auto& account:*accounts) {
+              NSString* site=@(account.origin.c_str());
+              if(![site containsString:@"://"])site=[@"https://" stringByAppendingString:site];
+              [rows addObject:@{@"id":@(account.id.c_str()),@"user":@(account.username.c_str()),@"origin":site}];
+            }
           }
-        }
-        return rows;
-      } unlock:^BOOL {
-        SlateWebNavigationDelegate* delegate=passwordDelegate;
-        return delegate && !delegate.incognito && delegate.events && delegate.events->credential_unlock_requested && delegate.events->credential_unlock_requested();
-      } select:^NSDictionary<NSString*,NSString*>*(NSString* identifier,NSURL* origin) {
-        SlateWebNavigationDelegate* delegate=passwordDelegate;
-        if(!delegate || delegate.incognito || !delegate.events || !delegate.events->credential_selected_query) return nil;
-        auto selected=delegate.events->credential_selected_query(identifier.UTF8String,origin.absoluteString.UTF8String);
-        return selected ? @{@"user":@(selected->first.c_str()),@"password":@(selected->second.c_str())} : nil;
-      }];
+          return rows;
+        } unlock:^BOOL {
+          SlateWebNavigationDelegate* delegate=passwordDelegate;
+          return delegate && !delegate.incognito && delegate.events && delegate.events->credential_unlock_requested && delegate.events->credential_unlock_requested();
+        } select:^NSDictionary<NSString*,NSString*>*(NSString* identifier,NSURL* origin) {
+          SlateWebNavigationDelegate* delegate=passwordDelegate;
+          if(!delegate || delegate.incognito || !delegate.events || !delegate.events->credential_selected_query) return nil;
+          auto selected=delegate.events->credential_selected_query(identifier.UTF8String,origin.absoluteString.UTF8String);
+          return selected ? @{@"user":@(selected->first.c_str()),@"password":@(selected->second.c_str())} : nil;
+        }];
+    });
 
     // Keep WKWebView opaque (drawsBackground = YES) so hardware-accelerated video layers
     // (Twitch, YouTube, etc.) never flash the underlying window/layer background white during
@@ -1759,12 +1801,14 @@ class WebKitEngine final : public BrowserEngine {
   void set_zoom(double level) override {
     if (@available(macOS 11.0, *)) {
       if (web_view_) {
-        [SlatePasswordServices.shared close:web_view_];
         // Chromium zoom level: level = log(scale) / log(1.2).
         // For WebKit pageZoom, scale is linear (1.0 = 100%).
         double scale = std::pow(1.2, level);
         if (scale <= 0.01 || !std::isfinite(scale)) scale = 1.0;
-        web_view_.pageZoom = scale;
+        if (std::abs(web_view_.pageZoom - scale) > 1e-4) {
+          [SlatePasswordServices.shared close:web_view_];
+          web_view_.pageZoom = scale;
+        }
       }
     }
   }
