@@ -8429,8 +8429,8 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
   const CGFloat w = MAX(ClampSidebarWidth(self.sidebarUserWidth, NSWidth(self.window.frame)), 160.0);
   return NSMakePoint(kArdiaLightsSidebarCenter.x - w, kArdiaLightsSidebarCenter.y);
  }
- // Horizontal-tabs mode with tab strip hidden: sit cleanly aligned inside the toolbar
- return NSMakePoint(25.0, kPlateInset + kToolbarHeight * 0.5);
+ // Horizontal-tabs mode with tab strip hidden: sit cleanly centered vertically with the toolbar nav row
+ return NSMakePoint(25.0, kPlateInset + kToolbarHeight * 0.5 + 1.0);
 }
 - (void)syncTrafficLightsAnimated:(NSTimeInterval)duration timing:(CAMediaTimingFunction*)timing {
  if(!self.window || self.quitting) return;
@@ -8447,33 +8447,29 @@ static NSString* DisplayURLForOmnibox(NSString* raw, BOOL revealFull) {
  NSView* root=self.window.contentView;
  const BOOL fullScreen=(self.window.styleMask & NSWindowStyleMaskFullScreen)!=0;
  const BOOL sharesToolbar=(!self.verticalTabs && self.tabsCollapsed);
- if((fullScreen || sharesToolbar) && !self.fullScreenTrafficButtons.count && self.trafficCluster) {
+ // Only fullscreen uses the toolbar trafficCluster fallback; all windowed modes
+ // (including hidden horizontal tabs) position the real native NSThemeFrame buttons directly
+ // via Ardia hooks so duplicate stacked traffic lights can never appear.
+ if(fullScreen && !self.fullScreenTrafficButtons.count && self.trafficCluster) {
   self.fullScreenTrafficButtons=SlateCreateToolbarWindowControls(self.window,self.trafficCluster);
  }
  [CATransaction begin];
  [CATransaction setDisableActions:YES];
  SlateConfigureToolbarWindowControls(self.window,self.trafficCluster,
-  self.fullScreenTrafficButtons,sharesToolbar,fullScreen);
+  self.fullScreenTrafficButtons,NO,fullScreen);
  if(fullScreen) {
   const CGFloat top=[self stripRevealed] ? (kTitlebarHeight-18)/2 :
    [self sidebarRevealed] ? 14 : 5+(kToolbarHeight-18)/2;
   if(fabs(self.trafficTop.constant-top)>0.5) self.trafficTop.constant=top;
  } else {
-  // Position real native macOS traffic lights via Ardia NSThemeFrame hooks
-  if(!sharesToolbar) {
-   if(!objc_getAssociatedObject(self.window, kSlateLightsAnimatingKey)) {
-    SlateSetArdiaTrafficLightsCenter(self.window, [self desiredTrafficLightsCenter], 0.0, nil);
-   }
+  if(!objc_getAssociatedObject(self.window, kSlateLightsAnimatingKey)) {
+   SlateSetArdiaTrafficLightsCenter(self.window, [self desiredTrafficLightsCenter], 0.0, nil);
   }
  }
  [CATransaction commit];
- if(sharesToolbar) {
-  [root layoutSubtreeIfNeeded];
-  SlateAlignWindowControlsWithNavigation(self.trafficCluster,self.trafficTop,self.navCluster);
- }
  CGFloat rightEdge=0;
  CGFloat bottomFromTop=0;
- if(fullScreen || sharesToolbar) {
+ if(fullScreen) {
   [root layoutSubtreeIfNeeded];
   NSRect controls=[self.trafficCluster convertRect:self.trafficCluster.bounds toView:root];
   rightEdge=NSMaxX(controls);
@@ -16257,7 +16253,7 @@ static NSImage* LoadHostFaviconFromDisk(NSString* host) {
   [self.window.contentView layoutSubtreeIfNeeded];
   NSView* root=self.window.contentView;
   int failures=fullScreen!=expectedFullScreen;
-  if(fullScreen || [self trafficLayoutMode]==3) {
+  if(fullScreen) {
    failures+=self.trafficCluster.hiddenOrHasHiddenAncestor || self.fullScreenTrafficButtons.count!=3;
    NSRect controls=[self.trafficCluster convertRect:self.trafficCluster.bounds toView:root];
    NSRect nav=[self.navCluster convertRect:self.navCluster.bounds toView:root];
